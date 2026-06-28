@@ -1,0 +1,6 @@
+{
+  "name": "Hawassa Papyrus Lodge",
+  "description": "Unified Lodge Dashboard, Smart Guest Ordering Portal, Kitchen Board & Staff Management System",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,166 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User account information",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string"
+        },
+        "fullName": {
+          "type": "string"
+        },
+        "phone": {
+          "type": "string"
+        },
+        "email": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "uid",
+        "fullName",
+        "email"
+      ]
+    },
+    "UserFile": {
+      "title": "UserFile",
+      "description": "File metadata and base64 content",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "userId": {
+          "type": "string"
+        },
+        "fileName": {
+          "type": "string"
+        },
+        "fileSize": {
+          "type": "number"
+        },
+        "fileType": {
+          "type": "string"
+        },
+        "uploadedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "fileContent": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "employeeId": {
+          "type": "string",
+          "description": "Reference ID of the team member (Employee) linked to this file"
+        }
+      },
+      "required": [
+        "id",
+        "userId",
+        "fileName",
+        "fileSize",
+        "fileType",
+        "uploadedAt",
+        "fileContent"
+      ]
+    },
+    "UserNote": {
+      "title": "UserNote",
+      "description": "A personal note saved in Firestore by the user",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "userId": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string"
+        },
+        "color": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "userId",
+        "title",
+        "content"
+      ]
+    },
+    "TeamMember": {
+      "title": "TeamMember",
+      "description": "A team member profile added and managed by the user",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "userId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "email": {
+          "type": "string"
+        },
+        "phone": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "userId",
+        "name",
+        "role",
+        "status"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Individual user accounts profiles"
+    },
+    "/user_files/{fileId}": {
+      "schema": "UserFile",
+      "description": "Metadata and contents of files uploaded by users"
+    },
+    "/user_notes/{noteId}": {
+      "schema": "UserNote",
+      "description": "Personal secret notepad files for users"
+    },
+    "/user_team_members/{memberId}": {
+      "schema": "TeamMember",
+      "description": "Custom user team rosters list"
+    }
+  }
+}

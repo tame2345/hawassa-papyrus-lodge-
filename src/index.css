@@ -1,0 +1,594 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: #1F1F1F;
+  color: #ffffff;
+}
+
+/* ELEGANT LIGHT THEME OVERRIDES FOR NEO-BRUTALIST TACTILE 3D */
+body:has(.light-mode),
+.light-mode {
+  background-color: #f1f5f9 !important;
+  color: #0f172a !important;
+}
+
+.light-mode header,
+.light-mode section,
+.light-mode aside,
+.light-mode main,
+.light-mode footer {
+  background-color: #f8fafc !important;
+  border-color: #cbd5e1 !important;
+  color: #0f172a !important;
+}
+
+/* Modals & Custom BG blocks */
+.light-mode .bg-\[\#141414\],
+.light-mode .bg-\[\#121212\],
+.light-mode .bg-\[\#181818\],
+.light-mode .bg-\[\#0E1726\],
+.light-mode .bg-\[\#070D18\],
+.light-mode .bg-black\/40,
+.light-mode .bg-black\/50,
+.light-mode .bg-black\/95,
+.light-mode .bg-black\/90,
+.light-mode .bg-black,
+.light-mode .bg-\[\#0a0a0a\],
+.light-mode .bg-\[\#0A0A0A\],
+.light-mode .bg-\[\#0F0F0F\],
+.light-mode .bg-\[\#0b0c10\],
+.light-mode .bg-\[\#0b1319\],
+.light-mode .bg-\[\#101010\],
+.light-mode .bg-\[\#151515\],
+.light-mode .bg-\[\#111111\] {
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+}
+
+/* Text overrides */
+.light-mode h1,
+.light-mode h2,
+.light-mode h3,
+.light-mode h4,
+.light-mode h5,
+.light-mode h6,
+.light-mode p,
+.light-mode span,
+.light-mode select,
+.light-mode input,
+.light-mode label,
+.light-mode td,
+.light-mode th,
+.light-mode li {
+  color: #1e293b !important;
+}
+
+/* Subtle text and subheadings */
+.light-mode .text-white,
+.light-mode .text-white\/90,
+.light-mode .text-white\/80,
+.light-mode .text-white\/70,
+.light-mode .text-white\/60 {
+  color: #334155 !important;
+}
+
+.light-mode .text-white\/50,
+.light-mode .text-white\/40,
+.light-mode .text-white\/30,
+.light-mode .text-white\/20,
+.light-mode .text-slate-400 {
+  color: #64748b !important;
+}
+
+.light-mode .text-white\/10 {
+  color: #cbd5e1 !important;
+}
+
+/* Borders mapping */
+.light-mode .border-white\/10,
+.light-mode .border-white\/5,
+.light-mode .border-white\/20,
+.light-mode .border-white\/15,
+.light-mode .border-white\/30,
+.light-mode .border-slate-800,
+.light-mode .border-zinc-800,
+.light-mode .border-zinc-900 {
+  border-color: #cbd5e1 !important;
+}
+
+/* Specific tactile cards light background configuration */
+.light-mode .tactile-3d-card-lime,
+.light-mode .tactile-3d-card-pink,
+.light-mode .tactile-3d-card-orange,
+.light-mode .tactile-3d-card-purple,
+.light-mode .tactile-3d-card-sky,
+.light-mode .tactile-3d-card-neutral {
+  background-color: #ffffff !important;
+  border-color: #000000 !important;
+  color: #0f172a !important;
+}
+
+.light-mode input,
+.light-mode select,
+.light-mode textarea {
+  background-color: #ffffff !important;
+  border: 1px solid #94a3b8 !important;
+  color: #0f172a !important;
+}
+
+.light-mode input::placeholder,
+.light-mode textarea::placeholder {
+  color: #94a3b8 !important;
+}
+
+.light-mode .sidebar-rail {
+  background-color: #f1f5f9 !important;
+  border-color: #e2e8f0 !important;
+}
+
+.light-mode .text-\[\#C1FF00\] {
+  color: #65a30d !important; /* Rich lime green for high visibility */
+}
+
+.light-mode .bg-\[\#C1FF00\]\/10 {
+  background-color: rgba(101, 163, 13, 0.15) !important;
+}
+
+.light-mode .text-\[\#ff007f\] {
+  color: #be185d !important; /* Elegant rose/pink */
+}
+
+.light-mode .text-\[\#00f5ff\] {
+  color: #0369a1 !important; /* High contrast sky blue */
+}
+
+/* Fixed active order/assistance badge background and logs */
+.light-mode .bg-white\/5 {
+  background-color: rgba(0, 0, 0, 0.05) !important;
+}
+.light-mode .hover\:bg-white\/10:hover {
+  background-color: rgba(0, 0, 0, 0.08) !important;
+}
+
+.light-mode .bg-\[\#181818\],
+.light-mode .bg-\[\#121214\],
+.light-mode .bg-black\/20 {
+  background-color: #ffffff !important;
+}
+
+.light-mode .border-\[3px\] {
+  border-color: rgba(0, 0, 0, 0.2) !important;
+}
+
+/* Reset buttons and overlays in light mode */
+.light-mode .bg-yellow-500\/10 {
+  background-color: rgba(234, 179, 8, 0.15) !important;
+}
+.light-mode .text-yellow-405 {
+  color: #a16207 !important;
+}
+
+/* Custom hides for modern appearance */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none; /* IE and Edge */
+  scrollbar-width: none; /* Firefox */
+}
+
+/* Smooth scroll behaviors */
+html {
+  scroll-behavior: smooth;
+}
+
+/* 3D Tactile Elements & Neon Neo-Brutalist Styling */
+.tactile-3d-btn-lime {
+  background-color: #C1FF00;
+  color: #000000;
+  border: 2px solid #000000;
+  box-shadow: 4px 4px 0px 0px #000000;
+  transition: all 0.1s ease;
+}
+.tactile-3d-btn-lime:hover {
+  transform: translate(-1px, -1px);
+  box-shadow: 5px 5px 0px 0px #000000;
+}
+.tactile-3d-btn-lime:active {
+  transform: translate(3px, 3px);
+  box-shadow: 1px 1px 0px 0px #000000;
+}
+
+.tactile-3d-btn-pink {
+  background-color: #ff007f;
+  color: #ffffff;
+  border: 2px solid #000000;
+  box-shadow: 4px 4px 0px 0px #000000;
+  transition: all 0.1s ease;
+}
+.tactile-3d-btn-pink:hover {
+  transform: translate(-1px, -1px);
+  box-shadow: 5px 5px 0px 0px #000000;
+}
+.tactile-3d-btn-pink:active {
+  transform: translate(3px, 3px);
+  box-shadow: 1px 1px 0px 0px #000000;
+}
+
+.tactile-3d-btn-orange {
+  background-color: #ff8c00;
+  color: #ffffff;
+  border: 2px solid #000000;
+  box-shadow: 4px 4px 0px 0px #000000;
+  transition: all 0.1s ease;
+}
+.tactile-3d-btn-orange:hover {
+  transform: translate(-1px, -1px);
+  box-shadow: 5px 5px 0px 0px #000000;
+}
+.tactile-3d-btn-orange:active {
+  transform: translate(3px, 3px);
+  box-shadow: 1px 1px 0px 0px #000000;
+}
+
+.tactile-3d-btn-purple {
+  background-color: #a124fe;
+  color: #ffffff;
+  border: 2px solid #000000;
+  box-shadow: 4px 4px 0px 0px #000000;
+  transition: all 0.1s ease;
+}
+.tactile-3d-btn-purple:hover {
+  transform: translate(-1px, -1px);
+  box-shadow: 5px 5px 0px 0px #000000;
+}
+.tactile-3d-btn-purple:active {
+  transform: translate(3px, 3px);
+  box-shadow: 1px 1px 0px 0px #000000;
+}
+
+.tactile-3d-btn-amber {
+  background-color: #FFBF00;
+  color: #000000;
+  border: 2px solid #000000;
+  box-shadow: 4px 4px 0px 0px #000000;
+  transition: all 0.1s ease;
+}
+.tactile-3d-btn-amber:hover {
+  transform: translate(-1px, -1px);
+  box-shadow: 5px 5px 0px 0px #000000;
+}
+.tactile-3d-btn-amber:active {
+  transform: translate(3px, 3px);
+  box-shadow: 1px 1px 0px 0px #000000;
+}
+
+.tactile-3d-btn-sky {
+  background-color: #00f5ff;
+  color: #000000;
+  border: 2px solid #000000;
+  box-shadow: 4px 4px 0px 0px #000000;
+  transition: all 0.1s ease;
+}
+.tactile-3d-btn-sky:hover {
+  transform: translate(-1px, -1px);
+  box-shadow: 5px 5px 0px 0px #000000;
+}
+.tactile-3d-btn-sky:active {
+  transform: translate(3px, 3px);
+  box-shadow: 1px 1px 0px 0px #000000;
+}
+
+.tactile-3d-btn-glass {
+  background-color: rgba(255, 255, 255, 0.08);
+  color: #ffffff;
+  border: 2px solid rgba(255, 255, 255, 0.2);
+  box-shadow: 4px 4px 0px 0px rgba(255, 255, 255, 0.1);
+  transition: all 0.1s ease;
+}
+.tactile-3d-btn-glass:hover {
+  background-color: rgba(255, 255, 255, 0.15);
+  transform: translate(-1px, -1px);
+  box-shadow: 5px 5px 0px 0px rgba(255, 255, 255, 0.15);
+}
+.tactile-3d-btn-glass:active {
+  transform: translate(3px, 3px);
+  box-shadow: 1px 1px 0px 0px rgba(255, 255, 255, 0.05);
+}
+
+/* Beautiful 3D cards with color-coded tactile shadow depth */
+.tactile-3d-card-lime {
+  background-color: #121214;
+  border: 2px solid #C1FF00;
+  box-shadow: 8px 8px 0px 0px #C1FF00;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.tactile-3d-card-lime:hover {
+  transform: translate(-2px, -2px);
+  box-shadow: 10px 10px 0px 0px #C1FF00;
+}
+
+.tactile-3d-card-pink {
+  background-color: #121214;
+  border: 2px solid #ff007f;
+  box-shadow: 8px 8px 0px 0px #ff007f;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.tactile-3d-card-pink:hover {
+  transform: translate(-2px, -2px);
+  box-shadow: 10px 10px 0px 0px #ff007f;
+}
+
+.tactile-3d-card-orange {
+  background-color: #121214;
+  border: 2px solid #ff8c00;
+  box-shadow: 8px 8px 0px 0px #ff8c00;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.tactile-3d-card-orange:hover {
+  transform: translate(-2px, -2px);
+  box-shadow: 10px 10px 0px 0px #ff8c00;
+}
+
+.tactile-3d-card-purple {
+  background-color: #121214;
+  border: 2px solid #a124fe;
+  box-shadow: 8px 8px 0px 0px #a124fe;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.tactile-3d-card-purple:hover {
+  transform: translate(-2px, -2px);
+  box-shadow: 10px 10px 0px 0px #a124fe;
+}
+
+.tactile-3d-card-sky {
+  background-color: #121214;
+  border: 2px solid #00f5ff;
+  box-shadow: 8px 8px 0px 0px #00f5ff;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.tactile-3d-card-sky:hover {
+  transform: translate(-2px, -2px);
+  box-shadow: 10px 10px 0px 0px #00f5ff;
+}
+
+.tactile-3d-card-neutral {
+  background-color: #121214;
+  border: 2px solid rgba(255, 255, 255, 0.15);
+  box-shadow: 8px 8px 0px 0px rgba(255, 255, 255, 0.1);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.tactile-3d-card-neutral:hover {
+  transform: translate(-2px, -2px);
+  box-shadow: 10px 10px 0px 0px rgba(255, 255, 255, 0.15);
+}
+
+/* Beautiful Claymorphic Emojis or Elements representing 3D depth */
+.clay-emoji {
+  filter: drop-shadow(4px 6px 1px rgba(0, 0, 0, 0.7));
+  display: inline-block;
+  transform: scale(1);
+  transition: transform 0.2s ease;
+}
+.clay-emoji:hover {
+  transform: scale(1.15) rotate(5deg);
+}
+
+/* Multi-color glows */
+.glowing-border-active {
+  position: relative;
+}
+.glowing-border-active::after {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  background: linear-gradient(90deg, #EB5D1B, #1F1F1F, #EB5D1B, #333333);
+  border-radius: inherit;
+  z-index: -1;
+  filter: blur(8px);
+  opacity: 0.75;
+}
+
+/* ==========================================================================
+   PAPYRUS LODGE BRAND COLOR SYSTEM OVERRIDES
+   Primary Accent Color: Brand Metallic Orange ➡️ #EB5D1B
+   Primary Charcoal/Matte Dark Base: ➡️ #1F1F1F
+   Contrast Colors: White (#FFFFFF) & Pure Black (#000000)
+   ========================================================================== */
+
+/* Force dark panels to align with brand charcoal #1F1F1F when not in light mode */
+:not(.light-mode).bg-\[\#0b0c10\],
+:not(.light-mode) .bg-\[\#0b0c10\],
+:not(.light-mode).bg-\[\#121214\],
+:not(.light-mode) .bg-\[\#121214\],
+:not(.light-mode).bg-\[\#121212\],
+:not(.light-mode) .bg-\[\#121212\],
+:not(.light-mode).bg-\[\#101010\],
+:not(.light-mode) .bg-\[\#101010\],
+:not(.light-mode).bg-\[\#111111\],
+:not(.light-mode) .bg-\[\#111111\],
+:not(.light-mode).bg-\[\#141414\],
+:not(.light-mode) .bg-\[\#141414\],
+:not(.light-mode).bg-\[\#181818\],
+:not(.light-mode) .bg-\[\#181818\],
+:not(.light-mode).bg-\[\#151515\],
+:not(.light-mode) .bg-\[\#151515\],
+:not(.light-mode).bg-black\/95,
+:not(.light-mode) .bg-black\/95,
+:not(.light-mode).bg-black\/90,
+:not(.light-mode) .bg-black\/90,
+:not(.light-mode).bg-black\/80,
+:not(.light-mode) .bg-black\/80,
+:not(.light-mode).bg-black\/50,
+:not(.light-mode) .bg-black\/50,
+:not(.light-mode).bg-\[\#10151f\],
+:not(.light-mode) .bg-\[\#10151f\],
+:not(.light-mode).bg-\[\#0b141d\],
+:not(.light-mode) .bg-\[\#0b141d\],
+:not(.light-mode).bg-\[\#070D18\],
+:not(.light-mode) .bg-\[\#070D18\],
+:not(.light-mode).bg-\[\#0b1319\],
+:not(.light-mode) .bg-\[\#0b1319\] {
+  background-color: #1F1F1F !important;
+}
+
+/* Brand Orange Text Overrides */
+.text-\[\#00f5ff\],
+.text-\[\#C1FF00\],
+.text-\[\#ff007f\],
+.text-cyan-400,
+.text-\[\#0aeffa\],
+.text-\[\#00f5ff\]\/70,
+.text-pink-500,
+.text-lime-400 {
+  color: #EB5D1B !important;
+}
+
+/* Brand Orange Background Overrides */
+.bg-\[\#00f5ff\],
+.bg-\[\#C1FF00\],
+.bg-\[\#ff007f\],
+.bg-cyan-500,
+.bg-pink-600,
+.bg-lime-500,
+.from-\[\#00f5ff\],
+.to-\[\#C1FF00\],
+.from-pink-600,
+.to-red-600,
+.from-pink-500,
+.to-red-500 {
+  background-color: #EB5D1B !important;
+  background-image: none !important; /* overrides gradients */
+  color: #ffffff !important;
+}
+
+/* Handle light elements inside buttons */
+.bg-\[\#00f5ff\]:hover,
+.bg-\[\#C1FF00\]:hover,
+.bg-\[\#ff007f\]:hover {
+  background-color: #ff7433 !important; /* brighter orange for hover state */
+  color: #ffffff !important;
+}
+
+/* Brand Orange Border Overrides */
+.border-\[\#00f5ff\],
+.border-\[\#C1FF00\],
+.border-\[\#ff007f\],
+.border-cyan-500,
+.border-pink-500,
+.border-lime-500,
+.border-pink-400,
+.border-cyan-500\/20,
+.border-\[\#00f5ff\]\/15,
+.border-\[\#00f5ff\]\/20,
+.border-\[\#00f5ff\]\/30,
+.border-\[\#00f5ff\]\/40,
+.border-\[\#00f5ff\]\/45 {
+  border-color: #EB5D1B !important;
+}
+
+/* Alpha background overlays for subtle notifications/badges */
+.bg-\[\#00f5ff\]\/5,
+.bg-\[\#00f5ff\]\/10,
+.bg-\[\#C1FF00\]\/10,
+.bg-\[\#ff007f\]\/10,
+.bg-cyan-500\/10,
+.bg-pink-600\/10,
+.bg-\[\#00f5ff\]\/10,
+.bg-emerald-500\/10,
+.bg-pink-950\/20 {
+  background-color: rgba(235, 93, 27, 0.12) !important;
+}
+
+/* Text overrides in those alpha backgrounds */
+.bg-\[\#00f5ff\]\/10 *,
+.bg-\[\#C1FF00\]\/10 *,
+.bg-\[\#ff007f\]\/10 * {
+  color: #EB5D1B !important;
+}
+
+/* Hover text states and selection mappings */
+.hover\:text-\[\#00f5ff\]:hover,
+.hover\:text-\[\#C1FF00\]:hover {
+  color: #EB5D1B !important;
+}
+
+/* Modern 3D Tactile elements mapping */
+.tactile-3d-btn-lime,
+.tactile-3d-btn-pink,
+.tactile-3d-btn-orange,
+.tactile-3d-btn-purple,
+.tactile-3d-btn-amber,
+.tactile-3d-btn-sky {
+  background-color: #EB5D1B !important;
+  color: #ffffff !important;
+  border: 2px solid #000000 !important;
+  box-shadow: 4px 4px 0px 0px #000000 !important;
+  transition: all 0.1s ease !important;
+}
+
+.tactile-3d-btn-lime:hover,
+.tactile-3d-btn-pink:hover,
+.tactile-3d-btn-orange:hover,
+.tactile-3d-btn-purple:hover,
+.tactile-3d-btn-amber:hover,
+.tactile-3d-btn-sky:hover {
+  transform: translate(-1px, -1px) !important;
+  box-shadow: 5px 5px 0px 0px #000000 !important;
+}
+
+.tactile-3d-btn-lime:active,
+.tactile-3d-btn-pink:active,
+.tactile-3d-btn-orange:active,
+.tactile-3d-btn-purple:active,
+.tactile-3d-btn-amber:active,
+.tactile-3d-btn-sky:active {
+  transform: translate(3px, 3px) !important;
+  box-shadow: 1px 1px 0px 0px #000000 !important;
+}
+
+.tactile-3d-card-lime,
+.tactile-3d-card-pink,
+.tactile-3d-card-orange,
+.tactile-3d-card-purple,
+.tactile-3d-card-sky {
+  background-color: #1F1F1F !important;
+  border: 2px solid #EB5D1B !important;
+  box-shadow: 8px 8px 0px 0px #EB5D1B !important;
+  transition: transform 0.2s ease, box-shadow 0.2s ease !important;
+}
+
+.tactile-3d-card-lime:hover,
+.tactile-3d-card-pink:hover,
+.tactile-3d-card-orange:hover,
+.tactile-3d-card-purple:hover,
+.tactile-3d-card-sky:hover {
+  transform: translate(-2px, -2px) !important;
+  box-shadow: 10px 10px 0px 0px #EB5D1B !important;
+}
+
+
+/* Print Specific layouts */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  #printable-area, #printable-area * {
+    visibility: visible;
+  }
+  #printable-area {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    border: none;
+    box-shadow: none;
+  }
+}
