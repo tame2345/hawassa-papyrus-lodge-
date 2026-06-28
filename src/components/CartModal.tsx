@@ -6,6 +6,7 @@
 import React, { useState, useEffect } from 'react';
 import { OrderItem, BankAccount, OrderType, PaymentMethod } from '../types';
 import { Trash2, Smartphone, MapPin, DollarSign, HelpCircle, X } from 'lucide-react';
+import { supabase } from '../supabaseClient';
 
 interface CartModalProps {
   isOpen: boolean;
@@ -299,18 +300,53 @@ export default function CartModal({
     }
   }, [isOpen, initialLocation]);
 
-  // Local helper for receipt upload base64
-  const handleReceiptUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Local helper for receipt upload directly to Supabase Storage
+  const handleReceiptUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const r = new FileReader();
-      r.onload = () => {
-        if (typeof r.result === 'string') {
-          setReceiptScreenshot(r.result);
-          alert('📸 ደረሰኝ በተሳካ ሁኔታ ተመርጧል! / Receipt image selected successfully.');
-        }
+      const sanitizeFileName = (name: string): string => {
+        const dotIndex = name.lastIndexOf('.');
+        const ext = dotIndex !== -1 ? name.substring(dotIndex) : '';
+        const base = dotIndex !== -1 ? name.substring(0, dotIndex) : name;
+        const cleanBase = base
+          .replace(/[^a-zA-Z0-9-_]/g, '_')
+          .replace(/_+/g, '_')
+          .replace(/^_+|_+$/g, '');
+        const cleanExt = ext.replace(/[^a-zA-Z0-9.]/g, '');
+        return (cleanBase || 'file') + cleanExt;
       };
-      r.readAsDataURL(file);
+
+      const cleanName = sanitizeFileName(file.name);
+      const fileName = `receipts/${Date.now()}_${cleanName}`;
+
+      try {
+        const { data, error } = await supabase.storage
+          .from('lodge-media')
+          .upload(fileName, file, {
+            cacheControl: '3600',
+            upsert: true
+          });
+
+        if (error) {
+          console.error("Receipt upload error details:", error);
+          alert(`❌ Upload failed: ${error.message}`);
+          return;
+        }
+
+        const { data: { publicUrl } } = supabase.storage
+          .from('lodge-media')
+          .getPublicUrl(fileName);
+
+        if (!publicUrl) {
+          throw new Error("Could not retrieve public URL for uploaded receipt.");
+        }
+
+        setReceiptScreenshot(publicUrl);
+        alert('📸 ደረሰኝ በተሳካ ሁኔታ ተጭኗል! / Receipt image uploaded successfully.');
+      } catch (err: any) {
+        console.error("Receipt upload failed:", err);
+        alert(`❌ Upload failed: ${err.message || err}`);
+      }
     }
   };
 

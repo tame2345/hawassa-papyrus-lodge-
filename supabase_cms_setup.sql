@@ -19,14 +19,14 @@ ON CONFLICT (id) DO NOTHING;
 CREATE POLICY "Public Read Access" ON storage.objects
     FOR SELECT USING (bucket_id = 'lodge-media');
 
-CREATE POLICY "Admin Insert Access" ON storage.objects
-    FOR INSERT WITH CHECK (bucket_id = 'lodge-media' AND auth.role() = 'authenticated');
+CREATE POLICY "Public Insert Access" ON storage.objects
+    FOR INSERT WITH CHECK (bucket_id = 'lodge-media');
 
-CREATE POLICY "Admin Update Access" ON storage.objects
-    FOR UPDATE USING (bucket_id = 'lodge-media' AND auth.role() = 'authenticated');
+CREATE POLICY "Public Update Access" ON storage.objects
+    FOR UPDATE USING (bucket_id = 'lodge-media');
 
-CREATE POLICY "Admin Delete Access" ON storage.objects
-    FOR DELETE USING (bucket_id = 'lodge-media' AND auth.role() = 'authenticated');
+CREATE POLICY "Public Delete Access" ON storage.objects
+    FOR DELETE USING (bucket_id = 'lodge-media');
 
 
 -- 2. Create admin_users table (stores custom roles & statuses of administrators)

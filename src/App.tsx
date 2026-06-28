@@ -25,7 +25,6 @@ import PrintableCertificateModal from './components/PrintableCertificateModal';
 import HeroDemo from './components/ui/demo';
 import AdminRevenueReports from './components/AdminRevenueReports';
 import { SupabaseLogin } from './components/SupabaseLogin';
-import { SuperAdminCMS } from './components/SuperAdminCMS';
 
 // Gourmet Restaurant Paradise Background Assets
 // @ts-ignore
@@ -38,7 +37,7 @@ import deliveryChef from './assets/images/delivery_chef_premium_1782328035316.jp
 import deliveryScooterIllustration from './assets/images/delivery_scooter_illustration_1782328361225.jpg';
 
 // Supabase Connection Import
-import { supabase } from './supabaseClient.js';
+import { supabase } from './supabaseClient';
 
 
 export default function App() {
@@ -1510,69 +1509,61 @@ export default function App() {
   const [addPromoPoster, setAddPromoPoster] = useState('');
   const [addPromoVideo, setAddPromoVideo] = useState('');
 
-  const processFileWithCompression = (file: File, callback: (base64: string) => void) => {
-    // Check if video is too large
+  const readMediaFile = async (e: React.ChangeEvent<HTMLInputElement>, callback: (url: string) => void) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const sanitizeFileName = (name: string): string => {
+      const dotIndex = name.lastIndexOf('.');
+      const ext = dotIndex !== -1 ? name.substring(dotIndex) : '';
+      const base = dotIndex !== -1 ? name.substring(0, dotIndex) : name;
+      const cleanBase = base
+        .replace(/[^a-zA-Z0-9-_]/g, '_')
+        .replace(/_+/g, '_')
+        .replace(/^_+|_+$/g, '');
+      const cleanExt = ext.replace(/[^a-zA-Z0-9.]/g, '');
+      return (cleanBase || 'file') + cleanExt;
+    };
+
+    const cleanName = sanitizeFileName(file.name);
+    let folder = 'images';
     if (file.type.startsWith('video/')) {
-      if (file.size > 2 * 1024 * 1024) { // 2MB Limit
-        alert('⚠️ ቪዲዮው በጣም ትልቅ ነው! እባክዎ ከ 2MB በታች የሆነ ቪዲዮ ይምረጡ ወይም የዩቲዩብ ቪዲዮ አድራሻ (YouTube URL) ይጠቀሙ።\nVideo file is too large! Please choose a video under 2MB, or use a YouTube URL instead.');
+      folder = 'videos';
+    } else if (file.type.startsWith('audio/')) {
+      folder = 'audio';
+    }
+
+    const fileName = `${folder}/${Date.now()}_${cleanName}`;
+
+    try {
+      console.log(`Uploading ${file.name} to Supabase Storage path: ${fileName}...`);
+      
+      const { data, error } = await supabase.storage
+        .from('lodge-media')
+        .upload(fileName, file, {
+          cacheControl: '3600',
+          upsert: true
+        });
+
+      if (error) {
+        console.error("Storage upload failed:", error);
+        alert(`❌ Upload failed: ${error.message}`);
         return;
       }
-    }
 
-    if (file.type.startsWith('image/')) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const img = new Image();
-        img.onload = () => {
-          // Downscale to max dimensions of 600px for storage friendliness
-          const maxDimension = 600;
-          let width = img.width;
-          let height = img.height;
-          if (width > maxDimension || height > maxDimension) {
-            if (width > height) {
-              height = Math.round((height * maxDimension) / width);
-              width = maxDimension;
-            } else {
-              width = Math.round((width * maxDimension) / height);
-              height = maxDimension;
-            }
-          }
+      const { data: { publicUrl } } = supabase.storage
+        .from('lodge-media')
+        .getPublicUrl(fileName);
 
-          const canvas = document.createElement('canvas');
-          canvas.width = width;
-          canvas.height = height;
-          const ctx = canvas.getContext('2d');
-          if (ctx) {
-            ctx.drawImage(img, 0, 0, width, height);
-            // High compression quality (0.7) produces extremely lightweight image (15KB - 40KB)
-            const compressedBase64 = canvas.toDataURL('image/jpeg', 0.7);
-            callback(compressedBase64);
-          } else {
-            callback(reader.result as string);
-          }
-        };
-        img.onerror = () => {
-          callback(reader.result as string);
-        };
-        img.src = reader.result as string;
-      };
-      reader.readAsDataURL(file);
-    } else {
-      // Non-image files or fallback
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        if (typeof reader.result === 'string') {
-          callback(reader.result);
-        }
-      };
-      reader.readAsDataURL(file);
-    }
-  };
+      if (!publicUrl) {
+        throw new Error("Could not retrieve public URL for uploaded file.");
+      }
 
-  const readMediaFile = (e: React.ChangeEvent<HTMLInputElement>, callback: (base64: string) => void) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      processFileWithCompression(file, callback);
+      console.log("Uploaded successfully. Public URL:", publicUrl);
+      callback(publicUrl);
+    } catch (err: any) {
+      console.error("Storage upload failure:", err);
+      alert(`❌ Upload failed: ${err.message || err}`);
     }
   };
 
@@ -1649,74 +1640,111 @@ export default function App() {
 
   useEffect(() => {
     const fetchCloudSettings = async () => {
-      // 1. Fetch logoUrl
-      try {
-        const { data: logoData } = await supabase
-          .from('system_settings')
-          .select('value')
-          .eq('key', 'logoUrl')
-          .maybeSingle();
-        if (logoData && logoData.value && logoData.value.url) {
-          setLogoUrl(logoData.value.url);
+      // Helper to fetch key
+      const fetchKey = async (key: string) => {
+        try {
+          const { data, error } = await supabase
+            .from('system_settings')
+            .select('value')
+            .eq('key', key)
+            .maybeSingle();
+          if (error) {
+            console.error(`Error fetching key ${key}:`, error);
+            return null;
+          }
+          return data?.value;
+        } catch (err) {
+          console.error(`Exception fetching key ${key}:`, err);
+          return null;
         }
-      } catch (err) {
-        console.error("Failed to fetch cloud logoUrl:", err);
-      }
+      };
+
+      // 1. Fetch logoUrl
+      const logoVal = await fetchKey('logoUrl');
+      if (logoVal && logoVal.url !== undefined) setLogoUrl(logoVal.url);
 
       // 2. Fetch attendance
-      try {
-        const { data: attData } = await supabase
-          .from('system_settings')
-          .select('value')
-          .eq('key', 'attendance')
-          .maybeSingle();
-        if (attData && attData.value && Array.isArray(attData.value.records)) {
-          setAttendance(attData.value.records);
-        }
-      } catch (err) {
-        console.error("Failed to fetch cloud attendance:", err);
-      }
+      const attVal = await fetchKey('attendance');
+      if (attVal && Array.isArray(attVal.records)) setAttendance(attVal.records);
 
-      // 3. Fetch menuItems
-      try {
-        const { data: menuData } = await supabase
-          .from('system_settings')
-          .select('value')
-          .eq('key', 'menu')
-          .maybeSingle();
-        if (menuData && menuData.value && Array.isArray(menuData.value.items)) {
-          setMenuItems(menuData.value.items);
-        }
-      } catch (err) {
-        console.error("Failed to fetch cloud menu items:", err);
-      }
+      // 3. Fetch menu
+      const menuVal = await fetchKey('menu');
+      if (menuVal && Array.isArray(menuVal.items)) setMenuItems(menuVal.items);
 
       // 4. Fetch categories
-      try {
-        const { data: catData } = await supabase
-          .from('system_settings')
-          .select('value')
-          .eq('key', 'categories')
-          .maybeSingle();
-        if (catData && catData.value && Array.isArray(catData.value.list)) {
-          setCategories(catData.value.list);
-        }
-      } catch (err) {
-        console.error("Failed to fetch cloud categories:", err);
-      }
+      const catVal = await fetchKey('categories');
+      if (catVal && Array.isArray(catVal.list)) setCategories(catVal.list);
 
       // 5. Fetch banks
-      try {
-        const { data: bankData } = await supabase
-          .from('system_settings')
-          .select('value')
-          .eq('key', 'banks')
-          .maybeSingle();
-        if (bankData && bankData.value && Array.isArray(bankData.value.accounts)) {
-          setBanks(bankData.value.accounts);
-        }
-      } catch (err) {
-        console.error("Failed to fetch cloud banks:", err);
+      const banksVal = await fetchKey('banks');
+      if (banksVal && Array.isArray(banksVal.accounts)) setBanks(banksVal.accounts);
+
+      // 6. Fetch staff
+      const staffVal = await fetchKey('staff');
+      if (staffVal && Array.isArray(staffVal.list)) setStaff(staffVal.list);
+
+      // 7. Fetch orders
+      const ordersVal = await fetchKey('orders');
+      if (ordersVal && Array.isArray(ordersVal.list)) setOrders(ordersVal.list);
+
+      // 8. Fetch roomBookings
+      const bookingsVal = await fetchKey('roomBookings');
+      if (bookingsVal && Array.isArray(bookingsVal.list)) setRoomBookings(bookingsVal.list);
+
+      // 9. Fetch visitorLog
+      const visitorVal = await fetchKey('visitorLog');
+      if (visitorVal && Array.isArray(visitorVal.list)) setVisitorLog(visitorVal.list);
+
+      // 10. Fetch promos
+      const promosVal = await fetchKey('promos');
+      if (promosVal && Array.isArray(promosVal.list)) setPromos(promosVal.list);
+
+      // 11. Fetch aboutLodgeText
+      const aboutVal = await fetchKey('aboutLodgeText');
+      if (aboutVal && aboutVal.text !== undefined) setAboutLodgeText(aboutVal.text);
+
+      // 12. Fetch bgVideoUrl
+      const bgUrlVal = await fetchKey('bgVideoUrl');
+      if (bgUrlVal && bgUrlVal.url !== undefined) setBgVideoUrl(bgUrlVal.url);
+
+      // 13. Fetch bgVideoType
+      const bgTypeVal = await fetchKey('bgVideoType');
+      if (bgTypeVal && bgTypeVal.type !== undefined) setBgVideoType(bgTypeVal.type);
+
+      // 14. Fetch isBgVideoEnabled
+      const bgEnabledVal = await fetchKey('isBgVideoEnabled');
+      if (bgEnabledVal && bgEnabledVal.enabled !== undefined) setIsBgVideoEnabled(bgEnabledVal.enabled);
+
+      // 15. Fetch assistanceCalls
+      const callsVal = await fetchKey('assistanceCalls');
+      if (callsVal && Array.isArray(callsVal.list)) setAssistanceCalls(callsVal.list);
+
+      // 16. Fetch feedback
+      const feedbackVal = await fetchKey('feedback');
+      if (feedbackVal && Array.isArray(feedbackVal.list)) setFeedback(feedbackVal.list);
+
+      // 17. Fetch expenses
+      const expensesVal = await fetchKey('expenses');
+      if (expensesVal && Array.isArray(expensesVal.list)) setExpenses(expensesVal.list);
+
+      // 18. Fetch bonuses
+      const bonusesVal = await fetchKey('bonuses');
+      if (bonusesVal && Array.isArray(bonusesVal.list)) setBonuses(bonusesVal.list);
+
+      // 19. Fetch serviceChargeRate
+      const scVal = await fetchKey('serviceChargeRate');
+      if (scVal && typeof scVal.rate === 'number') setServiceChargeRate(scVal.rate);
+
+      // 20. Fetch vatRate
+      const vatVal = await fetchKey('vatRate');
+      if (vatVal && typeof vatVal.rate === 'number') setVatRate(vatVal.rate);
+
+      // 21. Fetch chapa settings
+      const chapaVal = await fetchKey('chapa');
+      if (chapaVal) {
+        if (chapaVal.key !== undefined) setChapaKey(chapaVal.key);
+        if (chapaVal.active !== undefined) setChapaActive(chapaVal.active);
+        if (chapaVal.mode !== undefined) setChapaMode(chapaVal.mode);
       }
 
       setHasLoadedCloudSettings(true);
@@ -1724,7 +1752,7 @@ export default function App() {
     fetchCloudSettings();
   }, []);
 
-  // REAL-TIME SUPABASE SYNC FOR CLOUD SETTINGS (Logo, Menu, Banks, Categories, etc.)
+  // REAL-TIME SUPABASE SYNC FOR CLOUD SETTINGS
   useEffect(() => {
     const channel = supabase
       .channel('realtime-system-settings')
@@ -1738,16 +1766,77 @@ export default function App() {
         (payload) => {
           if (payload.new && (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE')) {
             const data = payload.new as any;
-            if (data.key === 'logoUrl' && data.value && data.value.url) {
-              setLogoUrl(data.value.url);
-            } else if (data.key === 'attendance' && data.value && Array.isArray(data.value.records)) {
-              setAttendance(data.value.records);
-            } else if (data.key === 'menu' && data.value && Array.isArray(data.value.items)) {
-              setMenuItems(data.value.items);
-            } else if (data.key === 'categories' && data.value && Array.isArray(data.value.list)) {
-              setCategories(data.value.list);
-            } else if (data.key === 'banks' && data.value && Array.isArray(data.value.accounts)) {
-              setBanks(data.value.accounts);
+            const val = data.value;
+            if (!val) return;
+
+            switch (data.key) {
+              case 'logoUrl':
+                if (val.url !== undefined) setLogoUrl(val.url);
+                break;
+              case 'attendance':
+                if (Array.isArray(val.records)) setAttendance(val.records);
+                break;
+              case 'menu':
+                if (Array.isArray(val.items)) setMenuItems(val.items);
+                break;
+              case 'categories':
+                if (Array.isArray(val.list)) setCategories(val.list);
+                break;
+              case 'banks':
+                if (Array.isArray(val.accounts)) setBanks(val.accounts);
+                break;
+              case 'staff':
+                if (Array.isArray(val.list)) setStaff(val.list);
+                break;
+              case 'orders':
+                if (Array.isArray(val.list)) setOrders(val.list);
+                break;
+              case 'roomBookings':
+                if (Array.isArray(val.list)) setRoomBookings(val.list);
+                break;
+              case 'visitorLog':
+                if (Array.isArray(val.list)) setVisitorLog(val.list);
+                break;
+              case 'promos':
+                if (Array.isArray(val.list)) setPromos(val.list);
+                break;
+              case 'aboutLodgeText':
+                if (val.text !== undefined) setAboutLodgeText(val.text);
+                break;
+              case 'bgVideoUrl':
+                if (val.url !== undefined) setBgVideoUrl(val.url);
+                break;
+              case 'bgVideoType':
+                if (val.type !== undefined) setBgVideoType(val.type);
+                break;
+              case 'isBgVideoEnabled':
+                if (val.enabled !== undefined) setIsBgVideoEnabled(val.enabled);
+                break;
+              case 'assistanceCalls':
+                if (Array.isArray(val.list)) setAssistanceCalls(val.list);
+                break;
+              case 'feedback':
+                if (Array.isArray(val.list)) setFeedback(val.list);
+                break;
+              case 'expenses':
+                if (Array.isArray(val.list)) setExpenses(val.list);
+                break;
+              case 'bonuses':
+                if (Array.isArray(val.list)) setBonuses(val.list);
+                break;
+              case 'serviceChargeRate':
+                if (typeof val.rate === 'number') setServiceChargeRate(val.rate);
+                break;
+              case 'vatRate':
+                if (typeof val.rate === 'number') setVatRate(val.rate);
+                break;
+              case 'chapa':
+                if (val.key !== undefined) setChapaKey(val.key);
+                if (val.active !== undefined) setChapaActive(val.active);
+                if (val.mode !== undefined) setChapaMode(val.mode);
+                break;
+              default:
+                break;
             }
           }
         }
@@ -1807,6 +1896,198 @@ export default function App() {
     };
     syncBanks();
   }, [banks, hasLoadedCloudSettings]);
+
+  useEffect(() => {
+    if (!hasLoadedCloudSettings) return;
+    const syncStaff = async () => {
+      try {
+        await supabase
+          .from('system_settings')
+          .upsert({ key: 'staff', value: { list: staff } });
+      } catch {}
+    };
+    syncStaff();
+  }, [staff, hasLoadedCloudSettings]);
+
+  useEffect(() => {
+    if (!hasLoadedCloudSettings) return;
+    const syncOrders = async () => {
+      try {
+        await supabase
+          .from('system_settings')
+          .upsert({ key: 'orders', value: { list: orders } });
+      } catch {}
+    };
+    syncOrders();
+  }, [orders, hasLoadedCloudSettings]);
+
+  useEffect(() => {
+    if (!hasLoadedCloudSettings) return;
+    const syncRoomBookings = async () => {
+      try {
+        await supabase
+          .from('system_settings')
+          .upsert({ key: 'roomBookings', value: { list: roomBookings } });
+      } catch {}
+    };
+    syncRoomBookings();
+  }, [roomBookings, hasLoadedCloudSettings]);
+
+  useEffect(() => {
+    if (!hasLoadedCloudSettings) return;
+    const syncVisitorLog = async () => {
+      try {
+        await supabase
+          .from('system_settings')
+          .upsert({ key: 'visitorLog', value: { list: visitorLog } });
+      } catch {}
+    };
+    syncVisitorLog();
+  }, [visitorLog, hasLoadedCloudSettings]);
+
+  useEffect(() => {
+    if (!hasLoadedCloudSettings) return;
+    const syncPromos = async () => {
+      try {
+        await supabase
+          .from('system_settings')
+          .upsert({ key: 'promos', value: { list: promos } });
+      } catch {}
+    };
+    syncPromos();
+  }, [promos, hasLoadedCloudSettings]);
+
+  useEffect(() => {
+    if (!hasLoadedCloudSettings) return;
+    const syncAboutLodgeText = async () => {
+      try {
+        await supabase
+          .from('system_settings')
+          .upsert({ key: 'aboutLodgeText', value: { text: aboutLodgeText } });
+      } catch {}
+    };
+    syncAboutLodgeText();
+  }, [aboutLodgeText, hasLoadedCloudSettings]);
+
+  useEffect(() => {
+    if (!hasLoadedCloudSettings) return;
+    const syncBgVideoUrl = async () => {
+      try {
+        await supabase
+          .from('system_settings')
+          .upsert({ key: 'bgVideoUrl', value: { url: bgVideoUrl } });
+      } catch {}
+    };
+    syncBgVideoUrl();
+  }, [bgVideoUrl, hasLoadedCloudSettings]);
+
+  useEffect(() => {
+    if (!hasLoadedCloudSettings) return;
+    const syncBgVideoType = async () => {
+      try {
+        await supabase
+          .from('system_settings')
+          .upsert({ key: 'bgVideoType', value: { type: bgVideoType } });
+      } catch {}
+    };
+    syncBgVideoType();
+  }, [bgVideoType, hasLoadedCloudSettings]);
+
+  useEffect(() => {
+    if (!hasLoadedCloudSettings) return;
+    const syncIsBgVideoEnabled = async () => {
+      try {
+        await supabase
+          .from('system_settings')
+          .upsert({ key: 'isBgVideoEnabled', value: { enabled: isBgVideoEnabled } });
+      } catch {}
+    };
+    syncIsBgVideoEnabled();
+  }, [isBgVideoEnabled, hasLoadedCloudSettings]);
+
+  useEffect(() => {
+    if (!hasLoadedCloudSettings) return;
+    const syncAssistanceCalls = async () => {
+      try {
+        await supabase
+          .from('system_settings')
+          .upsert({ key: 'assistanceCalls', value: { list: assistanceCalls } });
+      } catch {}
+    };
+    syncAssistanceCalls();
+  }, [assistanceCalls, hasLoadedCloudSettings]);
+
+  useEffect(() => {
+    if (!hasLoadedCloudSettings) return;
+    const syncFeedback = async () => {
+      try {
+        await supabase
+          .from('system_settings')
+          .upsert({ key: 'feedback', value: { list: feedback } });
+      } catch {}
+    };
+    syncFeedback();
+  }, [feedback, hasLoadedCloudSettings]);
+
+  useEffect(() => {
+    if (!hasLoadedCloudSettings) return;
+    const syncExpenses = async () => {
+      try {
+        await supabase
+          .from('system_settings')
+          .upsert({ key: 'expenses', value: { list: expenses } });
+      } catch {}
+    };
+    syncExpenses();
+  }, [expenses, hasLoadedCloudSettings]);
+
+  useEffect(() => {
+    if (!hasLoadedCloudSettings) return;
+    const syncBonuses = async () => {
+      try {
+        await supabase
+          .from('system_settings')
+          .upsert({ key: 'bonuses', value: { list: bonuses } });
+      } catch {}
+    };
+    syncBonuses();
+  }, [bonuses, hasLoadedCloudSettings]);
+
+  useEffect(() => {
+    if (!hasLoadedCloudSettings) return;
+    const syncServiceChargeRate = async () => {
+      try {
+        await supabase
+          .from('system_settings')
+          .upsert({ key: 'serviceChargeRate', value: { rate: serviceChargeRate } });
+      } catch {}
+    };
+    syncServiceChargeRate();
+  }, [serviceChargeRate, hasLoadedCloudSettings]);
+
+  useEffect(() => {
+    if (!hasLoadedCloudSettings) return;
+    const syncVatRate = async () => {
+      try {
+        await supabase
+          .from('system_settings')
+          .upsert({ key: 'vatRate', value: { rate: vatRate } });
+      } catch {}
+    };
+    syncVatRate();
+  }, [vatRate, hasLoadedCloudSettings]);
+
+  useEffect(() => {
+    if (!hasLoadedCloudSettings) return;
+    const syncChapa = async () => {
+      try {
+        await supabase
+          .from('system_settings')
+          .upsert({ key: 'chapa', value: { key: chapaKey, active: chapaActive, mode: chapaMode } });
+      } catch {}
+    };
+    syncChapa();
+  }, [chapaKey, chapaActive, chapaMode, hasLoadedCloudSettings]);
 
   // One-time migration to force-default background type to Gourmet Paradise
   useEffect(() => {
@@ -3433,32 +3714,43 @@ export default function App() {
 
   if (currentPath === '/admin') {
     return (
-      <div className="min-h-screen bg-[#070707] text-white flex flex-col p-4 md:p-8 justify-center items-center font-sans relative z-10">
-        <SuperAdminCMS 
-          appLang={appLang === 'am' ? 'am' : 'en'}
-          onLogout={async () => {
-            await supabase.auth.signOut();
-            localStorage.removeItem('supabase_session_bypassed');
-            localStorage.removeItem('supabase_bypassed_user_email');
-            localStorage.removeItem('supabase_bypassed_user_id');
-            localStorage.removeItem('supabase_bypassed_current_user');
-            window.history.pushState({}, '', '/login');
-          }}
-          menuItems={menuItems}
-          setMenuItems={setMenuItems}
-          roomBookings={roomBookings}
-          setRoomBookings={setRoomBookings}
-          promos={promos}
-          setPromos={setPromos}
-          aboutLodgeText={aboutLodgeText}
-          setAboutLodgeText={setAboutLodgeText}
-          logoUrl={logoUrl}
-          setLogoUrl={setLogoUrl}
-          bgVideoUrl={bgVideoUrl}
-          setBgVideoUrl={setBgVideoUrl}
-          isBgVideoEnabled={isBgVideoEnabled}
-          setIsBgVideoEnabled={setIsBgVideoEnabled}
-        />
+      <div className="min-h-screen bg-[#070707] text-white flex flex-col p-4 md:p-8 justify-center items-center font-sans relative z-10 text-center animate-fade-in">
+        <div className="max-w-md bg-[#121212] border border-white/10 p-8 rounded-2xl shadow-xl space-y-6">
+          <div className="w-16 h-16 bg-[#C1FF00]/10 border border-[#C1FF00]/30 rounded-full flex items-center justify-center mx-auto text-2xl">
+            🔒
+          </div>
+          <div className="space-y-2">
+            <h1 className="text-xl font-black uppercase tracking-tight text-white">Super CMS Disabled</h1>
+            <p className="text-xs text-stone-400">
+              The SuperAdmin CMS component is currently disabled or has been removed. Please use the manager or administrator dashboard inside the application to handle operations.
+            </p>
+          </div>
+          <div className="flex flex-col gap-2 pt-2">
+            <button
+              onClick={() => {
+                window.history.pushState({}, '', '/');
+                window.dispatchEvent(new PopStateEvent('popstate'));
+              }}
+              className="w-full py-3 bg-[#C1FF00] hover:bg-white text-black text-xs font-black uppercase tracking-wider rounded-xl transition-colors cursor-pointer"
+            >
+              🛖 Go to Main Page
+            </button>
+            <button
+              onClick={async () => {
+                await supabase.auth.signOut();
+                localStorage.removeItem('supabase_session_bypassed');
+                localStorage.removeItem('supabase_bypassed_user_email');
+                localStorage.removeItem('supabase_bypassed_user_id');
+                localStorage.removeItem('supabase_bypassed_current_user');
+                window.history.pushState({}, '', '/login');
+                window.dispatchEvent(new PopStateEvent('popstate'));
+              }}
+              className="w-full py-3 bg-white/5 hover:bg-white/10 text-stone-300 hover:text-white text-xs font-bold uppercase tracking-wider rounded-xl transition-colors cursor-pointer border border-white/10"
+            >
+              🚪 Sign Out
+            </button>
+          </div>
+        </div>
       </div>
     );
   }
@@ -9266,6 +9558,8 @@ export default function App() {
                   </div>
                 )}
 
+
+
               </motion.div>
             )}
 
@@ -10466,6 +10760,8 @@ export default function App() {
                     </div>
                   </div>
                 )}
+
+
 
 
 

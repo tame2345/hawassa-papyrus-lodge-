@@ -791,58 +791,86 @@ export default function CloudVault({ onBack, appLang = 'am' }: CloudVaultProps) 
     }
   };
 
-  // Execute File Upload (Convert to Base64 & Store)
-  const handleFileUpload = (file: globalThis.File) => {
+  // Execute File Upload (Upload to Supabase Storage & Store Public URL)
+  const handleFileUpload = async (file: globalThis.File) => {
     setIsUploading(true);
-    const reader = new FileReader();
-    reader.onload = async (event) => {
-      try {
-        const base64Url = event.target?.result as string;
-        
-        const newFile: VaultFile = {
-          id: 'file-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9),
-          name: customFileName.trim() ? `${customFileName.trim()}.${file.name.split('.').pop()}` : file.name,
-          category: customFileCategory,
-          url: base64Url,
-          fileType: file.type || 'application/octet-stream',
-          size: file.size,
-          uploadedBy: appLang === 'am' ? 'ስራ አስኪያጅ (Manager)' : 'Manager',
-          uploadedAt: new Date().toISOString(),
-          notes: customFileNotes.trim() || (appLang === 'am' ? 'በክላውድ ፋይል ማቆያ የተቀመጠ ሰነድ' : 'Document stored in secure cloud vault')
-        };
+    const sanitizeFileName = (name: string): string => {
+      const dotIndex = name.lastIndexOf('.');
+      const ext = dotIndex !== -1 ? name.substring(dotIndex) : '';
+      const base = dotIndex !== -1 ? name.substring(0, dotIndex) : name;
+      const cleanBase = base
+        .replace(/[^a-zA-Z0-9-_]/g, '_')
+        .replace(/_+/g, '_')
+        .replace(/^_+|_+$/g, '');
+      const cleanExt = ext.replace(/[^a-zA-Z0-9.]/g, '');
+      return (cleanBase || 'file') + cleanExt;
+    };
 
-        const updatedFiles = [newFile, ...files];
-        setFiles(updatedFiles);
-        localStorage.setItem('papyrus_vault_files', JSON.stringify(updatedFiles));
+    const cleanName = sanitizeFileName(file.name);
+    const storagePath = `vault/${Date.now()}_${cleanName}`;
 
-        // Auto-try Supabase if possible
-        if (supabase) {
-          try {
-            await supabase.from('lodge_vault_files').insert([newFile]);
-            setSyncStatus('synced');
-          } catch (dbErr) {
-            setSyncStatus('local');
-          }
-        }
-
-        // Reset inputs
-        setCustomFileName('');
-        setCustomFileNotes('');
-        alert(t('success_upload'));
-      } catch (err) {
-        console.error('Upload Process Error:', err);
-        alert(t('error_upload'));
-      } finally {
-        setIsUploading(false);
+    try {
+      if (!supabase) {
+        throw new Error('Supabase client not initialized');
       }
-    };
 
-    reader.onerror = () => {
-      alert(t('error_read'));
+      // 1. Upload file directly to Supabase Storage
+      const { data: uploadData, error: uploadError } = await supabase.storage
+        .from('lodge-media')
+        .upload(storagePath, file, {
+          cacheControl: '3600',
+          upsert: true
+        });
+
+      if (uploadError) {
+        throw uploadError;
+      }
+
+      // 2. Retrieve public URL
+      const { data: { publicUrl } } = supabase.storage
+        .from('lodge-media')
+        .getPublicUrl(storagePath);
+
+      if (!publicUrl) {
+        throw new Error('Could not retrieve public URL for uploaded file.');
+      }
+
+      const newFile: VaultFile = {
+        id: 'file-' + Date.now() + '-' + Math.random().toString(36).substring(2, 11),
+        name: customFileName.trim() ? `${customFileName.trim()}.${file.name.split('.').pop()}` : file.name,
+        category: customFileCategory,
+        url: publicUrl,
+        fileType: file.type || 'application/octet-stream',
+        size: file.size,
+        uploadedBy: appLang === 'am' ? 'ስራ አስኪያጅ (Manager)' : 'Manager',
+        uploadedAt: new Date().toISOString(),
+        notes: customFileNotes.trim() || (appLang === 'am' ? 'በክላውድ ፋይል ማቆያ የተቀመጠ ሰነድ' : 'Document stored in secure cloud vault')
+      };
+
+      const updatedFiles = [newFile, ...files];
+      setFiles(updatedFiles);
+      localStorage.setItem('papyrus_vault_files', JSON.stringify(updatedFiles));
+
+      // 3. Write record to Supabase database table 'lodge_vault_files'
+      try {
+        const { error: dbErr } = await supabase.from('lodge_vault_files').insert([newFile]);
+        if (dbErr) throw dbErr;
+        setSyncStatus('synced');
+      } catch (dbErr) {
+        console.error('Failed to insert file record to DB, saved locally:', dbErr);
+        setSyncStatus('local');
+      }
+
+      // Reset inputs
+      setCustomFileName('');
+      setCustomFileNotes('');
+      alert(t('success_upload'));
+    } catch (err: any) {
+      console.error('Upload Process Error:', err);
+      alert(`${t('error_upload')}: ${err.message || err}`);
+    } finally {
       setIsUploading(false);
-    };
-
-    reader.readAsDataURL(file);
+    }
   };
 
   // Delete Vault File
@@ -852,14 +880,25 @@ export default function CloudVault({ onBack, appLang = 'am' }: CloudVaultProps) 
     }
 
     try {
+      const fileToDelete = files.find(f => f.id === id);
       const updatedFiles = files.filter(f => f.id !== id);
       setFiles(updatedFiles);
       localStorage.setItem('papyrus_vault_files', JSON.stringify(updatedFiles));
 
       if (supabase) {
         try {
+          // 1. Delete DB record
           await supabase.from('lodge_vault_files').delete().eq('id', id);
+
+          // 2. Also delete from Supabase storage if applicable
+          if (fileToDelete && fileToDelete.url) {
+            const match = fileToDelete.url.match(/\/lodge-media\/(.+)$/);
+            if (match && match[1]) {
+              await supabase.storage.from('lodge-media').remove([decodeURIComponent(match[1])]);
+            }
+          }
         } catch (dbErr) {
+          console.error('Failed database delete:', dbErr);
           setSyncStatus('local');
         }
       }
