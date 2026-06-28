@@ -24,6 +24,8 @@ import CartModal from './components/CartModal';
 import PrintableCertificateModal from './components/PrintableCertificateModal';
 import HeroDemo from './components/ui/demo';
 import AdminRevenueReports from './components/AdminRevenueReports';
+import { SupabaseLogin } from './components/SupabaseLogin';
+import { SuperAdminCMS } from './components/SuperAdminCMS';
 
 // Gourmet Restaurant Paradise Background Assets
 // @ts-ignore
@@ -40,6 +42,7 @@ import { supabase } from './supabaseClient.js';
 
 
 export default function App() {
+  const [currentPath, setCurrentPath] = useState(window.location.pathname);
   const [isMobile, setIsMobile] = useState<boolean>(false);
   useEffect(() => {
     try {
@@ -1998,17 +2001,37 @@ export default function App() {
     protectPages();
   }, [activeRole, currentUser]);
 
-  // Handle /login directly and back/forward browser history
+  // Handle /login and /admin routing directly with back/forward browser history support
   useEffect(() => {
-    const handleUrlPath = () => {
-      if (window.location.pathname === '/login') {
+    const originalPushState = window.history.pushState;
+    window.history.pushState = function(...args) {
+      originalPushState.apply(this, args);
+      setCurrentPath(window.location.pathname);
+    };
+    
+    const handleUrlPath = async () => {
+      const path = window.location.pathname;
+      setCurrentPath(path);
+      
+      if (path === '/login') {
         setActiveRole('entry');
         setStaffPortalState('login');
+      } else if (path === '/admin') {
+        const { data: { session } } = await supabase.auth.getSession();
+        const bypassed = localStorage.getItem('supabase_session_bypassed') === 'true';
+        if (!session && !bypassed) {
+          window.history.pushState({}, '', '/login');
+          setCurrentPath('/login');
+        }
       }
     };
+    
     handleUrlPath();
     window.addEventListener('popstate', handleUrlPath);
-    return () => window.removeEventListener('popstate', handleUrlPath);
+    return () => {
+      window.history.pushState = originalPushState;
+      window.removeEventListener('popstate', handleUrlPath);
+    };
   }, []);
 
   useEffect(() => {
@@ -3403,6 +3426,42 @@ export default function App() {
     }
     return `https://www.youtube.com/embed/${videoId}?autoplay=${isAutoplay ? '1' : '0'}&mute=${isMuted ? '1' : '0'}&loop=1&playlist=${videoId}&controls=0&showinfo=0&rel=0&iv_load_policy=3&playsinline=1&modestbranding=1&disablekb=1&fs=0&wmode=transparent&enablejsapi=1`;
   };
+
+  if (currentPath === '/login') {
+    return <SupabaseLogin appLang={appLang === 'am' ? 'am' : 'en'} />;
+  }
+
+  if (currentPath === '/admin') {
+    return (
+      <div className="min-h-screen bg-[#070707] text-white flex flex-col p-4 md:p-8 justify-center items-center font-sans relative z-10">
+        <SuperAdminCMS 
+          appLang={appLang === 'am' ? 'am' : 'en'}
+          onLogout={async () => {
+            await supabase.auth.signOut();
+            localStorage.removeItem('supabase_session_bypassed');
+            localStorage.removeItem('supabase_bypassed_user_email');
+            localStorage.removeItem('supabase_bypassed_user_id');
+            localStorage.removeItem('supabase_bypassed_current_user');
+            window.history.pushState({}, '', '/login');
+          }}
+          menuItems={menuItems}
+          setMenuItems={setMenuItems}
+          roomBookings={roomBookings}
+          setRoomBookings={setRoomBookings}
+          promos={promos}
+          setPromos={setPromos}
+          aboutLodgeText={aboutLodgeText}
+          setAboutLodgeText={setAboutLodgeText}
+          logoUrl={logoUrl}
+          setLogoUrl={setLogoUrl}
+          bgVideoUrl={bgVideoUrl}
+          setBgVideoUrl={setBgVideoUrl}
+          isBgVideoEnabled={isBgVideoEnabled}
+          setIsBgVideoEnabled={setIsBgVideoEnabled}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#070707] text-white flex flex-col selection:bg-[#C1FF00] selection:text-black font-sans relative z-0">
