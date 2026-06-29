@@ -67,69 +67,13 @@ export default function App() {
   };
 
   // PERSISTENCE STATE LOAD
-  const [menuItems, setMenuItems] = useState<MenuItem[]>(() => {
-    try {
-      const stored = localStorage.getItem('papyrus_lodge_unified_state_v2');
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (parsed.menu) return parsed.menu;
-      }
-    } catch {}
-    return INITIAL_MENU_ITEMS;
-  });
+  const [menuItems, setMenuItems] = useState<MenuItem[]>(INITIAL_MENU_ITEMS);
 
   const [staff, setStaff] = useState<StaffMember[]>(() => {
-    try {
-      const stored = localStorage.getItem('papyrus_lodge_unified_state_v2');
-      let baseList: StaffMember[] | null = null;
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (parsed.staff && Array.isArray(parsed.staff)) {
-          let loadedStaff = parsed.staff as StaffMember[];
-          const hasCashier = loadedStaff.some(s => s.role === 'cashier' || s.accessPrivilege === 'cashier');
-          const hasGuard = loadedStaff.some(s => s.role === 'guard' || s.accessPrivilege === 'guard');
-          
-          if (!hasCashier) {
-            loadedStaff = [
-              ...loadedStaff,
-              { name: 'ቲጂ ጌታቸው (Cashier)', role: 'cashier', pin: '5555', active: false }
-            ];
-          }
-          if (!hasGuard) {
-            loadedStaff = [
-              ...loadedStaff,
-              { name: 'ጌታቸው ካሳ (Security)', role: 'guard', pin: '7777', active: false }
-            ];
-          }
-          baseList = loadedStaff;
-        }
-      }
-      if (baseList === null) {
-        baseList = INITIAL_STAFF;
-      }
-      return baseList.map(s => {
-        const updated = { ...s };
-        if (!updated.username) {
-          if (s.role === 'admin') updated.username = 'admin';
-          else if (s.role === 'manager') updated.username = 'manager';
-          else if (s.role === 'chef') updated.username = 'chef';
-          else if (s.role === 'waiter') updated.username = 'waiter';
-          else if (s.role === 'cashier') updated.username = 'cashier';
-          else if (s.role === 'receptionist') updated.username = 'receptionist';
-          else if (s.role === 'guard') updated.username = 'guard';
-          else updated.username = s.name.toLowerCase().replace(/\s+/g, '_');
-        }
-        if (!updated.password) {
-          updated.password = s.pin || '1234';
-        }
-        if (!updated.securityAnswer) {
-          updated.securityAnswer = 'hawassa';
-        }
-        return updated;
-      });
-    } catch {
-      return INITIAL_STAFF.map(s => {
-        const updated = { ...s };
+    const baseList = INITIAL_STAFF;
+    return baseList.map(s => {
+      const updated = { ...s };
+      if (!updated.username) {
         if (s.role === 'admin') updated.username = 'admin';
         else if (s.role === 'manager') updated.username = 'manager';
         else if (s.role === 'chef') updated.username = 'chef';
@@ -138,56 +82,24 @@ export default function App() {
         else if (s.role === 'receptionist') updated.username = 'receptionist';
         else if (s.role === 'guard') updated.username = 'guard';
         else updated.username = s.name.toLowerCase().replace(/\s+/g, '_');
+      }
+      if (!updated.password) {
         updated.password = s.pin || '1234';
+      }
+      if (!updated.securityAnswer) {
         updated.securityAnswer = 'hawassa';
-        return updated;
-      });
-    }
+      }
+      return updated;
+    });
   });
 
-  const [banks, setBanks] = useState<BankAccount[]>(() => {
-    try {
-      const stored = localStorage.getItem('papyrus_lodge_unified_state_v2');
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (parsed.banks) return parsed.banks;
-      }
-    } catch {}
-    return INITIAL_BANKS;
-  });
+  const [banks, setBanks] = useState<BankAccount[]>(INITIAL_BANKS);
 
-  const [chapaKey, setChapaKey] = useState<string>(() => {
-    try {
-      const stored = localStorage.getItem('papyrus_lodge_unified_state_v2');
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (parsed.chapaKey) return parsed.chapaKey;
-      }
-    } catch {}
-    return '';
-  });
+  const [chapaKey, setChapaKey] = useState<string>('');
 
-  const [chapaActive, setChapaActive] = useState<boolean>(() => {
-    try {
-      const stored = localStorage.getItem('papyrus_lodge_unified_state_v2');
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (typeof parsed.chapaActive === 'boolean') return parsed.chapaActive;
-      }
-    } catch {}
-    return true;
-  });
+  const [chapaActive, setChapaActive] = useState<boolean>(true);
 
-  const [chapaMode, setChapaMode] = useState<'live' | 'test'>(() => {
-    try {
-      const stored = localStorage.getItem('papyrus_lodge_unified_state_v2');
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (parsed.chapaMode) return parsed.chapaMode;
-      }
-    } catch {}
-    return 'test';
-  });
+  const [chapaMode, setChapaMode] = useState<'live' | 'test'>('test');
 
   // CASHIER POS STATE SYSTEM
   const [cashierCart, setCashierCart] = useState<{ id: string; name: string; price: number; qty: number }[]>([]);
@@ -195,193 +107,107 @@ export default function App() {
   const [cashierOrderType, setCashierOrderType] = useState<'Dine-In' | 'Takeaway' | 'Room Service'>('Dine-In');
   const [cashierActivePosCat, setCashierActivePosCat] = useState('food');
 
-  const [roomBookings, setRoomBookings] = useState<RoomBooking[]>(() => {
-    try {
-      const stored = localStorage.getItem('papyrus_lodge_unified_state_v2');
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (parsed.roomBookings && Array.isArray(parsed.roomBookings)) return parsed.roomBookings;
-      }
-    } catch {}
-    return [
-      {
-        id: 'b-1',
-        roomNumber: 'Room 102 (Deluxe Single)',
-        guestCount: 2,
-        guestIds: [
-          { fullName: 'ዮናስ ታሪኩ (Yonas Tariku)', idNumber: 'ID-847326' },
-          { fullName: 'ሳምራዊት ካሳሁን (Samrawit Kassahun)', idNumber: 'ID-561234' }
-        ],
-        contactPhone: '0912345678',
-        checkInDate: '2026-06-05',
-        status: 'Active',
-        pricePerNight: 2800,
-        notes: 'ለትዳር አመታዊ በዓል የመጡ'
-      },
-      {
-        id: 'b-2',
-        roomNumber: 'Room 105 (Premium Double)',
-        guestCount: 1,
-        guestIds: [
-          { fullName: 'ካሌብ አበራ (Kaleb Abera)', idNumber: 'ID-992384' }
-        ],
-        contactPhone: '0911223344',
-        checkInDate: '2026-06-06',
-        status: 'Active',
-        pricePerNight: 3500,
-        notes: 'ንግድ ተጓዥ'
-      }
-    ];
-  });
+  const [roomBookings, setRoomBookings] = useState<RoomBooking[]>([
+    {
+      id: 'b-1',
+      roomNumber: 'Room 102 (Deluxe Single)',
+      guestCount: 2,
+      guestIds: [
+        { fullName: 'ዮናስ ታሪኩ (Yonas Tariku)', idNumber: 'ID-847326' },
+        { fullName: 'ሳምራዊት ካሳሁን (Samrawit Kassahun)', idNumber: 'ID-561234' }
+      ],
+      contactPhone: '0912345678',
+      checkInDate: '2026-06-05',
+      status: 'Active',
+      pricePerNight: 2800,
+      notes: 'ለትዳር አመታዊ በዓል የመጡ'
+    },
+    {
+      id: 'b-2',
+      roomNumber: 'Room 105 (Premium Double)',
+      guestCount: 1,
+      guestIds: [
+        { fullName: 'ካሌብ አበራ (Kaleb Abera)', idNumber: 'ID-992384' }
+      ],
+      contactPhone: '0911223344',
+      checkInDate: '2026-06-06',
+      status: 'Active',
+      pricePerNight: 3500,
+      notes: 'ንግድ ተጓዥ'
+    }
+  ]);
 
-  const [visitorLog, setVisitorLog] = useState<VisitorLog[]>(() => {
-    try {
-      const stored = localStorage.getItem('papyrus_lodge_unified_state_v2');
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (parsed.visitorLog && Array.isArray(parsed.visitorLog)) return parsed.visitorLog;
-      }
-    } catch {}
-    return [
-      { id: 'v-1', name: 'ዶ/ር ተስፋዬ ብርሃኑ', phone: '0911223344', carPlate: 'AA-3-B4567A', purpose: 'እንግዳ ለመጠየቅ', timeIn: '09:30 AM', status: 'In Lodge' },
-      { id: 'v-2', name: 'ወ/ሮ ማርታ ግርማ', phone: '0912345678', carPlate: 'OR-2-A12903', purpose: 'ማረፊያ ክፍል ለመያዝ', timeIn: '10:15 AM', status: 'In Lodge' },
-      { id: 'v-3', name: 'አቶ ካሊድ መሐመድ', phone: '0922445566', carPlate: 'AA-2-C23412', purpose: 'ባህል ምግብ ለመመገብ', timeIn: '08:00 AM', timeOut: '09:45 AM', status: 'Checked Out' }
-    ];
-  });
+  const [visitorLog, setVisitorLog] = useState<VisitorLog[]>([
+    { id: 'v-1', name: 'ዶ/ር ተስፋዬ ብርሃኑ', phone: '0911223344', carPlate: 'AA-3-B4567A', purpose: 'እንግዳ ለመጠየቅ', timeIn: '09:30 AM', status: 'In Lodge' },
+    { id: 'v-2', name: 'ወ/ሮ ማርታ ግርማ', phone: '0912345678', carPlate: 'OR-2-A12903', purpose: 'ማረፊያ ክፍል ለመያዝ', timeIn: '10:15 AM', status: 'In Lodge' },
+    { id: 'v-3', name: 'አቶ ካሊድ መሐመድ', phone: '0922445566', carPlate: 'AA-2-C23412', purpose: 'ባህል ምግብ ለመመገብ', timeIn: '08:00 AM', timeOut: '09:45 AM', status: 'Checked Out' }
+  ]);
 
-  const [orders, setOrders] = useState<Order[]>(() => {
-    try {
-      const stored = localStorage.getItem('papyrus_lodge_unified_state_v2');
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (parsed.orders) return parsed.orders;
-      }
-    } catch {}
-    return [
-      {
-        id: '#O-991',
-        location: 'Table 04',
-        items: [{ id: 'm1-temp', baseId: 'm1', name: 'የሽከላ ጥብስ (ቃሪያ: አለ, እንጀራ: የለም, ዳቦ: 1)', qty: 1, price: 660 }],
-        total: 875,
-        serviceCharge: 66,
-        vat: 109,
-        tip: 40,
-        status: 'Preparing',
-        cookingStatus: 'Preparing',
-        servedByWaiter: false,
-        payment: 'cash',
-        confirmed: true,
-        waiter: 'ዳዊት አብርሃም',
-        orderType: 'dine',
-        time: '11:15',
-        date: '2026-06-07'
-      },
-      {
-        id: '#O-992',
-        location: 'Hawassa Piazza',
-        items: [{ id: 'm3-temp', baseId: 'm3', name: 'ፓፒረስ ልዩ ጁስ', qty: 2, price: 180 }],
-        total: 455,
-        serviceCharge: 36,
-        vat: 59,
-        tip: 0,
-        status: 'Pending',
-        cookingStatus: 'Pending',
-        servedByWaiter: false,
-        payment: 'cash',
-        confirmed: true,
-        waiter: 'ዳዊት አብርሃም',
-        orderType: 'delivery',
-        deliveryPhone: '0912345678',
-        deliveryAddress: 'Lakeside Main Rd',
-        time: '11:22',
-        date: '2026-06-07'
-      }
-    ];
-  });
+  const [orders, setOrders] = useState<Order[]>([
+    {
+      id: '#O-991',
+      location: 'Table 04',
+      items: [{ id: 'm1-temp', baseId: 'm1', name: 'የሽከላ ጥብስ (ቃሪያ: አለ, እንጀራ: የለም, ዳቦ: 1)', qty: 1, price: 660 }],
+      total: 875,
+      serviceCharge: 66,
+      vat: 109,
+      tip: 40,
+      status: 'Preparing',
+      cookingStatus: 'Preparing',
+      servedByWaiter: false,
+      payment: 'cash',
+      confirmed: true,
+      waiter: 'ዳዊት አብርሃም',
+      orderType: 'dine',
+      time: '11:15',
+      date: '2026-06-07'
+    },
+    {
+      id: '#O-992',
+      location: 'Hawassa Piazza',
+      items: [{ id: 'm3-temp', baseId: 'm3', name: 'ፓፒረስ ልዩ ጁስ', qty: 2, price: 180 }],
+      total: 455,
+      serviceCharge: 36,
+      vat: 59,
+      tip: 0,
+      status: 'Pending',
+      cookingStatus: 'Pending',
+      servedByWaiter: false,
+      payment: 'cash',
+      confirmed: true,
+      waiter: 'ዳዊት አብርሃም',
+      orderType: 'delivery',
+      deliveryPhone: '0912345678',
+      deliveryAddress: 'Lakeside Main Rd',
+      time: '11:22',
+      date: '2026-06-07'
+    }
+  ]);
 
-  const [assistanceCalls, setAssistanceCalls] = useState<AssistanceCall[]>(() => {
-    try {
-      const stored = localStorage.getItem('papyrus_lodge_unified_state_v2');
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (parsed.assistanceCalls) return parsed.assistanceCalls;
-      }
-    } catch {}
-    return [{ id: 'c1', location: 'Table 05', time: '11:15', active: true }];
-  });
+  const [assistanceCalls, setAssistanceCalls] = useState<AssistanceCall[]>([
+    { id: 'c1', location: 'Table 05', time: '11:15', active: true }
+  ]);
 
-  const [feedback, setFeedback] = useState<Feedback[]>(() => {
-    try {
-      const stored = localStorage.getItem('papyrus_lodge_unified_state_v2');
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (parsed.feedback && Array.isArray(parsed.feedback)) return parsed.feedback;
-      }
-    } catch {}
-    return [
-      { id: 'f-1', text: 'ሎጁ በጣም ደስ የሚልና ሰላማዊ ቦታ ነው! አገልግሎታችሁ በጣም አሪፍ ነው!', time: '2026-06-07 10:30' },
-      { id: 'f-2', text: 'Excellent service and peaceful environment!', time: '2026-06-07 11:15', reply: 'Thank you very much for your feedback! We hope to see you again soon.', replyTime: '2026-06-07 11:20' }
-    ];
-  });
+  const [feedback, setFeedback] = useState<Feedback[]>([
+    { id: 'f-1', text: 'ሎጁ በጣም ደስ የሚልና ሰላማዊ ቦታ ነው! አገልግሎታችሁ በጣም አሪፍ ነው!', time: '2026-06-07 10:30' },
+    { id: 'f-2', text: 'Excellent service and peaceful environment!', time: '2026-06-07 11:15', reply: 'Thank you very much for your feedback! We hope to see you again soon.', replyTime: '2026-06-07 11:20' }
+  ]);
 
-  const [serviceChargeRate, setServiceChargeRate] = useState<number>(() => {
-    try {
-      const stored = localStorage.getItem('papyrus_lodge_unified_state_v2');
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (parsed.serviceChargeRate !== undefined) return Number(parsed.serviceChargeRate);
-      }
-    } catch {}
-    return 10;
-  });
+  const [serviceChargeRate, setServiceChargeRate] = useState<number>(10);
 
-  const [vatRate, setVatRate] = useState<number>(() => {
-    try {
-      const stored = localStorage.getItem('papyrus_lodge_unified_state_v2');
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (parsed.vatRate !== undefined) return Number(parsed.vatRate);
-      }
-    } catch {}
-    return 15;
-  });
+  const [vatRate, setVatRate] = useState<number>(15);
 
-  const [aboutLodgeText, setAboutLodgeText] = useState<string>(() => {
-    try {
-      const stored = localStorage.getItem('papyrus_lodge_unified_state_v2');
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (parsed.aboutLodgeText) return parsed.aboutLodgeText;
-      }
-    } catch {}
-    return 'ሀዋሳ ፓፒረስ ሎጅ በተፈጥሮ የታደለች ውቧ የሀዋሳ ከተማ ውስጥ፣ ከታዋቂው የሀዋሳ ሃይቅ ዳርቻ አቅራቢያ የሚገኝ ምቹ፣ ሰላማዊ እና አስደሳች ማረፊያ ነው። ጥራት ባላቸው አገልግሎቶቻችን፣ በአገር በቀል ጣፋጭ ምግቦች፣ እንዲሁም ለተለያዩ ክብረ በዓላት የሚሆኑ ውብ አዳራሾቻችን አስተማማኝ ምርጫ እንድንሆን ያደርገናል።';
-  });
+  const [aboutLodgeText, setAboutLodgeText] = useState<string>('ሀዋሳ ፓፒረስ ሎጅ በተፈጥሮ የታደለች ውቧ የሀዋሳ ከተማ ውስጥ፣ ከታዋቂው የሀዋሳ ሃይቅ ዳርቻ አቅራቢያ የሚገኝ ምቹ፣ ሰላማዊ እና አስደሳች ማረፊያ ነው። ጥራት ባላቸው አገልግሎቶቻችን፣ በአገር በቀል ጣፋጭ ምግቦች፣ እንዲሁም ለተለያዩ ክብረ በዓላት የሚሆኑ ውብ አዳራሾቻችን አስተማማኝ ምርጫ እንድንሆን ያደርገናል።');
 
-  const [promos, setPromos] = useState<PromoBanner[]>(() => {
-    try {
-      const stored = localStorage.getItem('papyrus_lodge_unified_state_v2');
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (parsed.promos && Array.isArray(parsed.promos)) return parsed.promos;
-      }
-    } catch {}
-    return PROMO_BANNERS;
-  });
+  const [promos, setPromos] = useState<PromoBanner[]>(PROMO_BANNERS);
 
-  const [expenses, setExpenses] = useState<Expense[]>(() => {
-    try {
-      const stored = localStorage.getItem('papyrus_lodge_unified_state_v2');
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (parsed.expenses && Array.isArray(parsed.expenses)) return parsed.expenses;
-      }
-    } catch {}
-    return [
-      { id: 'exp-1', title: 'ለኩሽና እንቁላል እና ስጋ ግዢ (Kitchen purchase)', category: 'ማቴሪያል ግዢ (Kitchen Supply)', amount: 1500, date: '2026-06-07', time: '09:00', notes: 'የጠዋት ግብዓቶች' },
-      { id: 'exp-2', title: 'የኤሌክትሪክ እና የውሃ ክፍያ (Utility Payments)', category: 'መገልገያ ክፍያ (Utilities)', amount: 4800, date: '2026-06-06', time: '14:30', notes: 'ለግንቦት ወር' },
-      { id: 'exp-3', title: 'የሪሴብሽን ሰርተፊኬት ማተሚያ ወረቀት (Desk Paper)', category: 'ጽሕፈት መሳሪያ (Stationery)', amount: 800, date: '2026-06-07', time: '11:00', notes: 'ባለ 3 ኮፒ ሰነድ' }
-    ];
-  });
+  const [galleryItems, setGalleryItems] = useState<any[]>([]);
+
+  const [expenses, setExpenses] = useState<Expense[]>([
+    { id: 'exp-1', title: 'ለኩሽና እንቁላል እና ስጋ ግዢ (Kitchen purchase)', category: 'ማቴሪያል ግዢ (Kitchen Supply)', amount: 1500, date: '2026-06-07', time: '09:00', notes: 'የጠዋት ግብዓቶች' },
+    { id: 'exp-2', title: 'የኤሌክትሪክ እና የውሃ ክፍያ (Utility Payments)', category: 'መገልገያ ክፍያ (Utilities)', amount: 4800, date: '2026-06-06', time: '14:30', notes: 'ለግንቦት ወር' },
+    { id: 'exp-3', title: 'የሪሴብሽን ሰርተፊኬት ማተሚያ ወረቀት (Desk Paper)', category: 'ጽሕፈት መሳሪያ (Stationery)', amount: 800, date: '2026-06-07', time: '11:00', notes: 'ባለ 3 ኮፒ ሰነድ' }
+  ]);
 
   // APP STATES
   const [activeRole, setActiveRole] = useState<'entry' | 'customer' | 'waiter' | 'chef' | 'admin' | 'manager' | 'receptionist' | 'cashier' | 'guard' | 'shader_demo' | 'vault'>(() => {
@@ -453,65 +279,19 @@ export default function App() {
   const [showLoginPassword, setShowLoginPassword] = useState(false);
 
   // BRAND LOGO & LITE-MODE (BASIC MODE TOGGLE)
-  const [logoUrl, setLogoUrl] = useState<string>(() => {
-    try {
-      const stored = localStorage.getItem('papyrus_lodge_unified_state_v2');
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (parsed.logoUrl) return parsed.logoUrl;
-      }
-    } catch {}
-    return 'https://images.unsplash.com/photo-1542038784456-1ea8e935640e?w=150&auto=format&fit=crop&q=60';
-  });
+  const [logoUrl, setLogoUrl] = useState<string>('https://images.unsplash.com/photo-1542038784456-1ea8e935640e?w=150&auto=format&fit=crop&q=60');
   const [tempLogoFile, setTempLogoFile] = useState<string | null>(null);
 
-  const [bgVideoUrl, setBgVideoUrl] = useState<string>(() => {
-    try {
-      const stored = localStorage.getItem('papyrus_lodge_unified_state_v2');
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (parsed.bgVideoUrl) return parsed.bgVideoUrl;
-      }
-    } catch {}
-    // Default welcome video link: Cozy Cafe Jazz Ambient
-    return 'https://pixabay.com/videos/ai-generated-restaurant-cafe-jazz-202004/';
-  });
+  const [bgVideoUrl, setBgVideoUrl] = useState<string>('https://pixabay.com/videos/ai-generated-restaurant-cafe-jazz-202004/');
 
-  const [bgVideoType, setBgVideoType] = useState<'youtube' | 'direct' | 'local' | 'mango-paradise' | 'gourmet-paradise'>(() => {
-    try {
-      const stored = localStorage.getItem('papyrus_lodge_unified_state_v2');
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (parsed.bgVideoType) return parsed.bgVideoType;
-      }
-    } catch {}
-    return 'gourmet-paradise';
-  });
+  const [bgVideoType, setBgVideoType] = useState<'youtube' | 'direct' | 'local' | 'mango-paradise' | 'gourmet-paradise'>('gourmet-paradise');
 
-  const [isBgVideoEnabled, setIsBgVideoEnabled] = useState<boolean>(() => {
-    try {
-      const stored = localStorage.getItem('papyrus_lodge_unified_state_v2');
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (typeof parsed.isBgVideoEnabled === 'boolean') return parsed.isBgVideoEnabled;
-      }
-    } catch {}
-    return false; // Default to false as requested
-  });
+  const [isBgVideoEnabled, setIsBgVideoEnabled] = useState<boolean>(false);
 
   const [mediaPreviewPaused, setMediaPreviewPaused] = useState(false);
   const [mediaPreviewMuted, setMediaPreviewMuted] = useState(true);
 
-  const [liteMode, setLiteMode] = useState<boolean>(() => {
-    try {
-      const stored = localStorage.getItem('papyrus_lodge_unified_state_v2');
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (typeof parsed.liteMode === 'boolean') return parsed.liteMode;
-      }
-    } catch {}
-    return false;
-  });
+  const [liteMode, setLiteMode] = useState<boolean>(false);
 
   // Mouse position tracking for interactive 3D parallax background
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
@@ -1352,32 +1132,14 @@ export default function App() {
   }, [pendingAttendanceRequests]);
 
   // ATTENDANCE & BONUSES STATE FOR STAFF PERSISTENCE
-  const [attendance, setAttendance] = useState<AttendanceRecord[]>(() => {
-    try {
-      const stored = localStorage.getItem('papyrus_lodge_unified_state_v2');
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (parsed.attendance && Array.isArray(parsed.attendance)) return parsed.attendance;
-      }
-    } catch {}
-    return [];
-  });
+  const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
 
   const [attFilterStaff, setAttFilterStaff] = useState<string>('all');
   const [attFilterYear, setAttFilterYear] = useState<string>('all');
   const [attFilterMonth, setAttFilterMonth] = useState<string>('all');
   const [attFilterDay, setAttFilterDay] = useState<string>('all');
 
-  const [bonuses, setBonuses] = useState<BonusRecord[]>(() => {
-    try {
-      const stored = localStorage.getItem('papyrus_lodge_unified_state_v2');
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (parsed.bonuses && Array.isArray(parsed.bonuses)) return parsed.bonuses;
-      }
-    } catch {}
-    return [];
-  });
+  const [bonuses, setBonuses] = useState<BonusRecord[]>([]);
 
   // CUSTOM CORE DELETE DIALOG CONFIRMATION STATE (bypass iframe popup blocks)
   const [deleteConfWindow, setDeleteConfWindow] = useState<{
@@ -1398,22 +1160,13 @@ export default function App() {
   const [customAttendanceTime, setCustomAttendanceTime] = useState('');
 
   // MENU CATEGORIES (DYNAMIC)
-  const [categories, setCategories] = useState<{ id: string; icon: string; label: string; activeBg: string }[]>(() => {
-    try {
-      const stored = localStorage.getItem('papyrus_lodge_unified_state_v2');
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (parsed.categories && Array.isArray(parsed.categories)) return parsed.categories;
-      }
-    } catch {}
-    return [
-      { id: 'food', icon: '🍛', label: 'ምግቦች (Foods)', activeBg: 'tactile-3d-btn-lime' },
-      { id: 'drinks', icon: '🍹', label: 'መጠጦች (Drinks)', activeBg: 'tactile-3d-btn-sky' },
-      { id: 'traditional', icon: '🥘', label: 'ባህላዊ (Traditional)', activeBg: 'tactile-3d-btn-amber' },
-      { id: 'room', icon: '🏨', label: 'ክፍሎች (Rooms)', activeBg: 'tactile-3d-btn-pink' },
-      { id: 'venue', icon: '🌲', label: 'ስብሰባ (Venues)', activeBg: 'tactile-3d-btn-orange' }
-    ];
-  });
+  const [categories, setCategories] = useState<{ id: string; icon: string; label: string; activeBg: string }[]>([
+    { id: 'food', icon: '🍛', label: 'ምግቦች (Foods)', activeBg: 'tactile-3d-btn-lime' },
+    { id: 'drinks', icon: '🍹', label: 'መጠጦች (Drinks)', activeBg: 'tactile-3d-btn-sky' },
+    { id: 'traditional', icon: '🥘', label: 'ባህላዊ (Traditional)', activeBg: 'tactile-3d-btn-amber' },
+    { id: 'room', icon: '🏨', label: 'ክፍሎች (Rooms)', activeBg: 'tactile-3d-btn-pink' },
+    { id: 'venue', icon: '🌲', label: 'ስብሰባ (Venues)', activeBg: 'tactile-3d-btn-orange' }
+  ]);
 
   const [editingCategory, setEditingCategory] = useState<{ id: string; icon: string; label: string; activeBg: string } | null>(null);
 
@@ -1426,44 +1179,18 @@ export default function App() {
     kochoPrice: number;
     mayoPrice: number;
     customAdditionsPrice: number;
-  }>(() => {
-    try {
-      const stored = localStorage.getItem('papyrus_lodge_unified_state_v2');
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (parsed.modifierOptions) {
-          const injeraChoices = Array.isArray(parsed.modifierOptions.injeraChoices) ? parsed.modifierOptions.injeraChoices : ['የለም', 'ግማሽ', 'ሙሉ'];
-          const defaultPrices: { [key: string]: number } = {};
-          injeraChoices.forEach((choice: string) => {
-            defaultPrices[choice] = parsed.modifierOptions.injeraPrices?.[choice] !== undefined 
-              ? Number(parsed.modifierOptions.injeraPrices[choice])
-              : (choice === 'ሙሉ' ? 30 : choice === 'ግማሽ' ? 15 : 0);
-          });
-          return {
-            qariaChoices: Array.isArray(parsed.modifierOptions.qariaChoices) ? parsed.modifierOptions.qariaChoices : ['አለ', 'የለም'],
-            injeraChoices: injeraChoices,
-            daboPrice: typeof parsed.modifierOptions.daboPrice === 'number' ? parsed.modifierOptions.daboPrice : 15,
-            injeraPrices: defaultPrices,
-            kochoPrice: typeof parsed.modifierOptions.kochoPrice === 'number' ? parsed.modifierOptions.kochoPrice : 45,
-            mayoPrice: typeof parsed.modifierOptions.mayoPrice === 'number' ? parsed.modifierOptions.mayoPrice : 20,
-            customAdditionsPrice: typeof parsed.modifierOptions.customAdditionsPrice === 'number' ? parsed.modifierOptions.customAdditionsPrice : 35
-          };
-        }
-      }
-    } catch {}
-    return {
-      qariaChoices: ['አለ', 'የለም'],
-      injeraChoices: ['የለም', 'ግማሽ', 'ሙሉ'],
-      daboPrice: 15,
-      injeraPrices: {
-        'የለም': 0,
-        'ግማሽ': 15,
-        'ሙሉ': 30
-      },
-      kochoPrice: 45,
-      mayoPrice: 20,
-      customAdditionsPrice: 35
-    };
+  }>({
+    qariaChoices: ['አለ', 'የለም'],
+    injeraChoices: ['የለም', 'ግማሽ', 'ሙሉ'],
+    daboPrice: 15,
+    injeraPrices: {
+      'የለም': 0,
+      'ግማሽ': 15,
+      'ሙሉ': 30
+    },
+    kochoPrice: 45,
+    mayoPrice: 20,
+    customAdditionsPrice: 35
   });
 
   // GUEST CONTROLS
@@ -1508,6 +1235,66 @@ export default function App() {
   const [addStaffPhoto, setAddStaffPhoto] = useState('');
   const [addPromoPoster, setAddPromoPoster] = useState('');
   const [addPromoVideo, setAddPromoVideo] = useState('');
+  const [galleryNewImgUrl, setGalleryNewImgUrl] = useState('');
+
+  const processFileWithCompression = (file: File, callback: (base64: string) => void) => {
+    // Check if video is too large
+    if (file.type.startsWith('video/')) {
+      if (file.size > 2 * 1024 * 1024) { // 2MB Limit
+        alert('⚠️ ቪዲዮው በጣም ትልቅ ነው! እባክዎ ከ 2MB በታች የሆነ ቪዲዮ ይምረጡ ወይም የዩቲዩብ ቪዲዮ አድራሻ (YouTube URL) ይጠቀሙ።\nVideo file is too large! Please choose a video under 2MB, or use a YouTube URL instead.');
+        return;
+      }
+    }
+
+    if (file.type.startsWith('image/')) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const img = new Image();
+        img.onload = () => {
+          // Downscale to max dimensions of 600px for storage friendliness
+          const maxDimension = 600;
+          let width = img.width;
+          let height = img.height;
+          if (width > maxDimension || height > maxDimension) {
+            if (width > height) {
+              height = Math.round((height * maxDimension) / width);
+              width = maxDimension;
+            } else {
+              width = Math.round((width * maxDimension) / height);
+              height = maxDimension;
+            }
+          }
+
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(img, 0, 0, width, height);
+            // High compression quality (0.7) produces extremely lightweight image (15KB - 40KB)
+            const compressedBase64 = canvas.toDataURL('image/jpeg', 0.7);
+            callback(compressedBase64);
+          } else {
+            callback(reader.result as string);
+          }
+        };
+        img.onerror = () => {
+          callback(reader.result as string);
+        };
+        img.src = reader.result as string;
+      };
+      reader.readAsDataURL(file);
+    } else {
+      // Non-image files or fallback
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        if (typeof reader.result === 'string') {
+          callback(reader.result);
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+  };
 
   const readMediaFile = async (e: React.ChangeEvent<HTMLInputElement>, callback: (url: string) => void) => {
     const file = e.target.files?.[0];
@@ -1571,38 +1358,7 @@ export default function App() {
   const [qrLocation, setQrLocation] = useState('Room 101');
   const [qrGeneratedUrl, setQrGeneratedUrl] = useState('');
 
-  // CRITICAL SAVING SYSTEM
-  useEffect(() => {
-    try {
-      localStorage.setItem('papyrus_lodge_unified_state_v2', JSON.stringify({
-        menu: menuItems,
-        staff,
-        banks,
-        orders,
-        assistanceCalls,
-        feedback,
-        serviceChargeRate,
-        vatRate,
-        promos,
-        attendance,
-        bonuses,
-        aboutLodgeText,
-        categories,
-        modifierOptions,
-        roomBookings,
-        expenses,
-        chapaKey,
-        chapaActive,
-        chapaMode,
-        logoUrl,
-        liteMode,
-        visitorLog,
-        bgVideoUrl,
-        bgVideoType,
-        isBgVideoEnabled
-      }));
-    } catch {}
-  }, [menuItems, staff, banks, orders, assistanceCalls, feedback, serviceChargeRate, vatRate, promos, attendance, bonuses, aboutLodgeText, categories, modifierOptions, roomBookings, expenses, chapaKey, chapaActive, chapaMode, logoUrl, liteMode, visitorLog, bgVideoUrl, bgVideoType, isBgVideoEnabled]);
+
 
   // INITIALIZE FIRST CUSTOMIZER BLOCK
   useEffect(() => {
@@ -1747,6 +1503,23 @@ export default function App() {
         if (chapaVal.mode !== undefined) setChapaMode(chapaVal.mode);
       }
 
+      // 22. Fetch gallery table rows
+      try {
+        console.log("Fetching gallery items from Supabase...");
+        const { data: galleryData, error: galleryErr } = await supabase
+          .from('gallery')
+          .select('*')
+          .order('created_at', { ascending: false });
+        if (galleryErr) {
+          console.error("Error fetching gallery items:", galleryErr);
+        } else if (galleryData) {
+          console.log(`Fetched ${galleryData.length} gallery items successfully.`);
+          setGalleryItems(galleryData);
+        }
+      } catch (err) {
+        console.error("Exception fetching gallery items:", err);
+      }
+
       setHasLoadedCloudSettings(true);
     };
     fetchCloudSettings();
@@ -1843,8 +1616,35 @@ export default function App() {
       )
       .subscribe();
 
+    // GALLERY REAL-TIME SUBSCRIPTION
+    const galleryChannel = supabase
+      .channel('realtime-gallery-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'gallery'
+        },
+        (payload) => {
+          console.log("Realtime gallery change received:", payload);
+          if (payload.eventType === 'INSERT') {
+            setGalleryItems(prev => {
+              if (prev.some(item => item.id === payload.new.id)) return prev;
+              return [payload.new, ...prev];
+            });
+          } else if (payload.eventType === 'DELETE') {
+            setGalleryItems(prev => prev.filter(item => item.id !== payload.old.id));
+          } else if (payload.eventType === 'UPDATE') {
+            setGalleryItems(prev => prev.map(item => item.id === payload.new.id ? payload.new : item));
+          }
+        }
+      )
+      .subscribe();
+
     return () => {
       supabase.removeChannel(channel);
+      supabase.removeChannel(galleryChannel);
     };
   }, []);
 
@@ -2121,43 +1921,9 @@ export default function App() {
     }
   }, [isLightTheme]);
 
-  // Synchronize state across tabs/windows (real-time local sharing) for buzzer calls and active orders
+  // Synchronize state across tabs/windows (real-time local sharing) for custom roles
   useEffect(() => {
-    const syncAllFromStorage = () => {
-      try {
-        const stored = localStorage.getItem('papyrus_lodge_unified_state_v2');
-        if (stored) {
-          const parsed = JSON.parse(stored);
-          if (parsed.menu) setMenuItems(parsed.menu);
-          if (parsed.staff) setStaff(parsed.staff);
-          if (parsed.banks) setBanks(parsed.banks);
-          if (parsed.orders) setOrders(parsed.orders);
-          if (parsed.assistanceCalls) setAssistanceCalls(parsed.assistanceCalls);
-          if (parsed.feedback) setFeedback(parsed.feedback);
-          if (parsed.categories) setCategories(parsed.categories);
-          if (parsed.roomBookings) setRoomBookings(parsed.roomBookings);
-          if (parsed.expenses) setExpenses(parsed.expenses);
-          if (parsed.bgVideoUrl) setBgVideoUrl(parsed.bgVideoUrl);
-          if (parsed.bgVideoType) setBgVideoType(parsed.bgVideoType);
-          if (typeof parsed.isBgVideoEnabled === 'boolean') setIsBgVideoEnabled(parsed.isBgVideoEnabled);
-          if (parsed.logoUrl) setLogoUrl(parsed.logoUrl);
-          if (parsed.attendance) setAttendance(parsed.attendance);
-          if (parsed.bonuses) setBonuses(parsed.bonuses);
-          if (typeof parsed.serviceChargeRate === 'number') setServiceChargeRate(parsed.serviceChargeRate);
-          if (typeof parsed.vatRate === 'number') setVatRate(parsed.vatRate);
-          if (parsed.chapaKey) setChapaKey(parsed.chapaKey);
-          if (typeof parsed.chapaActive === 'boolean') setChapaActive(parsed.chapaActive);
-          if (parsed.chapaMode) setChapaMode(parsed.chapaMode);
-        }
-      } catch (err) {
-        console.error("Failed to sync storage", err);
-      }
-    };
-
     const handleStorageChange = (e: StorageEvent) => {
-      if (e.key === 'papyrus_lodge_unified_state_v2' && e.newValue) {
-        syncAllFromStorage();
-      }
       if (e.key === 'papyrus_lodge_custom_roles_v2' && e.newValue) {
         try {
           setCustomRoles(JSON.parse(e.newValue));
@@ -2165,18 +1931,9 @@ export default function App() {
       }
     };
 
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        syncAllFromStorage();
-      }
-    };
-
     window.addEventListener('storage', handleStorageChange);
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    
     return () => {
       window.removeEventListener('storage', handleStorageChange);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, []);
 
@@ -3670,6 +3427,107 @@ export default function App() {
     askConfirmAndRun('ይህንን ማስታወቂያ ማጥፋት ይፈልጋሉ? (Are you sure you want to delete this promotion?)', () => {
       setPromos(prev => prev.filter((_, idx) => idx !== index));
     });
+  };
+
+  // GALLERY MANAGEMENT HANDLERS (SUPABASE GALLERY TABLE)
+  const handleSaveGalleryItem = async (titleAm: string, titleEn: string, imageUrl: string, category: string, id?: string) => {
+    try {
+      console.log("Saving gallery item to Supabase...", { id, titleAm, titleEn, imageUrl, category });
+      
+      let res;
+      if (id) {
+        // Upsert/Update operation
+        res = await supabase
+          .from('gallery')
+          .upsert({
+            id,
+            title_am: titleAm,
+            title_en: titleEn,
+            image_url: imageUrl,
+            category: category || 'General',
+            created_at: new Date().toISOString()
+          })
+          .select();
+      } else {
+        // Insert operation
+        res = await supabase
+          .from('gallery')
+          .insert([
+            {
+              title_am: titleAm,
+              title_en: titleEn,
+              image_url: imageUrl,
+              category: category || 'General'
+            }
+          ])
+          .select();
+      }
+
+      if (res.error) {
+        console.error("Supabase gallery save failed with error:", res.error);
+        alert(`❌ Supabase Gallery Save Error:\nMessage: ${res.error.message}\nCode: ${res.error.code}\nDetails: ${res.error.details || 'None'}`);
+        return null;
+      }
+
+      console.log("Supabase gallery save succeeded. Data:", res.data);
+      
+      // Reload directly from Supabase after save to ensure sync and state integrity
+      console.log("Reloading gallery items from Supabase after save...");
+      const { data: galleryData, error: galleryErr } = await supabase
+        .from('gallery')
+        .select('*')
+        .order('created_at', { ascending: false });
+        
+      if (galleryErr) {
+        console.error("Error reloading gallery items:", galleryErr);
+      } else if (galleryData) {
+        console.log(`Successfully reloaded ${galleryData.length} gallery items.`);
+        setGalleryItems(galleryData);
+      }
+
+      if (res.data && res.data[0]) {
+        alert('✨ ጋለሪ ምስል በተሳካ ሁኔታ ተቀምጧል! / Gallery item saved successfully to Supabase!');
+        return res.data[0];
+      }
+    } catch (err: any) {
+      console.error("Exception saving gallery item:", err);
+      alert(`❌ Unexpected Error while saving gallery: ${err.message || err}`);
+    }
+    return null;
+  };
+
+  const handleDeleteGalleryItem = async (id: string) => {
+    if (!id) return;
+    try {
+      console.log(`Deleting gallery item ${id} from Supabase...`);
+      const { error } = await supabase
+        .from('gallery')
+        .delete()
+        .eq('id', id);
+
+      if (error) {
+        console.error("Supabase gallery delete failed with error:", error);
+        alert(`❌ Supabase Gallery Delete Error:\nMessage: ${error.message}\nCode: ${error.code}`);
+        return;
+      }
+
+      console.log("Supabase gallery delete succeeded. Reloading gallery items...");
+      const { data: galleryData, error: galleryErr } = await supabase
+        .from('gallery')
+        .select('*')
+        .order('created_at', { ascending: false });
+        
+      if (galleryErr) {
+        console.error("Error reloading gallery items after delete:", galleryErr);
+      } else if (galleryData) {
+        setGalleryItems(galleryData);
+      }
+      
+      alert('🗑️ የጋለሪው ምስል ተሰርዟል! / Gallery item deleted successfully!');
+    } catch (err: any) {
+      console.error("Exception deleting gallery item:", err);
+      alert(`❌ Unexpected Error while deleting gallery: ${err.message || err}`);
+    }
   };
 
   // PROMOTIONAL MARKETING BANNERS HANDLERS
@@ -5823,6 +5681,44 @@ export default function App() {
                   </div>
                 </motion.div>
 
+                {/* Photo Gallery Showcase */}
+                {galleryItems && galleryItems.length > 0 && (
+                  <div className="bg-[#141414] border border-white/10 p-5 space-y-4 rounded-xl mt-6">
+                    <div className="flex items-center justify-between border-b border-white/5 pb-2">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xl">🖼️</span>
+                        <h4 className="text-xs font-black text-white uppercase tracking-widest">
+                          {appLang === 'am' ? 'የፓፒረስ ማዕከለ-ስዕላት' : 'Papyrus Gallery Showcase'}
+                        </h4>
+                      </div>
+                      <span className="text-[10px] text-[#C1FF00] font-mono uppercase font-bold bg-[#C1FF00]/10 border border-[#C1FF00]/20 px-2.5 py-1 rounded-full">
+                        {galleryItems.length} {appLang === 'am' ? 'ምስሎች' : 'Photos'}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
+                      {galleryItems.map((item, idx) => (
+                        <div key={item.id || idx} className="group relative aspect-square bg-[#1c1c1c] border border-white/5 overflow-hidden rounded-lg">
+                          <img 
+                            src={item.image_url} 
+                            alt={appLang === 'am' ? item.title_am : item.title_en}
+                            className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
+                            referrerPolicy="no-referrer"
+                          />
+                          <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/30 to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end p-2.5 pointer-events-none">
+                            <span className="text-[8px] text-[#C1FF00] font-mono font-bold uppercase tracking-wider block mb-0.5">
+                              {item.category || 'General'}
+                            </span>
+                            <span className="text-[10px] text-white font-bold leading-tight line-clamp-2">
+                              {appLang === 'am' ? item.title_am : item.title_en}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {/* About the resort and feedback */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-6">
                   <div className="bg-[#141414] border border-white/10 p-5 space-y-3">
@@ -6646,7 +6542,8 @@ export default function App() {
                     { id: 'promo', label: appLang === 'am' ? '🎟️ ፕሮሞሽን' : '🎟️ Promos', color: 'text-pink-400' },
                     { id: 'lodgeinfo', label: appLang === 'am' ? '🛖 መረጃ' : '🛖 Lodge Info', color: 'text-indigo-400' },
                     { id: 'reception', label: appLang === 'am' ? '🏨 ሪሴብሽን' : '🏨 Reception', color: 'text-teal-400' },
-                    { id: 'branding', label: appLang === 'am' ? '🎨 ሎጎ' : '🎨 Branding', color: 'text-rose-400' }
+                    { id: 'branding', label: appLang === 'am' ? '🎨 ሎጎ' : '🎨 Branding', color: 'text-rose-400' },
+                    { id: 'gallery', label: appLang === 'am' ? '🖼️ ጋለሪ' : '🖼️ Gallery', color: 'text-[#C1FF00]' }
                   ].map(tab => (
                     <button
                       key={tab.id}
@@ -9554,6 +9451,201 @@ export default function App() {
                       >
                         🔄 ወደ ነባሪው አርማ መልስ (RESET LOGO)
                       </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* TAB CONTENT 10: GALLERY MANAGEMENT (SUPABASE GALLERY TABLE) */}
+                {activeAdminTab === 'gallery' && (
+                  <div className="space-y-6 font-sans">
+                    {/* Add Gallery Photo Form */}
+                    <div className="bg-[#121212] border border-white/10 p-6 rounded-xl space-y-6">
+                      <div className="border-b border-white/5 pb-2">
+                        <span className="text-[9px] text-[#C1FF00] font-mono font-bold tracking-wider block uppercase">GALLERY CONTROL PANEL</span>
+                        <h3 className="text-sm font-black text-white uppercase mt-0.5">🖼️ የፓፒረስ ሎጅ ምስል ጋለሪ ማስተዳደሪያ (Lodge Photo Gallery Manager)</h3>
+                        <p className="text-[10px] text-white/50 leading-relaxed mt-1">
+                          በደንበኛ ገጽ ላይ የሚታዩትን የሎጅ ምስሎች እዚህ ላይ መመዝገብ፣ መሰረዝ ወይም ማስተካከል ይችላሉ። ምስሎችን ወደ Supabase Storage በመጫን ወይም የምስል ዩአርኤል (URL) በመጠቀም በቀላሉ ያስቀምጡ።
+                        </p>
+                      </div>
+
+                      <form 
+                        onSubmit={async (e) => {
+                          e.preventDefault();
+                          const titleAmInput = document.getElementById('gallery-title-am') as HTMLInputElement;
+                          const titleEnInput = document.getElementById('gallery-title-en') as HTMLInputElement;
+                          const categoryInput = document.getElementById('gallery-category') as HTMLSelectElement;
+                          const urlInput = document.getElementById('gallery-url') as HTMLInputElement;
+
+                          const titleAm = titleAmInput?.value || '';
+                          const titleEn = titleEnInput?.value || '';
+                          const category = categoryInput?.value || 'General';
+                          const imageUrl = galleryNewImgUrl || urlInput?.value || '';
+
+                          if (!imageUrl) {
+                            alert('⚠️ እባክዎ የምስል ፋይል ይጫኑ ወይም የምስል ዩአርኤል (Image URL) ያስገቡ!');
+                            return;
+                          }
+
+                          const success = await handleSaveGalleryItem(titleAm, titleEn, imageUrl, category);
+                          if (success) {
+                            if (titleAmInput) titleAmInput.value = '';
+                            if (titleEnInput) titleEnInput.value = '';
+                            if (urlInput) urlInput.value = '';
+                            setGalleryNewImgUrl('');
+                            const fileInput = document.getElementById('admin-gallery-file-input') as HTMLInputElement;
+                            if (fileInput) fileInput.value = '';
+                          }
+                        }}
+                        className="grid grid-cols-1 md:grid-cols-2 gap-4"
+                      >
+                        <div className="space-y-4">
+                          <div className="space-y-1.5">
+                            <label className="text-[10px] font-mono font-bold uppercase text-white/70 block">ምስል ርዕስ በአማርኛ (Amharic Title)</label>
+                            <input 
+                              type="text"
+                              id="gallery-title-am"
+                              placeholder="ምሳሌ: የሎጅ ውጫዊ ገጽታ"
+                              required
+                              className="w-full bg-[#181818] border border-white/10 text-white text-xs p-3 outline-none focus:border-[#C1FF00] rounded"
+                            />
+                          </div>
+
+                          <div className="space-y-1.5">
+                            <label className="text-[10px] font-mono font-bold uppercase text-white/70 block">ምስል ርዕስ በእንግሊዘኛ (English Title)</label>
+                            <input 
+                              type="text"
+                              id="gallery-title-en"
+                              placeholder="Example: Lodge Exterior View"
+                              required
+                              className="w-full bg-[#181818] border border-white/10 text-white text-xs p-3 outline-none focus:border-[#C1FF00] rounded"
+                            />
+                          </div>
+
+                          <div className="space-y-1.5">
+                            <label className="text-[10px] font-mono font-bold uppercase text-white/70 block">ምድብ (Category)</label>
+                            <select 
+                              id="gallery-category"
+                              className="w-full bg-[#181818] border border-white/10 text-white text-xs p-3 outline-none focus:border-[#C1FF00] rounded"
+                            >
+                              <option value="Lodge">Lodge (ሎጅ)</option>
+                              <option value="Rooms">Rooms (ክፍሎች)</option>
+                              <option value="Food">Food (ጣፋጭ ምግቦች)</option>
+                              <option value="Lake">Lake (ሀይቅ እይታ)</option>
+                              <option value="Venue">Venue (አዳራሾች)</option>
+                              <option value="General">General (አጠቃላይ)</option>
+                            </select>
+                          </div>
+                        </div>
+
+                        <div className="space-y-4 flex flex-col justify-between">
+                          <div className="space-y-3 bg-[#181818] p-4 border border-white/10 rounded-lg">
+                            <label className="text-[10px] font-mono font-bold uppercase text-[#C1FF00] block">📁 ፎቶ ከኮምፒውተርዎ ይጫኑ (Upload Photo to Supabase)</label>
+                            <input 
+                              type="file" 
+                              id="admin-gallery-file-input"
+                              accept="image/*"
+                              onChange={async (e) => {
+                                const file = e.target.files?.[0];
+                                if (file) {
+                                  // Upload using readMediaFile
+                                  await readMediaFile(e, (url) => {
+                                    setGalleryNewImgUrl(url);
+                                  });
+                                }
+                              }}
+                              className="w-full text-xs text-white/60 font-mono file:mr-4 file:py-1.5 file:px-3 file:rounded file:border file:border-white/10 file:text-[10px] file:font-sans file:font-semibold file:bg-white/5 file:text-white hover:file:bg-white/10 cursor-pointer"
+                            />
+                            {galleryNewImgUrl && (
+                              <div className="mt-2 p-2 bg-black/40 border border-[#C1FF00]/20 rounded flex items-center gap-3">
+                                <img src={galleryNewImgUrl} className="h-10 w-10 object-cover rounded border border-white/10" alt="Preview" />
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-[9px] text-emerald-400 font-bold truncate">✓ Uploaded to Supabase Storage!</p>
+                                  <p className="text-[8px] text-white/40 truncate font-mono">{galleryNewImgUrl}</p>
+                                </div>
+                                <button 
+                                  type="button" 
+                                  onClick={() => setGalleryNewImgUrl('')}
+                                  className="text-[9px] text-red-400 hover:text-red-300 font-bold uppercase cursor-pointer"
+                                >
+                                  Clear
+                                </button>
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="space-y-1.5">
+                            <label className="text-[10px] font-mono font-bold uppercase text-white/70 block">ወይም የምስል የኢንተርኔት አድራሻ (Or Image Direct URL)</label>
+                            <input 
+                              type="url"
+                              id="gallery-url"
+                              value={galleryNewImgUrl}
+                              onChange={(e) => setGalleryNewImgUrl(e.target.value)}
+                              placeholder="https://images.unsplash.com/photo-xxx..."
+                              className="w-full bg-[#181818] border border-white/10 text-white text-xs p-3 outline-none focus:border-[#C1FF00] rounded font-mono"
+                            />
+                          </div>
+
+                          <button 
+                            type="submit"
+                            className="w-full bg-[#C1FF00] hover:bg-white text-black py-3 font-black text-xs uppercase tracking-wider transition-colors cursor-pointer rounded flex items-center justify-center gap-2 shadow-lg"
+                          >
+                            <span>💾 አዲስ ጋለሪ ምስል አስቀምጥ (SAVE GALLERY TO SUPABASE)</span>
+                          </button>
+                        </div>
+                      </form>
+                    </div>
+
+                    {/* Gallery Grid List */}
+                    <div className="bg-[#121212] border border-white/10 p-6 rounded-xl space-y-4">
+                      <div className="border-b border-white/5 pb-2 flex justify-between items-center">
+                        <div>
+                          <span className="text-[9px] text-[#C1FF00] font-mono font-bold tracking-wider block uppercase">GALLERY DATABASE RECORDS</span>
+                          <h3 className="text-xs font-black text-white uppercase mt-0.5">📂 በሰንጠረዥ ውስጥ ያሉ ምስሎች ({galleryItems.length})</h3>
+                        </div>
+                        <span className="text-[9px] text-white/40 font-mono font-bold uppercase">SUPABASE TABLE: gallery</span>
+                      </div>
+
+                      {galleryItems.length === 0 ? (
+                        <div className="text-center py-12 border border-dashed border-white/5 rounded-xl">
+                          <span className="text-3xl block">🖼️</span>
+                          <p className="text-xs text-white/40 font-bold mt-2 font-mono">በጋለሪው ሰንጠረዥ ውስጥ ምንም ምስል አልተገኘም።</p>
+                          <p className="text-[10px] text-white/30 mt-1 font-bold">ምስል ከላይ በመጫን መመዝገብ ይችላሉ።</p>
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                          {galleryItems.map((item, idx) => (
+                            <div key={item.id || idx} className="bg-[#181818] border border-white/10 rounded-lg overflow-hidden flex flex-col relative group">
+                              <div className="relative aspect-video bg-black overflow-hidden">
+                                <img 
+                                  src={item.image_url} 
+                                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300 animate-fade-in" 
+                                  alt={item.title_en} 
+                                  referrerPolicy="no-referrer"
+                                />
+                                <span className="absolute top-2 left-2 bg-black/80 text-[#C1FF00] border border-white/10 text-[8px] font-mono font-black uppercase px-2 py-0.5 rounded">
+                                  {item.category || 'General'}
+                                </span>
+                              </div>
+                              <div className="p-3 flex-1 flex flex-col justify-between space-y-3">
+                                <div className="space-y-1">
+                                  <h4 className="text-xs font-black text-white truncate">{item.title_am}</h4>
+                                  <p className="text-[10px] text-white/60 font-medium truncate italic">{item.title_en}</p>
+                                </div>
+                                <div className="border-t border-white/5 pt-2 flex items-center justify-between">
+                                  <span className="text-[8px] font-mono text-white/30 uppercase truncate max-w-[120px]">{item.id}</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDeleteGalleryItem(item.id)}
+                                    className="text-[9px] font-black uppercase text-red-500 hover:text-red-400 font-mono border border-red-950 px-2 py-1 rounded hover:bg-red-950/20 cursor-pointer"
+                                  >
+                                    🗑️ DELETE
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
