@@ -880,11 +880,15 @@ export default function CartModal({
                     <span className="font-mono text-[#00f5ff] font-black">{grandTotal} Birr</span>
                   </div>
                   <div className="flex justify-between">
-                    <span>System State:</span>
+                    <span>{appLang === 'am' ? 'የሲስተም ሁኔታ (System State):' : 'System State:'}</span>
                     {chapaKey ? (
-                      <span className="text-emerald-400 font-bold font-mono">✔️ API KEY CONNECTED</span>
+                      <span className="text-emerald-400 font-bold font-mono">
+                        {appLang === 'am' ? '✔️ የኤፒአይ ቁልፍ ተገናኝቷል (API KEY CONNECTED)' : '✔️ API KEY CONNECTED'}
+                      </span>
                     ) : (
-                      <span className="text-yellow-400 font-bold font-mono">⚠️ CHAPA DEMO EMULATOR active</span>
+                      <span className="text-yellow-400 font-bold font-mono">
+                        {appLang === 'am' ? '⚠️ የቻፓ ማሳያ ሙከራ ንቁ ነው (CHAPA DEMO EMULATOR active)' : '⚠️ CHAPA DEMO EMULATOR active'}
+                      </span>
                     )}
                   </div>
                 </div>

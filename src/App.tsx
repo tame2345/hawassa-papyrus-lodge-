@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Coffee, User, ChefHat, Settings, Activity, Plus, Minus, Trash2, 
@@ -22,6 +22,7 @@ import CloudVault from './components/CloudVault';
 import LoginModal from './components/LoginModal';
 import CartModal from './components/CartModal';
 import PrintableCertificateModal from './components/PrintableCertificateModal';
+import OrderAdjustmentModal from './components/OrderAdjustmentModal';
 import HeroDemo from './components/ui/demo';
 import AdminRevenueReports from './components/AdminRevenueReports';
 import { SupabaseLogin } from './components/SupabaseLogin';
@@ -38,6 +39,34 @@ import deliveryScooterIllustration from './assets/images/delivery_scooter_illust
 
 // Supabase Connection Import
 import { supabase } from './supabaseClient';
+
+const FALLBACK_GALLERY_ITEMS = [
+  {
+    id: 'f-1',
+    title_am: 'የሎጅ ውጫዊ ገጽታ',
+    title_en: 'Lodge Exterior View',
+    image_url: 'https://images.unsplash.com/photo-1566073771259-6a8506099945?w=800',
+    category: 'Lodge',
+    created_at: new Date().toISOString()
+  },
+  {
+    id: 'f-2',
+    title_am: 'የሀዋሳ ዓሳ ጥብስ',
+    title_en: 'Fried Hawassa Fish',
+    image_url: 'https://images.unsplash.com/photo-1519708227418-c8fd9a32b7a2?w=800',
+    category: 'Food',
+    created_at: new Date().toISOString()
+  },
+  {
+    id: 'f-3',
+    title_am: 'ዴሉክስ ሱዊት አልጋ',
+    title_en: 'Deluxe Suite Bed',
+    image_url: 'https://images.unsplash.com/photo-1582719478250-c89cae4dc85b?w=800',
+    category: 'Rooms',
+    created_at: new Date().toISOString()
+  }
+];
+
 
 
 export default function App() {
@@ -58,11 +87,19 @@ export default function App() {
   const handleUpdateLogoAndSync = async (newUrl: string) => {
     setLogoUrl(newUrl);
     try {
-      await supabase
+      const { error } = await supabase
         .from('system_settings')
         .upsert({ key: 'logoUrl', value: { url: newUrl } });
-    } catch (err) {
-      console.error("Failed to sync logo to Supabase settings:", err);
+      if (error) {
+        if (error.code !== '42501') {
+          console.warn("Failed to sync logo to Supabase settings:", error);
+          setSyncError(`Supabase error saving logo: ${error.message}`);
+        }
+      } else {
+        setSyncError(null);
+      }
+    } catch (err: any) {
+      console.warn("Failed to sync logo to Supabase settings:", err);
     }
   };
 
@@ -199,9 +236,33 @@ export default function App() {
 
   const [aboutLodgeText, setAboutLodgeText] = useState<string>('ሀዋሳ ፓፒረስ ሎጅ በተፈጥሮ የታደለች ውቧ የሀዋሳ ከተማ ውስጥ፣ ከታዋቂው የሀዋሳ ሃይቅ ዳርቻ አቅራቢያ የሚገኝ ምቹ፣ ሰላማዊ እና አስደሳች ማረፊያ ነው። ጥራት ባላቸው አገልግሎቶቻችን፣ በአገር በቀል ጣፋጭ ምግቦች፣ እንዲሁም ለተለያዩ ክብረ በዓላት የሚሆኑ ውብ አዳራሾቻችን አስተማማኝ ምርጫ እንድንሆን ያደርገናል።');
 
-  const [promos, setPromos] = useState<PromoBanner[]>(PROMO_BANNERS);
+  const [heroTitleAm, setHeroTitleAm] = useState<string>('ሃዋሳ ፓፒረስ');
+  const [heroTitleEn, setHeroTitleEn] = useState<string>('Hawassa Papyrus');
+  const [heroSubtitleAm, setHeroSubtitleAm] = useState<string>('ዲጂታል ኢኮ-ፖርታል v2');
+  const [heroSubtitleEn, setHeroSubtitleEn] = useState<string>('DIGITAL ECO-PORTAL v2');
+  const [heroIntroAm, setHeroIntroAm] = useState<string>('አገልግሎታችንን ለመጠቀም ከታች ከቀረቡት አማራጮች ያንን የሚመለከተውን መግቢያ መርጠው ይጠቀሙ።');
+  const [heroIntroEn, setHeroIntroEn] = useState<string>('To access our services, please select the appropriate portal from the options below.');
 
-  const [galleryItems, setGalleryItems] = useState<any[]>([]);
+  const [contactHotline1, setContactHotline1] = useState<string>('+251 919 629 347');
+  const [contactHotline2, setContactHotline2] = useState<string>('+251 462 201 234');
+  const [contactLocation, setContactLocation] = useState<string>('Hawassa, Ethiopia');
+  const [contactAddress, setContactAddress] = useState<string>('Lakefront Boulevard, Area 05');
+
+  const [wifiGuestSsid, setWifiGuestSsid] = useState<string>('Papyrus_Lodge_Guest');
+  const [wifiGuestPassword, setWifiGuestPassword] = useState<string>('papyruswelcome');
+  const [diningBreakfastTitleAm, setDiningBreakfastTitleAm] = useState<string>('የቁርስ ቡፌ (Breakfast buffet)');
+  const [diningBreakfastTitleEn, setDiningBreakfastTitleEn] = useState<string>('Breakfast buffet');
+  const [diningBreakfastHoursAm, setDiningBreakfastHoursAm] = useState<string>('ከጠዋቱ 12:00 ሰዓት - 4:00 ሰዓት (በየቀኑ)');
+  const [diningBreakfastHoursEn, setDiningBreakfastHoursEn] = useState<string>('06:00 AM - 10:00 AM (Daily)');
+  const [receptionAssistanceAm, setReceptionAssistanceAm] = useState<string>('ከክፍልዎ ሆነው 0 ይደውሉ');
+  const [receptionAssistanceEn, setReceptionAssistanceEn] = useState<string>('Dial 0 from room telephone');
+  const [receptionEmergency, setReceptionEmergency] = useState<string>('+251 919 629347');
+
+  const [promos, setPromos] = useState<PromoBanner[]>(PROMO_BANNERS);
+  const [menuFavorites, setMenuFavorites] = useState<string[]>([]);
+
+  const [galleryItems, setGalleryItems] = useState<any[]>(FALLBACK_GALLERY_ITEMS);
+  const [selectedGalleryIdx, setSelectedGalleryIdx] = useState<number | null>(null);
 
   const [expenses, setExpenses] = useState<Expense[]>([
     { id: 'exp-1', title: 'ለኩሽና እንቁላል እና ስጋ ግዢ (Kitchen purchase)', category: 'ማቴሪያል ግዢ (Kitchen Supply)', amount: 1500, date: '2026-06-07', time: '09:00', notes: 'የጠዋት ግብዓቶች' },
@@ -209,10 +270,39 @@ export default function App() {
     { id: 'exp-3', title: 'የሪሴብሽን ሰርተፊኬት ማተሚያ ወረቀት (Desk Paper)', category: 'ጽሕፈት መሳሪያ (Stationery)', amount: 800, date: '2026-06-07', time: '11:00', notes: 'ባለ 3 ኮፒ ሰነድ' }
   ]);
 
+  const [hasLoadedCloudSettings, setHasLoadedCloudSettings] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const [rlsBlockedKeys, setRlsBlockedKeys] = useState<string[]>([]);
+  const [isRlsBannerDismissed, setIsRlsBannerDismissed] = useState(false);
+
+  // Sync state helper with explicit error checking
+  const syncKeyToCloud = async (key: string, value: any) => {
+    if (!hasLoadedCloudSettings) return;
+    try {
+      const { error } = await supabase
+        .from('system_settings')
+        .upsert({ key, value });
+      if (error) {
+        if (error.code === '42501') {
+          setRlsBlockedKeys(prev => prev.includes(key) ? prev : [...prev, key]);
+        } else {
+          console.warn(`Supabase sync warning for key '${key}':`, error);
+          setSyncError(`Supabase info: ${error.message}`);
+        }
+      } else {
+        setRlsBlockedKeys(prev => prev.filter(k => k !== key));
+        setSyncError(null);
+      }
+    } catch (err: any) {
+      console.warn(`Supabase sync exception for key '${key}':`, err);
+    }
+  };
+
   // APP STATES
+  const [adjustingOrder, setAdjustingOrder] = useState<Order | null>(null);
   const [activeRole, setActiveRole] = useState<'entry' | 'customer' | 'waiter' | 'chef' | 'admin' | 'manager' | 'receptionist' | 'cashier' | 'guard' | 'shader_demo' | 'vault'>(() => {
     try {
-      const stored = localStorage.getItem('supabase_bypassed_current_user');
+      const stored = sessionStorage.getItem('supabase_bypassed_current_user');
       if (stored) {
         const parsed = JSON.parse(stored);
         const role = parsed.accessPrivilege || parsed.role;
@@ -232,7 +322,7 @@ export default function App() {
   });
   const [currentUser, setCurrentUser] = useState<StaffMember | null>(() => {
     try {
-      const stored = localStorage.getItem('supabase_bypassed_current_user');
+      const stored = sessionStorage.getItem('supabase_bypassed_current_user');
       if (stored) return JSON.parse(stored);
     } catch {}
     return null;
@@ -312,7 +402,7 @@ export default function App() {
   // MULTILANGUAGE STATES (3 LOCAL LANGUAGES, 4 FOREIGN LANGUAGES, PLUS SIDAAMU AFOO)
   const [appLang, setAppLang] = useState<'am' | 'en' | 'or' | 'ti' | 'fr' | 'de' | 'it' | 'sid'>(() => {
     try {
-      const stored = localStorage.getItem('papyrus_app_lang');
+      const stored = sessionStorage.getItem('papyrus_app_lang');
       if (stored && ['am', 'en', 'or', 'ti', 'fr', 'de', 'it', 'sid'].includes(stored)) {
         return stored as 'am' | 'en' | 'or' | 'ti' | 'fr' | 'de' | 'it' | 'sid';
       }
@@ -513,8 +603,8 @@ export default function App() {
   // Fallback text dictionary for all 8 languages
   const entryTranslation = {
     app_title: {
-      am: 'ሃዋሳ ፓፒረስ',
-      en: 'Hawassa Papyrus',
+      am: heroTitleAm,
+      en: heroTitleEn,
       or: 'Hawaasa Paappiras',
       ti: 'ሃዋሳ ፓፒረስ',
       fr: 'Hawassa Papyrus',
@@ -523,8 +613,8 @@ export default function App() {
       sid: 'Hawassa Paappiras'
     },
     app_subtitle: {
-      am: 'ዲጂታል ኢኮ-ፖርታል v2',
-      en: 'DIGITAL ECO-PORTAL v2',
+      am: heroSubtitleAm,
+      en: heroSubtitleEn,
       or: 'POORTAAL EKO-DIIJITAALAA v2',
       ti: 'ዲጂታል ኢኮ-ፖርታል v2',
       fr: 'ÉCO-PORTAIL NUMÉRIQUE v2',
@@ -533,8 +623,8 @@ export default function App() {
       sid: 'DIIJITAALE EKO-PORTAALE v2'
     },
     intro_para: {
-      am: 'አገልግሎታችንን ለመጠቀም ከታች ከቀረቡት አማራጮች ያንን የሚመለከተውን መግቢያ መርጠው ይጠቀሙ።',
-      en: 'To access our services, please select the appropriate portal from the options below.',
+      am: heroIntroAm,
+      en: heroIntroEn,
       or: 'Tajaajila keenya argachuuf, maaloo portaalii sirrii ta\'e filannoowwan armaan gadii irraa filadhaa.',
       ti: 'አገልግሎትና ንምርካብ፡ በጃኹም ካብቶም ታሕቲ ዘለዉ ኣማራጺታት ዝምጥን መእተዊ ይምረጹ።',
       fr: 'Pour accéder à nos services, veuillez sélectionner le portail approprié parmi os options ci-dessous.',
@@ -1119,17 +1209,19 @@ export default function App() {
     time: string;
     wifiSsid: string;
     status: 'pending' | 'approved' | 'rejected';
-  }[]>(() => {
-    try {
-      const stored = localStorage.getItem('papyrus_lodge_pending_attendance_v2');
-      if (stored) return JSON.parse(stored);
-    } catch {}
-    return [];
-  });
+  }[]>([]);
 
   useEffect(() => {
-    localStorage.setItem('papyrus_lodge_pending_attendance_v2', JSON.stringify(pendingAttendanceRequests));
-  }, [pendingAttendanceRequests]);
+    if (!hasLoadedCloudSettings) return;
+    const syncPendingAttendance = async () => {
+      try {
+        await supabase
+          .from('system_settings')
+          .upsert({ key: 'pending_attendance', value: { list: pendingAttendanceRequests } });
+      } catch {}
+    };
+    syncPendingAttendance();
+  }, [pendingAttendanceRequests, hasLoadedCloudSettings]);
 
   // ATTENDANCE & BONUSES STATE FOR STAFF PERSISTENCE
   const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
@@ -1209,10 +1301,56 @@ export default function App() {
   const [feedbackReplyText, setFeedbackReplyText] = useState<{ [feedbackId: string]: string }>({});
   const [aboutLodgeInput, setAboutLodgeInput] = useState(aboutLodgeText);
 
+  // Input states for Hero & Contact management
+  const [heroTitleAmInput, setHeroTitleAmInput] = useState(heroTitleAm);
+  const [heroTitleEnInput, setHeroTitleEnInput] = useState(heroTitleEn);
+  const [heroSubtitleAmInput, setHeroSubtitleAmInput] = useState(heroSubtitleAm);
+  const [heroSubtitleEnInput, setHeroSubtitleEnInput] = useState(heroSubtitleEn);
+  const [heroIntroAmInput, setHeroIntroAmInput] = useState(heroIntroAm);
+  const [heroIntroEnInput, setHeroIntroEnInput] = useState(heroIntroEn);
+
+  const [contactHotline1Input, setContactHotline1Input] = useState(contactHotline1);
+  const [contactHotline2Input, setContactHotline2Input] = useState(contactHotline2);
+  const [contactLocationInput, setContactLocationInput] = useState(contactLocation);
+  const [contactAddressInput, setContactAddressInput] = useState(contactAddress);
+
+  // New WiFi, Dining, Reception inputs
+  const [wifiGuestSsidInput, setWifiGuestSsidInput] = useState(wifiGuestSsid);
+  const [wifiGuestPasswordInput, setWifiGuestPasswordInput] = useState(wifiGuestPassword);
+  const [diningBreakfastTitleAmInput, setDiningBreakfastTitleAmInput] = useState(diningBreakfastTitleAm);
+  const [diningBreakfastTitleEnInput, setDiningBreakfastTitleEnInput] = useState(diningBreakfastTitleEn);
+  const [diningBreakfastHoursAmInput, setDiningBreakfastHoursAmInput] = useState(diningBreakfastHoursAm);
+  const [diningBreakfastHoursEnInput, setDiningBreakfastHoursEnInput] = useState(diningBreakfastHoursEn);
+  const [receptionAssistanceAmInput, setReceptionAssistanceAmInput] = useState(receptionAssistanceAm);
+  const [receptionAssistanceEnInput, setReceptionAssistanceEnInput] = useState(receptionAssistanceEn);
+  const [receptionEmergencyInput, setReceptionEmergencyInput] = useState(receptionEmergency);
+
   // Synchronize aboutLodgeInput when aboutLodgeText changes
   useEffect(() => {
     setAboutLodgeInput(aboutLodgeText);
   }, [aboutLodgeText]);
+
+  useEffect(() => { setHeroTitleAmInput(heroTitleAm); }, [heroTitleAm]);
+  useEffect(() => { setHeroTitleEnInput(heroTitleEn); }, [heroTitleEn]);
+  useEffect(() => { setHeroSubtitleAmInput(heroSubtitleAm); }, [heroSubtitleAm]);
+  useEffect(() => { setHeroSubtitleEnInput(heroSubtitleEn); }, [heroSubtitleEn]);
+  useEffect(() => { setHeroIntroAmInput(heroIntroAm); }, [heroIntroAm]);
+  useEffect(() => { setHeroIntroEnInput(heroIntroEn); }, [heroIntroEn]);
+
+  useEffect(() => { setContactHotline1Input(contactHotline1); }, [contactHotline1]);
+  useEffect(() => { setContactHotline2Input(contactHotline2); }, [contactHotline2]);
+  useEffect(() => { setContactLocationInput(contactLocation); }, [contactLocation]);
+  useEffect(() => { setContactAddressInput(contactAddress); }, [contactAddress]);
+
+  useEffect(() => { setWifiGuestSsidInput(wifiGuestSsid); }, [wifiGuestSsid]);
+  useEffect(() => { setWifiGuestPasswordInput(wifiGuestPassword); }, [wifiGuestPassword]);
+  useEffect(() => { setDiningBreakfastTitleAmInput(diningBreakfastTitleAm); }, [diningBreakfastTitleAm]);
+  useEffect(() => { setDiningBreakfastTitleEnInput(diningBreakfastTitleEn); }, [diningBreakfastTitleEn]);
+  useEffect(() => { setDiningBreakfastHoursAmInput(diningBreakfastHoursAm); }, [diningBreakfastHoursAm]);
+  useEffect(() => { setDiningBreakfastHoursEnInput(diningBreakfastHoursEn); }, [diningBreakfastHoursEn]);
+  useEffect(() => { setReceptionAssistanceAmInput(receptionAssistanceAm); }, [receptionAssistanceAm]);
+  useEffect(() => { setReceptionAssistanceEnInput(receptionAssistanceEn); }, [receptionAssistanceEn]);
+  useEffect(() => { setReceptionEmergencyInput(receptionEmergency); }, [receptionEmergency]);
 
   // CUSTOMIZER STATES
   const [guestLocation, setGuestLocation] = useState('Room 101');
@@ -1325,6 +1463,13 @@ export default function App() {
     try {
       console.log(`Uploading ${file.name} to Supabase Storage path: ${fileName}...`);
       
+      // Proactively try to create the 'lodge-media' bucket if it doesn't exist
+      try {
+        await supabase.storage.createBucket('lodge-media', { public: true });
+      } catch (bucketErr) {
+        console.log("Storage bucket check/creation note:", bucketErr);
+      }
+      
       const { data, error } = await supabase.storage
         .from('lodge-media')
         .upload(fileName, file, {
@@ -1333,8 +1478,10 @@ export default function App() {
         });
 
       if (error) {
-        console.error("Storage upload failed:", error);
-        alert(`❌ Upload failed: ${error.message}`);
+        console.warn("Storage upload failed, falling back to compressed local base64:", error);
+        processFileWithCompression(file, (base64) => {
+          callback(base64);
+        });
         return;
       }
 
@@ -1349,8 +1496,10 @@ export default function App() {
       console.log("Uploaded successfully. Public URL:", publicUrl);
       callback(publicUrl);
     } catch (err: any) {
-      console.error("Storage upload failure:", err);
-      alert(`❌ Upload failed: ${err.message || err}`);
+      console.warn("Storage upload exception, falling back to compressed local base64:", err);
+      processFileWithCompression(file, (base64) => {
+        callback(base64);
+      });
     }
   };
 
@@ -1391,8 +1540,6 @@ export default function App() {
       }
     } catch {}
   }, []);
-
-  const [hasLoadedCloudSettings, setHasLoadedCloudSettings] = useState(false);
 
   useEffect(() => {
     const fetchCloudSettings = async () => {
@@ -1511,14 +1658,68 @@ export default function App() {
           .select('*')
           .order('created_at', { ascending: false });
         if (galleryErr) {
-          console.error("Error fetching gallery items:", galleryErr);
+          console.warn("Could not fetch gallery items from Supabase, retaining local defaults:", galleryErr);
         } else if (galleryData) {
           console.log(`Fetched ${galleryData.length} gallery items successfully.`);
           setGalleryItems(galleryData);
         }
       } catch (err) {
-        console.error("Exception fetching gallery items:", err);
+        console.warn("Exception fetching gallery items, retaining local defaults:", err);
       }
+
+      // 23. Fetch custom roles, privileges, and pending attendance from system_settings
+      const customRolesVal = await fetchKey('custom_roles');
+      if (customRolesVal && Array.isArray(customRolesVal.list)) setCustomRoles(customRolesVal.list);
+
+      const customPrivsVal = await fetchKey('custom_privileges');
+      if (customPrivsVal && Array.isArray(customPrivsVal.list)) setCustomPrivileges(customPrivsVal.list);
+
+      const pendingAttVal = await fetchKey('pending_attendance');
+      if (pendingAttVal && Array.isArray(pendingAttVal.list)) setPendingAttendanceRequests(pendingAttVal.list);
+
+      // Load Hero Title & Contact values
+      const hta = await fetchKey('hero_title_am');
+      if (hta && hta.text !== undefined) setHeroTitleAm(hta.text);
+      const hte = await fetchKey('hero_title_en');
+      if (hte && hte.text !== undefined) setHeroTitleEn(hte.text);
+      const hsa = await fetchKey('hero_subtitle_am');
+      if (hsa && hsa.text !== undefined) setHeroSubtitleAm(hsa.text);
+      const hse = await fetchKey('hero_subtitle_en');
+      if (hse && hse.text !== undefined) setHeroSubtitleEn(hse.text);
+      const hia = await fetchKey('hero_intro_am');
+      if (hia && hia.text !== undefined) setHeroIntroAm(hia.text);
+      const hie = await fetchKey('hero_intro_en');
+      if (hie && hie.text !== undefined) setHeroIntroEn(hie.text);
+
+      const ch1 = await fetchKey('contact_hotline1');
+      if (ch1 && ch1.text !== undefined) setContactHotline1(ch1.text);
+      const ch2 = await fetchKey('contact_hotline2');
+      if (ch2 && ch2.text !== undefined) setContactHotline2(ch2.text);
+      const cl = await fetchKey('contact_location');
+      if (cl && cl.text !== undefined) setContactLocation(cl.text);
+      const ca = await fetchKey('contact_address');
+      if (ca && ca.text !== undefined) setContactAddress(ca.text);
+
+      const wgs = await fetchKey('wifi_guest_ssid');
+      if (wgs && wgs.text !== undefined) setWifiGuestSsid(wgs.text);
+      const wgp = await fetchKey('wifi_guest_password');
+      if (wgp && wgp.text !== undefined) setWifiGuestPassword(wgp.text);
+
+      const dbta = await fetchKey('dining_breakfast_title_am');
+      if (dbta && dbta.text !== undefined) setDiningBreakfastTitleAm(dbta.text);
+      const dbte = await fetchKey('dining_breakfast_title_en');
+      if (dbte && dbte.text !== undefined) setDiningBreakfastTitleEn(dbte.text);
+      const dbha = await fetchKey('dining_breakfast_hours_am');
+      if (dbha && dbha.text !== undefined) setDiningBreakfastHoursAm(dbha.text);
+      const dbhe = await fetchKey('dining_breakfast_hours_en');
+      if (dbhe && dbhe.text !== undefined) setDiningBreakfastHoursEn(dbhe.text);
+
+      const raa = await fetchKey('reception_assistance_am');
+      if (raa && raa.text !== undefined) setReceptionAssistanceAm(raa.text);
+      const rae = await fetchKey('reception_assistance_en');
+      if (rae && rae.text !== undefined) setReceptionAssistanceEn(rae.text);
+      const re = await fetchKey('reception_emergency');
+      if (re && re.text !== undefined) setReceptionEmergency(re.text);
 
       setHasLoadedCloudSettings(true);
     };
@@ -1608,6 +1809,45 @@ export default function App() {
                 if (val.active !== undefined) setChapaActive(val.active);
                 if (val.mode !== undefined) setChapaMode(val.mode);
                 break;
+              case 'custom_roles':
+                if (Array.isArray(val.list)) setCustomRoles(val.list);
+                break;
+              case 'custom_privileges':
+                if (Array.isArray(val.list)) setCustomPrivileges(val.list);
+                break;
+              case 'pending_attendance':
+                if (Array.isArray(val.list)) setPendingAttendanceRequests(val.list);
+                break;
+              case 'hero_title_am':
+                if (val.text !== undefined) setHeroTitleAm(val.text);
+                break;
+              case 'hero_title_en':
+                if (val.text !== undefined) setHeroTitleEn(val.text);
+                break;
+              case 'hero_subtitle_am':
+                if (val.text !== undefined) setHeroSubtitleAm(val.text);
+                break;
+              case 'hero_subtitle_en':
+                if (val.text !== undefined) setHeroSubtitleEn(val.text);
+                break;
+              case 'hero_intro_am':
+                if (val.text !== undefined) setHeroIntroAm(val.text);
+                break;
+              case 'hero_intro_en':
+                if (val.text !== undefined) setHeroIntroEn(val.text);
+                break;
+              case 'contact_hotline1':
+                if (val.text !== undefined) setContactHotline1(val.text);
+                break;
+              case 'contact_hotline2':
+                if (val.text !== undefined) setContactHotline2(val.text);
+                break;
+              case 'contact_location':
+                if (val.text !== undefined) setContactLocation(val.text);
+                break;
+              case 'contact_address':
+                if (val.text !== undefined) setContactAddress(val.text);
+                break;
               default:
                 break;
             }
@@ -1650,252 +1890,168 @@ export default function App() {
 
   // Synchronize collections back to cloud database when modified
   useEffect(() => {
-    if (!hasLoadedCloudSettings) return;
-    const syncAttendance = async () => {
-      try {
-        await supabase
-          .from('system_settings')
-          .upsert({ key: 'attendance', value: { records: attendance } });
-      } catch {}
-    };
-    syncAttendance();
+    syncKeyToCloud('attendance', { records: attendance });
   }, [attendance, hasLoadedCloudSettings]);
 
   useEffect(() => {
-    if (!hasLoadedCloudSettings) return;
-    const syncMenu = async () => {
-      try {
-        await supabase
-          .from('system_settings')
-          .upsert({ key: 'menu', value: { items: menuItems } });
-      } catch {}
-    };
-    syncMenu();
+    syncKeyToCloud('menu', { items: menuItems });
   }, [menuItems, hasLoadedCloudSettings]);
 
   useEffect(() => {
-    if (!hasLoadedCloudSettings) return;
-    const syncCategories = async () => {
-      try {
-        await supabase
-          .from('system_settings')
-          .upsert({ key: 'categories', value: { list: categories } });
-      } catch {}
-    };
-    syncCategories();
+    syncKeyToCloud('categories', { list: categories });
   }, [categories, hasLoadedCloudSettings]);
 
   useEffect(() => {
-    if (!hasLoadedCloudSettings) return;
-    const syncBanks = async () => {
-      try {
-        await supabase
-          .from('system_settings')
-          .upsert({ key: 'banks', value: { accounts: banks } });
-      } catch {}
-    };
-    syncBanks();
+    syncKeyToCloud('banks', { accounts: banks });
   }, [banks, hasLoadedCloudSettings]);
 
   useEffect(() => {
-    if (!hasLoadedCloudSettings) return;
-    const syncStaff = async () => {
-      try {
-        await supabase
-          .from('system_settings')
-          .upsert({ key: 'staff', value: { list: staff } });
-      } catch {}
-    };
-    syncStaff();
+    syncKeyToCloud('staff', { list: staff });
   }, [staff, hasLoadedCloudSettings]);
 
   useEffect(() => {
-    if (!hasLoadedCloudSettings) return;
-    const syncOrders = async () => {
-      try {
-        await supabase
-          .from('system_settings')
-          .upsert({ key: 'orders', value: { list: orders } });
-      } catch {}
-    };
-    syncOrders();
+    syncKeyToCloud('orders', { list: orders });
   }, [orders, hasLoadedCloudSettings]);
 
   useEffect(() => {
-    if (!hasLoadedCloudSettings) return;
-    const syncRoomBookings = async () => {
-      try {
-        await supabase
-          .from('system_settings')
-          .upsert({ key: 'roomBookings', value: { list: roomBookings } });
-      } catch {}
-    };
-    syncRoomBookings();
+    syncKeyToCloud('roomBookings', { list: roomBookings });
   }, [roomBookings, hasLoadedCloudSettings]);
 
   useEffect(() => {
-    if (!hasLoadedCloudSettings) return;
-    const syncVisitorLog = async () => {
-      try {
-        await supabase
-          .from('system_settings')
-          .upsert({ key: 'visitorLog', value: { list: visitorLog } });
-      } catch {}
-    };
-    syncVisitorLog();
+    syncKeyToCloud('visitorLog', { list: visitorLog });
   }, [visitorLog, hasLoadedCloudSettings]);
 
   useEffect(() => {
-    if (!hasLoadedCloudSettings) return;
-    const syncPromos = async () => {
-      try {
-        await supabase
-          .from('system_settings')
-          .upsert({ key: 'promos', value: { list: promos } });
-      } catch {}
-    };
-    syncPromos();
+    syncKeyToCloud('promos', { list: promos });
   }, [promos, hasLoadedCloudSettings]);
 
   useEffect(() => {
-    if (!hasLoadedCloudSettings) return;
-    const syncAboutLodgeText = async () => {
-      try {
-        await supabase
-          .from('system_settings')
-          .upsert({ key: 'aboutLodgeText', value: { text: aboutLodgeText } });
-      } catch {}
-    };
-    syncAboutLodgeText();
+    syncKeyToCloud('aboutLodgeText', { text: aboutLodgeText });
   }, [aboutLodgeText, hasLoadedCloudSettings]);
 
   useEffect(() => {
-    if (!hasLoadedCloudSettings) return;
-    const syncBgVideoUrl = async () => {
-      try {
-        await supabase
-          .from('system_settings')
-          .upsert({ key: 'bgVideoUrl', value: { url: bgVideoUrl } });
-      } catch {}
-    };
-    syncBgVideoUrl();
+    syncKeyToCloud('hero_title_am', { text: heroTitleAm });
+  }, [heroTitleAm, hasLoadedCloudSettings]);
+
+  useEffect(() => {
+    syncKeyToCloud('hero_title_en', { text: heroTitleEn });
+  }, [heroTitleEn, hasLoadedCloudSettings]);
+
+  useEffect(() => {
+    syncKeyToCloud('hero_subtitle_am', { text: heroSubtitleAm });
+  }, [heroSubtitleAm, hasLoadedCloudSettings]);
+
+  useEffect(() => {
+    syncKeyToCloud('hero_subtitle_en', { text: heroSubtitleEn });
+  }, [heroSubtitleEn, hasLoadedCloudSettings]);
+
+  useEffect(() => {
+    syncKeyToCloud('hero_intro_am', { text: heroIntroAm });
+  }, [heroIntroAm, hasLoadedCloudSettings]);
+
+  useEffect(() => {
+    syncKeyToCloud('hero_intro_en', { text: heroIntroEn });
+  }, [heroIntroEn, hasLoadedCloudSettings]);
+
+  useEffect(() => {
+    syncKeyToCloud('contact_hotline1', { text: contactHotline1 });
+  }, [contactHotline1, hasLoadedCloudSettings]);
+
+  useEffect(() => {
+    syncKeyToCloud('contact_hotline2', { text: contactHotline2 });
+  }, [contactHotline2, hasLoadedCloudSettings]);
+
+  useEffect(() => {
+    syncKeyToCloud('contact_location', { text: contactLocation });
+  }, [contactLocation, hasLoadedCloudSettings]);
+
+  useEffect(() => {
+    syncKeyToCloud('contact_address', { text: contactAddress });
+  }, [contactAddress, hasLoadedCloudSettings]);
+
+  useEffect(() => {
+    syncKeyToCloud('wifi_guest_ssid', { text: wifiGuestSsid });
+  }, [wifiGuestSsid, hasLoadedCloudSettings]);
+
+  useEffect(() => {
+    syncKeyToCloud('wifi_guest_password', { text: wifiGuestPassword });
+  }, [wifiGuestPassword, hasLoadedCloudSettings]);
+
+  useEffect(() => {
+    syncKeyToCloud('dining_breakfast_title_am', { text: diningBreakfastTitleAm });
+  }, [diningBreakfastTitleAm, hasLoadedCloudSettings]);
+
+  useEffect(() => {
+    syncKeyToCloud('dining_breakfast_title_en', { text: diningBreakfastTitleEn });
+  }, [diningBreakfastTitleEn, hasLoadedCloudSettings]);
+
+  useEffect(() => {
+    syncKeyToCloud('dining_breakfast_hours_am', { text: diningBreakfastHoursAm });
+  }, [diningBreakfastHoursAm, hasLoadedCloudSettings]);
+
+  useEffect(() => {
+    syncKeyToCloud('dining_breakfast_hours_en', { text: diningBreakfastHoursEn });
+  }, [diningBreakfastHoursEn, hasLoadedCloudSettings]);
+
+  useEffect(() => {
+    syncKeyToCloud('reception_assistance_am', { text: receptionAssistanceAm });
+  }, [receptionAssistanceAm, hasLoadedCloudSettings]);
+
+  useEffect(() => {
+    syncKeyToCloud('reception_assistance_en', { text: receptionAssistanceEn });
+  }, [receptionAssistanceEn, hasLoadedCloudSettings]);
+
+  useEffect(() => {
+    syncKeyToCloud('reception_emergency', { text: receptionEmergency });
+  }, [receptionEmergency, hasLoadedCloudSettings]);
+
+  useEffect(() => {
+    syncKeyToCloud('bgVideoUrl', { url: bgVideoUrl });
   }, [bgVideoUrl, hasLoadedCloudSettings]);
 
   useEffect(() => {
-    if (!hasLoadedCloudSettings) return;
-    const syncBgVideoType = async () => {
-      try {
-        await supabase
-          .from('system_settings')
-          .upsert({ key: 'bgVideoType', value: { type: bgVideoType } });
-      } catch {}
-    };
-    syncBgVideoType();
+    syncKeyToCloud('bgVideoType', { type: bgVideoType });
   }, [bgVideoType, hasLoadedCloudSettings]);
 
   useEffect(() => {
-    if (!hasLoadedCloudSettings) return;
-    const syncIsBgVideoEnabled = async () => {
-      try {
-        await supabase
-          .from('system_settings')
-          .upsert({ key: 'isBgVideoEnabled', value: { enabled: isBgVideoEnabled } });
-      } catch {}
-    };
-    syncIsBgVideoEnabled();
+    syncKeyToCloud('isBgVideoEnabled', { enabled: isBgVideoEnabled });
   }, [isBgVideoEnabled, hasLoadedCloudSettings]);
 
   useEffect(() => {
-    if (!hasLoadedCloudSettings) return;
-    const syncAssistanceCalls = async () => {
-      try {
-        await supabase
-          .from('system_settings')
-          .upsert({ key: 'assistanceCalls', value: { list: assistanceCalls } });
-      } catch {}
-    };
-    syncAssistanceCalls();
+    syncKeyToCloud('assistanceCalls', { list: assistanceCalls });
   }, [assistanceCalls, hasLoadedCloudSettings]);
 
   useEffect(() => {
-    if (!hasLoadedCloudSettings) return;
-    const syncFeedback = async () => {
-      try {
-        await supabase
-          .from('system_settings')
-          .upsert({ key: 'feedback', value: { list: feedback } });
-      } catch {}
-    };
-    syncFeedback();
+    syncKeyToCloud('feedback', { list: feedback });
   }, [feedback, hasLoadedCloudSettings]);
 
   useEffect(() => {
-    if (!hasLoadedCloudSettings) return;
-    const syncExpenses = async () => {
-      try {
-        await supabase
-          .from('system_settings')
-          .upsert({ key: 'expenses', value: { list: expenses } });
-      } catch {}
-    };
-    syncExpenses();
+    syncKeyToCloud('expenses', { list: expenses });
   }, [expenses, hasLoadedCloudSettings]);
 
   useEffect(() => {
-    if (!hasLoadedCloudSettings) return;
-    const syncBonuses = async () => {
-      try {
-        await supabase
-          .from('system_settings')
-          .upsert({ key: 'bonuses', value: { list: bonuses } });
-      } catch {}
-    };
-    syncBonuses();
+    syncKeyToCloud('bonuses', { list: bonuses });
   }, [bonuses, hasLoadedCloudSettings]);
 
   useEffect(() => {
-    if (!hasLoadedCloudSettings) return;
-    const syncServiceChargeRate = async () => {
-      try {
-        await supabase
-          .from('system_settings')
-          .upsert({ key: 'serviceChargeRate', value: { rate: serviceChargeRate } });
-      } catch {}
-    };
-    syncServiceChargeRate();
+    syncKeyToCloud('serviceChargeRate', { rate: serviceChargeRate });
   }, [serviceChargeRate, hasLoadedCloudSettings]);
 
   useEffect(() => {
-    if (!hasLoadedCloudSettings) return;
-    const syncVatRate = async () => {
-      try {
-        await supabase
-          .from('system_settings')
-          .upsert({ key: 'vatRate', value: { rate: vatRate } });
-      } catch {}
-    };
-    syncVatRate();
+    syncKeyToCloud('vatRate', { rate: vatRate });
   }, [vatRate, hasLoadedCloudSettings]);
 
   useEffect(() => {
-    if (!hasLoadedCloudSettings) return;
-    const syncChapa = async () => {
-      try {
-        await supabase
-          .from('system_settings')
-          .upsert({ key: 'chapa', value: { key: chapaKey, active: chapaActive, mode: chapaMode } });
-      } catch {}
-    };
-    syncChapa();
+    syncKeyToCloud('chapa', { key: chapaKey, active: chapaActive, mode: chapaMode });
   }, [chapaKey, chapaActive, chapaMode, hasLoadedCloudSettings]);
 
   // One-time migration to force-default background type to Gourmet Paradise
   useEffect(() => {
     try {
-      const migrated = localStorage.getItem('papyrus_lodge_gourmet_migrated_v6');
+      const migrated = sessionStorage.getItem('papyrus_lodge_gourmet_migrated_v6');
       if (!migrated) {
         setBgVideoType('gourmet-paradise');
-        localStorage.setItem('papyrus_lodge_gourmet_migrated_v6', 'true');
+        sessionStorage.setItem('papyrus_lodge_gourmet_migrated_v6', 'true');
       }
     } catch {}
   }, []);
@@ -1903,7 +2059,7 @@ export default function App() {
   // Theme support - Default to false (Dark mode) so mobile devices load the stunning premium theme!
   const [isLightTheme, setIsLightTheme] = useState<boolean>(() => {
     try {
-      const stored = localStorage.getItem('papyrus_lodge_light_theme_v2');
+      const stored = sessionStorage.getItem('papyrus_lodge_light_theme_v2');
       return stored ? JSON.parse(stored) : false; // Default to dark mode for a luxurious, consistent experience!
     } catch {
       return false;
@@ -1911,7 +2067,7 @@ export default function App() {
   });
 
   useEffect(() => {
-    localStorage.setItem('papyrus_lodge_light_theme_v2', JSON.stringify(isLightTheme));
+    sessionStorage.setItem('papyrus_lodge_light_theme_v2', JSON.stringify(isLightTheme));
     if (isLightTheme) {
       document.body.classList.add('light-mode');
       document.documentElement.classList.add('light-mode');
@@ -1921,43 +2077,21 @@ export default function App() {
     }
   }, [isLightTheme]);
 
-  // Synchronize state across tabs/windows (real-time local sharing) for custom roles
-  useEffect(() => {
-    const handleStorageChange = (e: StorageEvent) => {
-      if (e.key === 'papyrus_lodge_custom_roles_v2' && e.newValue) {
-        try {
-          setCustomRoles(JSON.parse(e.newValue));
-        } catch {}
-      }
-    };
-
-    window.addEventListener('storage', handleStorageChange);
-    return () => {
-      window.removeEventListener('storage', handleStorageChange);
-    };
-  }, []);
-
   // STAFF LOGOUT LOGIC
   const handleLogout = async () => {
     setCurrentUser(null);
     setActiveRole('entry');
-    localStorage.removeItem('supabase_session_bypassed');
-    localStorage.removeItem('supabase_bypassed_user_email');
-    localStorage.removeItem('supabase_bypassed_user_id');
-    localStorage.removeItem('supabase_bypassed_current_user');
+    sessionStorage.removeItem('supabase_session_bypassed');
+    sessionStorage.removeItem('supabase_bypassed_user_email');
+    sessionStorage.removeItem('supabase_bypassed_user_id');
+    sessionStorage.removeItem('supabase_bypassed_current_user');
     try {
       await supabase.auth.signOut();
     } catch {}
   };
 
   // CUSTOM STAFF ROLES STATE FOR DYNAMIC JOB POSITIONS
-  const [customRoles, setCustomRoles] = useState<string[]>(() => {
-    try {
-      const stored = localStorage.getItem('papyrus_lodge_custom_roles_v2');
-      if (stored) return JSON.parse(stored);
-    } catch {}
-    return ['waiter', 'chef', 'admin', 'manager', 'receptionist', 'cashier', 'guard'];
-  });
+  const [customRoles, setCustomRoles] = useState<string[]>(['waiter', 'chef', 'admin', 'manager', 'receptionist', 'cashier', 'guard']);
 
   const [addStaffRoleSelected, setAddStaffRoleSelected] = useState('waiter');
   const [addStaffAccessSelected, setAddStaffAccessSelected] = useState<string>('waiter');
@@ -1968,24 +2102,18 @@ export default function App() {
   const [editingRoleNewVal, setEditingRoleNewVal] = useState<string>('');
 
   // CUSTOM SYSTEM ACCESS PRIVILEGES STATE
-  const [customPrivileges, setCustomPrivileges] = useState<string[]>(() => {
-    try {
-      const stored = localStorage.getItem('papyrus_lodge_custom_privileges_v2');
-      if (stored) return JSON.parse(stored);
-    } catch {}
-    return ['waiter', 'chef', 'admin', 'manager', 'receptionist', 'cashier', 'guard', 'none'];
-  });
+  const [customPrivileges, setCustomPrivileges] = useState<string[]>(['waiter', 'chef', 'admin', 'manager', 'receptionist', 'cashier', 'guard', 'none']);
 
   const [editingPrivilegeName, setEditingPrivilegeName] = useState<string | null>(null);
   const [editingPrivilegeNewVal, setEditingPrivilegeNewVal] = useState<string>('');
 
   useEffect(() => {
-    localStorage.setItem('papyrus_lodge_custom_roles_v2', JSON.stringify(customRoles));
-  }, [customRoles]);
+    syncKeyToCloud('custom_roles', { list: customRoles });
+  }, [customRoles, hasLoadedCloudSettings]);
 
   useEffect(() => {
-    localStorage.setItem('papyrus_lodge_custom_privileges_v2', JSON.stringify(customPrivileges));
-  }, [customPrivileges]);
+    syncKeyToCloud('custom_privileges', { list: customPrivileges });
+  }, [customPrivileges, hasLoadedCloudSettings]);
 
   // REAL-TIME SUPABASE SYNC FOR STAFF MEMBERS
   const [fbUser, setFbUser] = useState<any>(null);
@@ -1995,10 +2123,10 @@ export default function App() {
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session?.user) {
         setFbUser(session.user);
-      } else if (localStorage.getItem('supabase_session_bypassed') === 'true') {
+      } else if (sessionStorage.getItem('supabase_session_bypassed') === 'true') {
         setFbUser({
-          email: localStorage.getItem('supabase_bypassed_user_email') || 'bypassed@papyruslodge.com',
-          id: localStorage.getItem('supabase_bypassed_user_id') || 'bypassed-uid'
+          email: sessionStorage.getItem('supabase_bypassed_user_email') || 'bypassed@papyruslodge.com',
+          id: sessionStorage.getItem('supabase_bypassed_user_id') || 'bypassed-uid'
         });
       } else {
         setFbUser(null);
@@ -2008,10 +2136,10 @@ export default function App() {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       if (session?.user) {
         setFbUser(session.user);
-      } else if (localStorage.getItem('supabase_session_bypassed') === 'true') {
+      } else if (sessionStorage.getItem('supabase_session_bypassed') === 'true') {
         setFbUser({
-          email: localStorage.getItem('supabase_bypassed_user_email') || 'bypassed@papyruslodge.com',
-          id: localStorage.getItem('supabase_bypassed_user_id') || 'bypassed-uid'
+          email: sessionStorage.getItem('supabase_bypassed_user_email') || 'bypassed@papyruslodge.com',
+          id: sessionStorage.getItem('supabase_bypassed_user_id') || 'bypassed-uid'
         });
       } else {
         setFbUser(null);
@@ -2027,7 +2155,7 @@ export default function App() {
       const privateRoles = ['waiter', 'chef', 'admin', 'manager', 'receptionist', 'cashier', 'guard', 'vault'];
       if (privateRoles.includes(activeRole)) {
         const { data: { session } } = await supabase.auth.getSession();
-        const bypassed = localStorage.getItem('supabase_session_bypassed') === 'true' || currentUser !== null;
+        const bypassed = sessionStorage.getItem('supabase_session_bypassed') === 'true' || currentUser !== null;
         if (!session && !bypassed) {
           setActiveRole('entry');
           setStaffPortalState('login');
@@ -2056,7 +2184,7 @@ export default function App() {
         setStaffPortalState('login');
       } else if (path === '/admin') {
         const { data: { session } } = await supabase.auth.getSession();
-        const bypassed = localStorage.getItem('supabase_session_bypassed') === 'true';
+        const bypassed = sessionStorage.getItem('supabase_session_bypassed') === 'true';
         if (!session && !bypassed) {
           window.history.pushState({}, '', '/login');
           setCurrentPath('/login');
@@ -2177,6 +2305,33 @@ export default function App() {
     }
   };
 
+  // Ref to track seen active assistance call IDs so we don't alert repeatedly for existing ones
+  const seenActiveCallIdsRef = useRef<string[]>([]);
+
+  // Trigger sound/voice alert ONLY on staff/waiter devices when a new assistance call is received
+  useEffect(() => {
+    if (!hasLoadedCloudSettings) return;
+
+    const currentActiveIds = assistanceCalls.filter(c => c.active).map(c => c.id);
+    
+    // Find newly added active calls
+    const newActiveCalls = assistanceCalls.filter(
+      c => c.active && !seenActiveCallIdsRef.current.includes(c.id)
+    );
+    
+    // Update the ref to store all known active call IDs
+    seenActiveCallIdsRef.current = Array.from(new Set([...seenActiveCallIdsRef.current, ...currentActiveIds]));
+    
+    // Check if the user is currently on a staff role (waiter dashboard, manager, chef, cashier, etc.)
+    const isStaffRole = ['waiter', 'chef', 'admin', 'manager', 'receptionist', 'cashier', 'guard'].includes(activeRole);
+    
+    if (newActiveCalls.length > 0 && isStaffRole) {
+      newActiveCalls.forEach(call => {
+        playVoiceAlert(`Notification! Assistance requests received from ${call.location}! Please serve room.`);
+      });
+    }
+  }, [assistanceCalls, activeRole, hasLoadedCloudSettings]);
+
   const renderWiFiClockInWidget = () => {
     if (!currentUser) return null;
     const todayDate = new Date().toLocaleDateString('et-EE', { year: 'numeric', month: '2-digit', day: '2-digit' });
@@ -2236,10 +2391,14 @@ export default function App() {
         ) : (
           <div className="flex flex-col sm:flex-row gap-3 items-center justify-between border-t border-white/5 pt-3">
             <div className="text-left">
-              <span className="text-[9px] text-white/40 block font-mono">DEVICE CONNECTION STATUS:</span>
+              <span className="text-[9px] text-white/40 block font-mono">
+                {appLang === 'am' ? 'የመሣሪያ ግንኙነት ሁኔታ (DEVICE CONNECTION STATUS):' : 'DEVICE CONNECTION STATUS:'}
+              </span>
               <p className="text-xs font-bold text-[#C1FF00] flex items-center gap-1.5">
-                <span>📶 CONNECTED</span>
-                <span className="text-[10px] text-white/50 font-normal font-sans">(Signal: Perfect, Whitelist Verification Passed)</span>
+                <span>📶 {appLang === 'am' ? 'ተገናኝቷል (CONNECTED)' : 'CONNECTED'}</span>
+                <span className="text-[10px] text-white/50 font-normal font-sans">
+                  {appLang === 'am' ? '(ሲግናል፡ እጅግ በጣም ጥሩ፣ ማረጋገጫ አልፏል)' : '(Signal: Perfect, Whitelist Verification Passed)'}
+                </span>
               </p>
             </div>
             
@@ -2342,10 +2501,10 @@ export default function App() {
       );
 
       if (matchedLocalStaff) {
-        localStorage.setItem('supabase_session_bypassed', 'true');
-        localStorage.setItem('supabase_bypassed_user_email', `${unifiedUsername.trim().toLowerCase()}@papyruslodge.com`);
-        localStorage.setItem('supabase_bypassed_user_id', 'bypassed-local-uid');
-        localStorage.setItem('supabase_bypassed_current_user', JSON.stringify(matchedLocalStaff));
+        sessionStorage.setItem('supabase_session_bypassed', 'true');
+        sessionStorage.setItem('supabase_bypassed_user_email', `${unifiedUsername.trim().toLowerCase()}@papyruslodge.com`);
+        sessionStorage.setItem('supabase_bypassed_user_id', 'bypassed-local-uid');
+        sessionStorage.setItem('supabase_bypassed_current_user', JSON.stringify(matchedLocalStaff));
         handleSuccessLogin(matchedLocalStaff);
         setUnifiedUsername('');
         setUnifiedPassword('');
@@ -2403,9 +2562,9 @@ export default function App() {
         }
 
         if (isBypassed) {
-          localStorage.setItem('supabase_session_bypassed', 'true');
-          localStorage.setItem('supabase_bypassed_user_email', finalUserEmail);
-          localStorage.setItem('supabase_bypassed_user_id', finalUserId);
+          sessionStorage.setItem('supabase_session_bypassed', 'true');
+          sessionStorage.setItem('supabase_bypassed_user_email', finalUserEmail);
+          sessionStorage.setItem('supabase_bypassed_user_id', finalUserId);
         }
 
         // Auto-identify the team member by their custom username & password combination!
@@ -2440,7 +2599,7 @@ export default function App() {
         }
 
         if (loggedInStaff) {
-          localStorage.setItem('supabase_bypassed_current_user', JSON.stringify(loggedInStaff));
+          sessionStorage.setItem('supabase_bypassed_current_user', JSON.stringify(loggedInStaff));
         }
 
         setStaffPortalState('welcome');
@@ -2572,13 +2731,13 @@ export default function App() {
       }
 
       // Bypass email confirmation requirement on sign up
-      localStorage.setItem('supabase_session_bypassed', 'true');
-      localStorage.setItem('supabase_bypassed_user_email', targetEmail);
+      sessionStorage.setItem('supabase_session_bypassed', 'true');
+      sessionStorage.setItem('supabase_bypassed_user_email', targetEmail);
       if (targetUser) {
-        localStorage.setItem('supabase_bypassed_user_id', targetUser.id);
+        sessionStorage.setItem('supabase_bypassed_user_id', targetUser.id);
         setFbUser(targetUser);
       }
-      localStorage.setItem('supabase_bypassed_current_user', JSON.stringify(newStaff));
+      sessionStorage.setItem('supabase_bypassed_current_user', JSON.stringify(newStaff));
 
       setCurrentUser(newStaff);
       setActiveRole(signupRole);
@@ -2709,7 +2868,6 @@ export default function App() {
       active: true
     };
     setAssistanceCalls(prev => [newCall, ...prev]);
-    playVoiceAlert(`Notification! Assistance requests received from ${guestLocation}! Please serve room.`);
     alert(`🔔 ጥሪ ተልኳል! አስተናጋጅ በቅርቡ ይመጣል። / Assistance called for ${guestLocation}!`);
   };
 
@@ -2752,6 +2910,9 @@ export default function App() {
     const catLabelLower = catObj ? catObj.label.toLowerCase() : '';
     const itemAmLower = item.nameAm.toLowerCase();
     const itemEnLower = (item.nameEn || '').toLowerCase();
+
+    const isDrink = catIdLower.includes('drink') || catLabelLower.includes('drink') || catLabelLower.includes('beverage') || catLabelLower.includes('መጠጥ') || catLabelLower.includes('መጠጦች');
+    if (isDrink) return false;
 
     const isBurger = catIdLower.includes('burger') || catLabelLower.includes('burger') || catLabelLower.includes('በርገር') || itemAmLower.includes('በርገር') || itemEnLower.includes('burger');
     const isFastFood = catIdLower.includes('fast') || catLabelLower.includes('fast') || catLabelLower.includes('ፋስት') || itemAmLower.includes('ፋስት') || itemEnLower.includes('fast');
@@ -2805,9 +2966,10 @@ export default function App() {
     const tSeparator = appLang === 'am' ? '፣ ' : ', ';
 
     const options = [];
+    const isDrink = item.cat === 'drinks' || item.cat.toLowerCase().includes('drink') || item.cat.toLowerCase().includes('beverage');
 
-    // Add standard modifiers if customizable
-    if (item.customizable || item.cat === 'food' || item.cat === 'traditional') {
+    // Add standard modifiers if customizable (skip for drinks)
+    if (!isDrink && (item.customizable || item.cat === 'food' || item.cat === 'traditional')) {
       options.push(`${tLabelQaria}: ${getTranslatedModifierValue(mod.qaria)}`);
       
       const injeraPrice = Number(modifierOptions.injeraPrices?.[mod.injera] || 0);
@@ -2824,22 +2986,22 @@ export default function App() {
       }
     }
 
-    // Add Mayo option if selected (e.g. for burgers)
-    if (mod.mayo) {
+    // Add Mayo option if selected (e.g. for burgers) (skip for drinks)
+    if (mod.mayo && !isDrink) {
       const price = modifierOptions.mayoPrice !== undefined ? modifierOptions.mayoPrice : 20;
       options.push(`${tLabelMayo}: ${appLang === 'am' ? 'አለ' : 'Yes'} (+${price} ${tLabelBirr})`);
       priceOffset += price;
     }
 
-    // Add Kocho option if selected (e.g. for traditional items)
-    if (mod.kocho) {
+    // Add Kocho option if selected (e.g. for traditional items) (skip for drinks)
+    if (mod.kocho && !isDrink) {
       const price = modifierOptions.kochoPrice !== undefined ? modifierOptions.kochoPrice : 45;
       options.push(`${tLabelKocho}: ${appLang === 'am' ? 'አለ' : 'Yes'} (+${price} ${tLabelBirr})`);
       priceOffset += price;
     }
 
-    // Add Custom instructions/additions if present
-    if (mod.customInstructions && mod.customInstructions.trim() !== '') {
+    // Add Custom instructions/additions if present (skip for drinks)
+    if (mod.customInstructions && mod.customInstructions.trim() !== '' && !isDrink) {
       const price = modifierOptions.customAdditionsPrice !== undefined ? modifierOptions.customAdditionsPrice : 35;
       const extraLabel = appLang === 'am' ? 'ተጨማሪ' : 'Extra';
       options.push(`${extraLabel}: "${mod.customInstructions}" (+${price} ${tLabelBirr})`);
@@ -3275,6 +3437,12 @@ export default function App() {
     });
   };
 
+  const handleSaveOrderAdjustments = (updatedOrder: Order) => {
+    setOrders(prev => prev.map(o => o.id === updatedOrder.id ? updatedOrder : o));
+    setAdjustingOrder(null);
+    alert('✔️ ትዕዛዙ በተሳካ ሁኔታ ተስተካክሏል! / Order adjustments saved successfully.');
+  };
+
   // FEEDBACK SUBMIT
   const handleFeedbackSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -3479,7 +3647,7 @@ export default function App() {
         .order('created_at', { ascending: false });
         
       if (galleryErr) {
-        console.error("Error reloading gallery items:", galleryErr);
+        console.warn("Could not reload gallery items from Supabase, keeping current state:", galleryErr);
       } else if (galleryData) {
         console.log(`Successfully reloaded ${galleryData.length} gallery items.`);
         setGalleryItems(galleryData);
@@ -3518,7 +3686,7 @@ export default function App() {
         .order('created_at', { ascending: false });
         
       if (galleryErr) {
-        console.error("Error reloading gallery items after delete:", galleryErr);
+        console.warn("Could not reload gallery items after delete from Supabase, keeping current state:", galleryErr);
       } else if (galleryData) {
         setGalleryItems(galleryData);
       }
@@ -3596,10 +3764,10 @@ export default function App() {
             <button
               onClick={async () => {
                 await supabase.auth.signOut();
-                localStorage.removeItem('supabase_session_bypassed');
-                localStorage.removeItem('supabase_bypassed_user_email');
-                localStorage.removeItem('supabase_bypassed_user_id');
-                localStorage.removeItem('supabase_bypassed_current_user');
+                sessionStorage.removeItem('supabase_session_bypassed');
+                sessionStorage.removeItem('supabase_bypassed_user_email');
+                sessionStorage.removeItem('supabase_bypassed_user_id');
+                sessionStorage.removeItem('supabase_bypassed_current_user');
                 window.history.pushState({}, '', '/login');
                 window.dispatchEvent(new PopStateEvent('popstate'));
               }}
@@ -3728,7 +3896,6 @@ export default function App() {
                 >
                   {/* Under-plate shadow and ambient warm glow */}
                   <div className="absolute inset-4 bg-amber-500/15 rounded-full blur-3xl" />
-                  <div className="absolute inset-8 bg-black/40 rounded-full blur-xl translate-y-8" />
                   
                   <img
                     src={signatureDish}
@@ -3833,7 +4000,7 @@ export default function App() {
           {/* Company Dynamic Logo */}
           <div className="w-10 h-10 rounded-xl overflow-hidden flex items-center justify-center">
             {logoUrl ? (
-              <img src={logoUrl} alt="Logo" className="w-full h-full object-cover" />
+              <img src={logoUrl} alt="Logo" referrerPolicy="no-referrer" className="w-full h-full object-cover" />
             ) : (
               <span className="text-xl">🏨</span>
             )}
@@ -3854,7 +4021,7 @@ export default function App() {
               onChange={(e) => {
                 const selected = e.target.value as any;
                 setAppLang(selected);
-                localStorage.setItem('papyrus_app_lang', selected);
+                sessionStorage.setItem('papyrus_app_lang', selected);
                 const descMap: any = {
                   am: 'ቋንቋ ወደ አማርኛ ተቀይሯል',
                   en: 'Language changed to English',
@@ -3977,7 +4144,7 @@ export default function App() {
                   {logoUrl && (
                     <div className="flex justify-center mb-1">
                       <div className="w-16 h-16 rounded-2xl overflow-hidden relative group">
-                        <img src={logoUrl} alt="Company Logo" className="w-full h-full object-cover" />
+                        <img src={logoUrl} alt="Company Logo" referrerPolicy="no-referrer" className="w-full h-full object-cover" />
                       </div>
                     </div>
                   )}
@@ -4717,17 +4884,17 @@ export default function App() {
                   <div className="grid grid-cols-2 gap-4 pt-3 border-t border-white/5 text-left text-[9px] font-mono">
                     <div className="space-y-1">
                       <span className="text-white/40 block">HOTLINE / የስልክ ቁጥር</span>
-                      <a href="tel:+251919629347" className="text-[#C1FF00] hover:underline font-black block">
-                        +251 919 629 347
+                      <a href={`tel:${contactHotline1}`} className="text-[#C1FF00] hover:underline font-black block">
+                        {contactHotline1}
                       </a>
-                      <a href="tel:+251462201234" className="text-white hover:underline block text-[8px]">
-                        +251 462 201 234
+                      <a href={`tel:${contactHotline2}`} className="text-white hover:underline block text-[8px]">
+                        {contactHotline2}
                       </a>
                     </div>
                     <div className="space-y-1 text-right">
                       <span className="text-white/40 block">LOCATION / አድራሻ</span>
-                      <span className="text-white font-bold block">Hawassa, Ethiopia</span>
-                      <span className="text-white/60 block text-[8px]">Lakefront Boulevard, Area 05</span>
+                      <span className="text-white font-bold block">{contactLocation}</span>
+                      <span className="text-white/60 block text-[8px]">{contactAddress}</span>
                     </div>
                   </div>
 
@@ -4909,14 +5076,8 @@ export default function App() {
                       {/* RIGHT COLUMN: Rotating Circular Platter, Frame Circles, & Floating Glassmorphic Badges */}
                       <div className="relative w-full lg:w-[450px] flex items-center justify-center min-h-[300px] lg:min-h-[400px]">
                         
-                        {/* Semicircle / Crescent Graphic Frame behind the dish matching reference design */}
-                        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                          <div className="w-[320px] h-[320px] rounded-full border-4 border-dashed border-[#ff5722]/15 animate-[spin_100s_linear_infinite]" />
-                          <div className="absolute w-[280px] h-[280px] rounded-full border border-stone-200 dark:border-stone-800" />
-                          
-                          {/* Semicircle mask ring overlay to mimic the layout in photo */}
-                          <div className="absolute w-[360px] h-[360px] rounded-full border-[10px] border-t-white/40 border-r-white/40 border-b-transparent border-l-transparent dark:border-t-stone-900/40 dark:border-r-stone-900/40 pointer-events-none" />
-                        </div>
+                        {/* Semicircle / Crescent Graphic Frame behind the dish removed for clean look */}
+                        <div className="absolute inset-0 flex items-center justify-center pointer-events-none" />
 
                         {/* Central Rotating Masterpiece Signature Dish */}
                         <motion.div
@@ -4972,9 +5133,9 @@ export default function App() {
                           {/* Client avatar bubbles */}
                           <div className="flex items-center gap-1 mt-0.5">
                             <div className="flex -space-x-1.5 overflow-hidden">
-                              <img className="inline-block h-5 w-5 rounded-full ring-2 ring-white dark:ring-stone-800" src="https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=80" alt="" />
-                              <img className="inline-block h-5 w-5 rounded-full ring-2 ring-white dark:ring-stone-800" src="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=80" alt="" />
-                              <img className="inline-block h-5 w-5 rounded-full ring-2 ring-white dark:ring-stone-800" src="https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=80" alt="" />
+                              <img className="inline-block h-5 w-5 rounded-full ring-2 ring-white dark:ring-stone-800" src="https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=80" alt="" referrerPolicy="no-referrer" />
+                              <img className="inline-block h-5 w-5 rounded-full ring-2 ring-white dark:ring-stone-800" src="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=80" alt="" referrerPolicy="no-referrer" />
+                              <img className="inline-block h-5 w-5 rounded-full ring-2 ring-white dark:ring-stone-800" src="https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=80" alt="" referrerPolicy="no-referrer" />
                             </div>
                             <span className="text-[10px] text-stone-500 dark:text-stone-400 font-mono font-bold pl-1">★ 4.9</span>
                           </div>
@@ -5130,10 +5291,48 @@ export default function App() {
                                       </p>
                                     </div>
                                   ) : (
-                                    <div className="text-center bg-white/5 border border-white/5 rounded p-1.5">
-                                      <p className="text-[9px] text-white/40 leading-relaxed font-sans">
-                                        ምግብዎ ሲበስል እና ሲቀርብልዎ እዚህ ጋር የመረከቢያ ቁልፍ ይመጣል።
-                                      </p>
+                                    <div className="space-y-3">
+                                      {currentCooking === 'Pending' ? (
+                                        <div className="space-y-2.5 bg-amber-500/5 p-3 rounded-xl border border-amber-500/15">
+                                          <p className="text-[10px] text-amber-300 font-bold leading-relaxed text-center font-sans">
+                                            ⚠️ ትዕዛዝዎ ገና መዘጋጀት አልጀመረም! በስህተት ካዘዙ ማስተካከል ወይም መሰረዝ ይችላሉ። (Cooking has not started yet. You can edit or cancel this order.)
+                                          </p>
+                                          <div className="grid grid-cols-2 gap-2.5">
+                                            <button
+                                              type="button"
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                setAdjustingOrder(ord);
+                                              }}
+                                              className="bg-sky-500 hover:bg-sky-400 text-black font-extrabold text-[10.5px] py-2 rounded-lg uppercase font-mono tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-md hover:shadow-sky-500/20 active:scale-95"
+                                            >
+                                              ✏️ ማስተካከያ (Edit Order)
+                                            </button>
+                                            <button
+                                              type="button"
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                askConfirmAndRun('ይህንን ትዕዛዝ ሙሉ በሙሉ መሰረዝ ይፈልጋሉ? (Are you sure you want to cancel this order?)', () => {
+                                                  setOrders(prev => prev.filter(o => o.id !== ord.id));
+                                                  alert('❌ ትዕዛዝዎ በተሳካ ሁኔታ ተሰርዟል! (Order canceled successfully!)');
+                                                });
+                                              }}
+                                              className="bg-red-500 hover:bg-red-400 text-white font-extrabold text-[10.5px] py-2 rounded-lg uppercase font-mono tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-md hover:shadow-red-500/20 active:scale-95"
+                                            >
+                                              ❌ ሰርዝ (Cancel Order)
+                                            </button>
+                                          </div>
+                                        </div>
+                                      ) : (
+                                        <div className="text-center bg-[#00f5ff]/5 border border-[#00f5ff]/20 rounded-xl p-3">
+                                          <p className="text-[10px] text-[#00f5ff] leading-relaxed font-black font-sans">
+                                            🥘 ምግብዎ አሁን በሼፍ እየተዘጋጀ ነው! (Your food is now being prepared by the chef!)
+                                          </p>
+                                          <p className="text-[9.5px] text-white/40 leading-relaxed font-sans mt-0.5">
+                                            ማብሰል ስለተጀመረ አሁን ማሻሻል ወይም መሰረዝ አይቻልም።
+                                          </p>
+                                        </div>
+                                      )}
                                     </div>
                                   )}
                                 </motion.div>
@@ -5146,93 +5345,133 @@ export default function App() {
                   );
                 })()}
 
-                {/* FOOD SEARCH BAR */}
-                <div className="max-w-md w-full mx-auto mb-6 px-1">
-                  <div className="relative">
-                    <span className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-white/40">
-                      <Search className="w-4 h-4" />
-                    </span>
-                    <input
-                      type="text"
-                      value={menuSearchQuery}
-                      onChange={(e) => setMenuSearchQuery(e.target.value)}
-                      placeholder={appLang === 'am' ? 'ምግብ፣ መጠጥ ወይም መክሰስ ይፈልጉ...' : 'Search delicious food, drinks, or snacks...'}
-                      className="w-full pl-10 pr-10 py-3 bg-[#0c111c] hover:bg-[#0f1624] focus:bg-[#0f1624] border-2 border-white/10 hover:border-[#C1FF00]/50 focus:border-[#C1FF00] text-white rounded-2xl text-xs font-bold outline-none transition-all placeholder-white/30"
-                    />
-                    {menuSearchQuery && (
-                      <button
-                        type="button"
-                        onClick={() => setMenuSearchQuery('')}
-                        className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-white/40 hover:text-white font-bold"
-                      >
-                        ✕
-                      </button>
-                    )}
-                  </div>
-                </div>
+                {/* PREMIUM ORGANIC CULINARY BACKSTAGE CONTAINER WITH SCATTERED HERB LEAVES (Matches the uploaded reference design) */}
+                <div className="relative mt-8 p-6 sm:p-8 md:p-10 rounded-[2.5rem] bg-gradient-to-tr from-[#14120E] via-[#221B14] to-[#120E0C] border border-[#ff8d4f]/15 overflow-hidden shadow-2xl">
+                  {/* Glowing light-mesh spots */}
+                  <div className="absolute top-[-10%] left-[5%] w-[400px] h-[400px] bg-amber-500/5 rounded-full filter blur-[120px] pointer-events-none" />
+                  <div className="absolute bottom-[-10%] right-[5%] w-[450px] h-[450px] bg-emerald-600/5 rounded-full filter blur-[150px] pointer-events-none" />
 
-                {/* Horizontal navigation category chips with colorful button layouts */}
-                <div className="flex border-b border-white/10 pb-4 gap-3 overflow-x-auto no-scrollbar scroll-smooth">
-                  {categories.map(cat => {
-                    const transLabel = (categoryTranslations[cat.id] && categoryTranslations[cat.id][appLang]) 
-                      ? categoryTranslations[cat.id][appLang] 
-                      : cat.label;
-                    return (
-                      <button
-                        key={cat.id}
-                        id={`btn-cat-selector-${cat.id}`}
-                        onClick={() => {
-                          setSelectedCategory(cat.id);
-                          // Clear search when category is explicitly clicked to prevent confusion
-                          setMenuSearchQuery('');
-                        }}
-                        className={`px-5 py-2.5 rounded-lg text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 shrink-0 cursor-pointer ${
-                          selectedCategory === cat.id && !menuSearchQuery
-                            ? `${cat.activeBg || 'tactile-3d-btn-lime'}` 
-                            : 'tactile-3d-btn-glass'
-                        }`}
-                      >
-                        <span className="clay-emoji text-lg">{cat.icon}</span>
-                        <span>{transLabel}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-
-                {/* Active search results label */}
-                {menuSearchQuery.trim() !== '' && (
-                  <div className="text-center mt-6">
-                    <span className="text-[10px] text-[#00f5ff] font-mono uppercase tracking-widest block mb-1">🔍 የፍለጋ ውጤቶች / Search Results</span>
-                    <h3 className="text-sm font-black text-white">
-                      "{menuSearchQuery}" {appLang === 'am' ? 'የሚሉ ተዛማጅ ምግቦች' : 'matching items'}
-                    </h3>
-                  </div>
-                )}
-
-                <div className="relative group/scroll px-1">
-                  {/* Left Scroll Slider Arrow */}
-                  <button
-                    type="button"
-                    onClick={() => scrollMenu('left')}
-                    className="absolute -left-3 sm:-left-5 top-[52%] -translate-y-1/2 z-30 w-11 h-11 rounded-full bg-zinc-950/90 hover:bg-[#B21C24] border border-white/10 hover:border-white/20 flex items-center justify-center text-white cursor-pointer shadow-lg transition-all duration-200 active:scale-95"
-                    style={{ touchAction: 'manipulation' }}
-                  >
-                    <svg className="w-5 h-5 stroke-current font-bold" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="4">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+                  {/* Organic Floating Cilantro & Mint leaves scattered around with parallax sway animations matching the reference */}
+                  <div className="absolute top-10 left-[7%] w-16 h-16 pointer-events-none opacity-80 z-20 animate-bounce" style={{ animationDuration: '6s', animationTimingFunction: 'ease-in-out' }}>
+                    <svg viewBox="0 0 24 24" fill="none" className="w-full h-full drop-shadow-[0_12px_24px_rgba(0,0,0,0.6)]">
+                      <path d="M12 22C12 22 12 17 14 15C16 13 19 14 20 12C21 10 20 7 18 7C16 7 15 9 14 10C14 8 15 5 13 4C11 3 9 4 8 6C7 8 8 10 9 11C8 10 5 9 4 10C3 11 2 13 4 15C6 17 9 16 12 22Z" fill="#3D9A48" />
                     </svg>
-                  </button>
-
-                  {/* Right Scroll Slider Arrow */}
-                  <button
-                    type="button"
-                    onClick={() => scrollMenu('right')}
-                    className="absolute -right-3 sm:-right-5 top-[52%] -translate-y-1/2 z-30 w-11 h-11 rounded-full bg-zinc-950/90 hover:bg-[#B21C24] border border-white/10 hover:border-white/20 flex items-center justify-center text-white cursor-pointer shadow-lg transition-all duration-200 active:scale-95"
-                    style={{ touchAction: 'manipulation' }}
-                  >
-                    <svg className="w-5 h-5 stroke-current font-bold" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="4">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                  </div>
+                  <div className="absolute bottom-16 left-[14%] w-11 h-11 pointer-events-none opacity-60 z-20" style={{ animation: 'sway-slow 8s ease-in-out infinite' }}>
+                    <svg viewBox="0 0 24 24" fill="none" className="w-full h-full drop-shadow-[0_8px_16px_rgba(0,0,0,0.5)] rotate-[45deg]">
+                      <path d="M12 22C12 22 12 17 14 15C16 13 19 14 20 12C21 10 20 7 18 7C16 7 15 9 14 10C14 8 15 5 13 4C11 3 9 4 8 6C7 8 8 10 9 11C8 10 5 9 4 10C3 11 2 13 4 15C6 17 9 16 12 22Z" fill="#22662B" />
                     </svg>
-                  </button>
+                  </div>
+                  <div className="absolute top-28 right-[10%] w-14 h-14 pointer-events-none opacity-85 z-20" style={{ animation: 'sway-fast 5s ease-in-out infinite' }}>
+                    <svg viewBox="0 0 24 24" fill="none" className="w-full h-full drop-shadow-[0_14px_28px_rgba(0,0,0,0.6)] rotate-[-35deg]">
+                      <path d="M12 22C12 22 12 17 14 15C16 13 19 14 20 12C21 10 20 7 18 7C16 7 15 9 14 10C14 8 15 5 13 4C11 3 9 4 8 6C7 8 8 10 9 11C8 10 5 9 4 10C3 11 2 13 4 15C6 17 9 16 12 22Z" fill="#4CAF50" />
+                    </svg>
+                  </div>
+                  <div className="absolute bottom-8 right-[8%] w-18 h-18 pointer-events-none opacity-70 z-20" style={{ animation: 'sway-slow 10s ease-in-out infinite' }}>
+                    <svg viewBox="0 0 24 24" fill="none" className="w-full h-full drop-shadow-[0_16px_32px_rgba(0,0,0,0.6)] rotate-[110deg]">
+                      <path d="M12 22C12 22 12 17 14 15C16 13 19 14 20 12C21 10 20 7 18 7C16 7 15 9 14 10C14 8 15 5 13 4C11 3 9 4 8 6C7 8 8 10 9 11C8 10 5 9 4 10C3 11 2 13 4 15C6 17 9 16 12 22Z" fill="#1E5C25" />
+                    </svg>
+                  </div>
+
+                  <style>{`
+                    @keyframes sway-slow {
+                      0%, 100% { transform: translateY(0px) rotate(0deg) scale(0.95); }
+                      50% { transform: translateY(-16px) rotate(12deg) scale(1.05); }
+                    }
+                    @keyframes sway-fast {
+                      0%, 100% { transform: translateY(0px) rotate(-15deg) scale(1); }
+                      50% { transform: translateY(-10px) rotate(10deg) scale(1.04); }
+                    }
+                  `}</style>
+
+                  {/* FOOD SEARCH BAR */}
+                  <div className="max-w-md w-full mx-auto mb-6 px-1 relative z-10 font-sans">
+                    <div className="relative">
+                      <span className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-white/40">
+                        <Search className="w-4 h-4" />
+                      </span>
+                      <input
+                        type="text"
+                        value={menuSearchQuery}
+                        onChange={(e) => setMenuSearchQuery(e.target.value)}
+                        placeholder={appLang === 'am' ? 'ምግብ፣ መጠጥ ወይም መክሰስ ይፈልጉ...' : 'Search delicious food, drinks, or snacks...'}
+                        className="w-full pl-10 pr-10 py-3.5 bg-black/40 hover:bg-black/60 focus:bg-black/60 border-2 border-white/10 hover:border-[#C1FF00]/50 focus:border-[#C1FF00] text-white rounded-2xl text-xs font-bold outline-none transition-all placeholder-white/30"
+                      />
+                      {menuSearchQuery && (
+                        <button
+                          type="button"
+                          onClick={() => setMenuSearchQuery('')}
+                          className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-white/40 hover:text-white font-bold"
+                        >
+                          ✕
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Horizontal navigation category chips with colorful button layouts */}
+                  <div className="flex border-b border-white/5 pb-4 gap-3 overflow-x-auto no-scrollbar scroll-smooth relative z-10 font-sans">
+                    {categories.map(cat => {
+                      const transLabel = (categoryTranslations[cat.id] && categoryTranslations[cat.id][appLang]) 
+                        ? categoryTranslations[cat.id][appLang] 
+                        : cat.label;
+                      const isActive = selectedCategory === cat.id && !menuSearchQuery;
+                      return (
+                        <button
+                          key={cat.id}
+                          id={`btn-cat-selector-${cat.id}`}
+                          onClick={() => {
+                            setSelectedCategory(cat.id);
+                            // Clear search when category is explicitly clicked to prevent confusion
+                            setMenuSearchQuery('');
+                          }}
+                          className={`px-5 py-3 rounded-full text-xs font-black uppercase tracking-widest transition-all duration-300 flex items-center gap-2.5 shrink-0 cursor-pointer border ${
+                            isActive
+                              ? 'bg-[#C1FF00] text-black border-[#C1FF00] shadow-lg shadow-[#C1FF00]/15 scale-105'
+                              : 'bg-black/35 text-white/85 border-white/5 hover:border-white/20 hover:bg-black/50'
+                          }`}
+                        >
+                          <span className="clay-emoji text-lg">{cat.icon}</span>
+                          <span>{transLabel}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Active search results label */}
+                  {menuSearchQuery.trim() !== '' && (
+                    <div className="text-center mt-6 relative z-10 font-sans">
+                      <span className="text-[10px] text-[#00f5ff] font-mono uppercase tracking-widest block mb-1">🔍 የፍለጋ ውጤቶች / Search Results</span>
+                      <h3 className="text-sm font-black text-white">
+                        "{menuSearchQuery}" {appLang === 'am' ? 'የሚሉ ተዛማጅ ምግቦች' : 'matching items'}
+                      </h3>
+                    </div>
+                  )}
+
+                  <div className="relative group/scroll px-1 mt-6 z-10">
+                    {/* Left Scroll Arrow */}
+                    <button
+                      type="button"
+                      onClick={() => scrollMenu('left')}
+                      className="absolute -left-3 sm:-left-5 top-[52%] -translate-y-1/2 z-30 w-11 h-11 rounded-full bg-black/90 hover:bg-[#C1FF00] hover:text-black border border-white/10 flex items-center justify-center text-white cursor-pointer shadow-lg transition-all duration-200 active:scale-95"
+                      style={{ touchAction: 'manipulation' }}
+                    >
+                      <svg className="w-5 h-5 stroke-current font-bold" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="4">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+                      </svg>
+                    </button>
+
+                    {/* Right Scroll Arrow */}
+                    <button
+                      type="button"
+                      onClick={() => scrollMenu('right')}
+                      className="absolute -right-3 sm:-right-5 top-[52%] -translate-y-1/2 z-30 w-11 h-11 rounded-full bg-black/90 hover:bg-[#C1FF00] hover:text-black border border-white/10 flex items-center justify-center text-white cursor-pointer shadow-lg transition-all duration-200 active:scale-95"
+                      style={{ touchAction: 'manipulation' }}
+                    >
+                      <svg className="w-5 h-5 stroke-current font-bold" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="4">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                      </svg>
+                    </button>
 
                   <div 
                     ref={menuScrollRef} 
@@ -5299,18 +5538,26 @@ export default function App() {
                           ? (['en', 'fr', 'de', 'it'].includes(appLang) ? itemTranslations[item.id].am.name : itemTranslations[item.id].en.name)
                           : (['en', 'fr', 'de', 'it'].includes(appLang) ? item.nameAm : (item.nameEn || ''));
 
+                        // High-fidelity coloring and typographic pairing style based on selected vs unselected card state
+                        const cardBg = isSelected 
+                          ? 'bg-[#C11F1F]/45 backdrop-blur-md text-white ring-4 ring-white/15 shadow-[0_16px_36px_rgba(193,31,31,0.3)] transform scale-[1.01] border border-white/25' 
+                          : 'bg-[#0B1220]/40 hover:bg-[#0B1220]/60 backdrop-blur-md text-white border border-white/5 shadow-[4px_4px_16px_0px_rgba(0,0,0,0.15)] hover:scale-[0.99]';
+
+                        const textColor = 'text-white font-bold';
+                        const descColor = 'text-stone-300';
+                        const subColor = isSelected ? 'text-[#C1FF00] font-black' : 'text-[#00f5ff]';
+                        const inputBg = 'bg-black/40 border-white/10 text-white focus:border-[#C1FF00]';
+                        const btnActive = 'bg-[#C1FF00] text-black font-extrabold shadow-sm';
+                        const btnInactive = 'bg-white/5 hover:bg-white/10 text-white';
+
                         return (
                           <div 
                             key={item.id} 
                             id={`menu-card-item-${item.id}`}
                             onClick={() => setSelectedMenuCardId(item.id)}
-                            className={`rounded-[2.4rem] flex flex-col justify-between overflow-visible relative shrink-0 w-[295px] sm:w-[335px] snap-start transition-all duration-300 pt-20 pb-6 px-6 cursor-pointer ${
-                              isSelected 
-                                ? 'bg-[#C11F1F]/45 backdrop-blur-md text-white ring-4 ring-white/15 shadow-[0_16px_36px_rgba(193,31,31,0.3)] transform scale-[1.01] border border-white/25' 
-                                : 'bg-[#0B1220]/40 hover:bg-[#0B1220]/60 backdrop-blur-md text-white border border-white/5 shadow-[4px_4px_16px_0px_rgba(0,0,0,0.15)] hover:scale-[0.99]'
-                            }`}
+                            className={`rounded-[2.4rem] flex flex-col justify-between overflow-visible relative shrink-0 w-[295px] sm:w-[335px] snap-start transition-all duration-300 pt-20 pb-6 px-6 cursor-pointer ${cardBg}`}
                           >
-                            {/* Image Frame - Circular Plate, overlapping the top edge precisely like in the user's photo */}
+                            {/* Circular Plate, overlapping the top edge precisely like in the user's photo */}
                             <div className="absolute -top-14 left-1/2 -translate-x-1/2 z-20 select-none">
                               <div className={`w-[136px] h-[136px] rounded-full overflow-hidden border-[6px] shadow-lg shadow-black/40 transition-all duration-300 ${
                                 isSelected ? 'border-white bg-[#900e14]/60 backdrop-blur-sm' : 'border-[#141F32] bg-[#0E1726]/60 backdrop-blur-sm'
@@ -5320,7 +5567,7 @@ export default function App() {
                                   onError={(e) => {
                                     (e.currentTarget as HTMLImageElement).src = 'https://images.unsplash.com/photo-1544025162-d76694265947?w=400';
                                   }}
-                                  className="w-full h-full object-cover transition-all duration-300 hover:scale-105" 
+                                  className="w-full h-full object-cover transition-all duration-300 hover:scale-110" 
                                   alt={item.nameAm} 
                                   referrerPolicy="no-referrer"
                                 />
@@ -5333,16 +5580,16 @@ export default function App() {
                             </div>
 
                             {/* Food details description */}
-                            <div className="flex-1 flex flex-col justify-between pt-2">
+                            <div className="flex-1 flex flex-col justify-between pt-2 font-sans">
                               <div className="text-center">
-                                <h4 className="text-xl font-black tracking-tight text-white mb-0.5">
+                                <h4 className={`text-xl font-black tracking-tight mb-0.5 ${textColor}`}>
                                   {nameToShow}
                                 </h4>
-                                <p className="text-[10px] font-mono uppercase tracking-widest text-[#00f5ff] mb-2 font-bold">
+                                <p className={`text-[10px] font-mono uppercase tracking-widest mb-3 font-extrabold ${subColor}`}>
                                   {subToShow}
                                 </p>
                                 
-                                <p className="text-[11.5px] leading-relaxed font-bold h-12 overflow-hidden text-white/70 mx-auto px-1">
+                                <p className={`text-[11.5px] leading-relaxed h-12 overflow-hidden mx-auto px-1 ${descColor}`}>
                                   {descToShow}
                                 </p>
                               </div>
@@ -5353,7 +5600,8 @@ export default function App() {
                               {(() => {
                                 const isCustomOnly = isCustomOnlyItem(item);
                                 const hasStandardModifiers = !isCustomOnly && (item.customizable || item.cat === 'food' || item.cat === 'traditional');
-                                const showModifiersArea = hasStandardModifiers || isCustomOnly;
+                                const isDrink = item.cat === 'drinks' || item.cat.toLowerCase().includes('drink') || item.cat.toLowerCase().includes('beverage');
+                                const showModifiersArea = (hasStandardModifiers || isCustomOnly) && !isDrink;
                                 
                                 if (!showModifiersArea) return null;
 
@@ -5368,26 +5616,22 @@ export default function App() {
                                 const isFood = !isBurger && (item.customizable || item.cat === 'food' || item.cat === 'traditional');
 
                                 return (
-                                  <div className={`p-4 rounded-3xl space-y-3 text-[11px] font-black transition-all ${
-                                    isSelected ? 'bg-black/25 text-white border border-white/10' : 'bg-[#070D18]/50 backdrop-blur-sm'
+                                  <div className={`p-4 rounded-3xl space-y-3 text-[11px] font-black mt-4 transition-all ${
+                                    isSelected ? 'bg-black/25 text-white border border-white/10' : 'bg-[#070D18]/50 backdrop-blur-sm text-white'
                                   }`}>
-                                    {/* Standard Injera, Dabo, Qaria modifiers for food/traditional items */}
                                     {isFood && (
                                       <>
-                                        {/* Green Pepper options matching አለ/የለም */}
                                         <div className="flex justify-between items-center">
-                                          <span className="flex items-center gap-1">🌶️ {(menuUiTranslation.green_pepper[appLang] || 'ቃሪያ').replace('🌶️', '').trim()}:</span>
-                                          <div className="flex gap-1.5 font-mono">
+                                          <span className="flex items-center gap-1 font-bold">🌶️ {(menuUiTranslation.green_pepper[appLang] || 'ቃሪያ').replace('🌶️', '').trim()}:</span>
+                                          <div className="flex gap-1 font-mono">
                                             {modifierOptions.qariaChoices.map((val) => (
                                               <button 
                                                 key={val}
                                                 id={`modifier-${item.id}-qaria-${val}`}
                                                 type="button"
                                                 onClick={(e) => { e.stopPropagation(); handleModifyQaria(item.id, val); }}
-                                                className={`px-3.5 py-1 rounded-md font-bold text-[10px] transition-all cursor-pointer ${
-                                                  mod.qaria === val
-                                                    ? 'bg-white text-black font-extrabold shadow-sm'
-                                                    : 'bg-white/5 hover:bg-white/10 text-white'
+                                                className={`px-3 py-1 rounded-md font-bold text-[10px] transition-all cursor-pointer ${
+                                                  mod.qaria === val ? btnActive : btnInactive
                                                 }`}
                                               >
                                                 {getTranslatedModifierValue(val)}
@@ -5396,10 +5640,9 @@ export default function App() {
                                           </div>
                                         </div>
 
-                                        {/* Injera options matching full / half / custom */}
                                         <div className="flex justify-between items-center">
-                                          <span className="flex items-center gap-1">🫓 {(menuUiTranslation.injera[appLang] || 'እንጀራ').replace('🫓', '').trim()}:</span>
-                                          <div className="flex gap-1.5 font-mono">
+                                          <span className="flex items-center gap-1 font-bold">🫓 {(menuUiTranslation.injera[appLang] || 'እንጀራ').replace('🫓', '').trim()}:</span>
+                                          <div className="flex gap-1 font-mono">
                                             {modifierOptions.injeraChoices.map((val) => {
                                               const priceAdd = Number(modifierOptions.injeraPrices?.[val] || 0);
                                               return (
@@ -5409,9 +5652,7 @@ export default function App() {
                                                   type="button"
                                                   onClick={(e) => { e.stopPropagation(); handleModifyInjera(item.id, val); }}
                                                   className={`px-2.5 py-1 rounded-md font-bold text-[9px] transition-all cursor-pointer ${
-                                                    mod.injera === val
-                                                      ? 'bg-white text-black font-extrabold shadow-sm'
-                                                      : 'bg-white/5 hover:bg-white/10 text-white'
+                                                    mod.injera === val ? btnActive : btnInactive
                                                   }`}
                                                 >
                                                   {getTranslatedModifierValue(val)} {priceAdd > 0 ? `(+${priceAdd})` : ''}
@@ -5421,9 +5662,8 @@ export default function App() {
                                           </div>
                                         </div>
 
-                                        {/* Bread count slider / modifier */}
                                         <div className="flex justify-between items-center">
-                                          <span className="flex items-center gap-1">🥖 {(menuUiTranslation.bread[appLang] || 'ዳቦ').replace('🥖', '').trim()}:</span>
+                                          <span className="flex items-center gap-1 font-bold">🥖 {(menuUiTranslation.bread[appLang] || 'ዳቦ').replace('🥖', '').trim()}:</span>
                                           <div className="flex items-center gap-2 font-mono">
                                             <button 
                                               id={`modifier-${item.id}-bread-dec`}
@@ -5442,16 +5682,15 @@ export default function App() {
                                             >
                                               +
                                             </button>
-                                            <span className="text-[9px] text-white/50">(+{Number(modifierOptions.daboPrice || 0)} ብር)</span>
+                                            <span className="text-[9px] opacity-65">(+{Number(modifierOptions.daboPrice || 0)} ብር)</span>
                                           </div>
                                         </div>
                                       </>
                                     )}
 
-                                    {/* Traditional Addon: Kocho (ቆጮ) - shown for Traditional items */}
                                     {isTraditional && (
-                                      <div className="flex justify-between items-center border-t border-white/5 pt-2">
-                                        <span className="flex items-center gap-1">🫓 {appLang === 'am' ? 'የቆጮ ጭማሪ' : 'Extra Kocho'}:</span>
+                                      <div className="flex justify-between items-center border-t border-black/5 dark:border-white/5 pt-2">
+                                        <span className="flex items-center gap-1 font-bold">🫓 {appLang === 'am' ? 'የቆጮ ጭማሪ' : 'Extra Kocho'}:</span>
                                         <button
                                           type="button"
                                           onClick={(e) => {
@@ -5464,7 +5703,7 @@ export default function App() {
                                           className={`px-3 py-1.5 rounded-lg text-xs font-bold font-mono transition-all border cursor-pointer ${
                                             mod.kocho
                                               ? 'bg-[#C1FF00] text-black border-[#C1FF00] font-black'
-                                              : 'bg-white/5 text-white/70 border-white/10 hover:border-white/20'
+                                              : 'bg-white/5 border-white/10 text-white/70 hover:border-white/20'
                                           }`}
                                         >
                                           {mod.kocho ? '✓ ' : ''}{appLang === 'am' ? 'ቆጮ' : 'Kocho'} (+{modifierOptions.kochoPrice || 45} ብር)
@@ -5472,10 +5711,9 @@ export default function App() {
                                       </div>
                                     )}
 
-                                    {/* Modern Addon: Mayonnaise (ማዮኔዝ) - shown for Burger items */}
                                     {isBurger && (
-                                      <div className="flex justify-between items-center border-t border-white/5 pt-2">
-                                        <span className="flex items-center gap-1">🧴 {appLang === 'am' ? 'የማዮኔዝ ጭማሪ' : 'Extra Mayonnaise'}:</span>
+                                      <div className="flex justify-between items-center border-t border-black/5 dark:border-white/5 pt-2">
+                                        <span className="flex items-center gap-1 font-bold">🧴 {appLang === 'am' ? 'የማዮኔዝ ጭማሪ' : 'Extra Mayonnaise'}:</span>
                                         <button
                                           type="button"
                                           onClick={(e) => {
@@ -5488,7 +5726,7 @@ export default function App() {
                                           className={`px-3 py-1.5 rounded-lg text-xs font-bold font-mono transition-all border cursor-pointer ${
                                             mod.mayo
                                               ? 'bg-[#C1FF00] text-black border-[#C1FF00] font-black'
-                                              : 'bg-white/5 text-white/70 border-white/10 hover:border-white/20'
+                                              : 'bg-white/5 border-white/10 text-white/70 hover:border-white/20'
                                           }`}
                                         >
                                           {mod.mayo ? '✓ ' : ''}{appLang === 'am' ? 'ማዮኔዝ' : 'Mayo'} (+{modifierOptions.mayoPrice || 20} ብር)
@@ -5496,16 +5734,13 @@ export default function App() {
                                       </div>
                                     )}
 
-                                    {/* Custom additions input specifically - ALWAYS shown for ALL customizable items */}
-                                    <div className="flex flex-col gap-1.5 border-t border-white/5 pt-2">
-                                      <div className="flex justify-between items-center mb-0.5">
-                                        <span className="text-[10px] uppercase font-bold text-white/80 font-sans tracking-wide">
-                                          {appLang === 'am' ? `➕ ተጨማሪዎች (Custom Additions - +${modifierOptions.customAdditionsPrice || 35} ብር) :` : `➕ Custom Additions (+${modifierOptions.customAdditionsPrice || 35} Birr) :`}
-                                        </span>
-                                      </div>
+                                    <div className="flex flex-col gap-1 border-t border-black/5 dark:border-white/5 pt-2">
+                                      <span className="text-[10px] uppercase font-bold tracking-wide">
+                                        {appLang === 'am' ? `➕ ተጨማሪዎች (Custom Additions - +${modifierOptions.customAdditionsPrice || 35} ብር) :` : `➕ Custom Additions (+${modifierOptions.customAdditionsPrice || 35} Birr) :`}
+                                      </span>
                                       <input
                                         type="text"
-                                        placeholder={appLang === 'am' ? 'ለምሳሌ፦ ቺዝ፣ ስጋ፣ ማዮኔዝ... (ለተጨማሪ ክፍያ)' : 'e.g. extra cheese, beef, mayo... (extra charge)'}
+                                        placeholder={appLang === 'am' ? 'ለምሳሌ፦ ቺዝ፣ ስጋ፣ ማዮኔዝ...' : 'e.g. extra cheese, beef, mayo...'}
                                         value={mod.customInstructions || ''}
                                         onChange={(e) => {
                                           e.stopPropagation();
@@ -5515,7 +5750,7 @@ export default function App() {
                                           }));
                                         }}
                                         onClick={(e) => e.stopPropagation()}
-                                        className="w-full px-3 py-2.5 bg-black/40 border border-white/15 hover:border-[#C1FF00]/50 focus:border-[#C1FF00] rounded-xl text-xs text-white placeholder-white/40 outline-none transition-all font-sans font-bold"
+                                        className={`w-full px-3 py-2.5 rounded-xl text-xs font-bold outline-none border transition-all ${inputBg}`}
                                       />
                                     </div>
                                   </div>
@@ -5554,6 +5789,24 @@ export default function App() {
                                 >
                                   <span>🛒 {(menuUiTranslation.add_to_order_btn[appLang] || 'እዘዝ').replace('🛒', '').trim()}</span>
                                 </button>
+
+                                {/* Favorite/Wishlist Heart Toggle Button */}
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setMenuFavorites(prev => 
+                                      prev.includes(item.id) ? prev.filter(id => id !== item.id) : [...prev, item.id]
+                                    );
+                                  }}
+                                  className={`p-3 rounded-xl border border-white/10 hover:border-white/20 hover:bg-white/5 transition-all duration-200 cursor-pointer flex items-center justify-center ${
+                                    menuFavorites.includes(item.id) 
+                                      ? 'bg-rose-500/20 border-rose-500 text-rose-500 shadow-md shadow-rose-500/20' 
+                                      : 'text-white/40 hover:text-rose-500'
+                                  }`}
+                                >
+                                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill={menuFavorites.includes(item.id) ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2.5"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg>
+                                </button>
                               </div>
                             </div>
                           </div>
@@ -5562,9 +5815,10 @@ export default function App() {
                     })()}
                   </div>
                 </div>
+              </div>
 
 
-                {/* Removed Chef advertisement from here - moving to Chef Portal */}
+              {/* Removed Chef advertisement from here - moving to Chef Portal */}
 
                 {/* HIGH-FIDELITY LUXURY DELIVERY ADVERTISEMENT SECTION - ULTRA COMPACT & ELEGANT */}
                 <motion.div
@@ -5641,11 +5895,8 @@ export default function App() {
                   {/* RIGHT COLUMN: Elegant Chef & Fresh Salad Frame Layout - Enlarged and balanced */}
                   <div className="relative w-[150px] sm:w-[180px] md:w-[200px] flex items-center justify-center min-h-[140px] shrink-0">
                     
-                    {/* Background Circle Frames / Crescent Graphic Layout scaled up */}
-                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                      <div className="w-[120px] h-[120px] sm:w-[140px] sm:h-[140px] rounded-full border border-dashed border-[#00bcd4]/15 animate-[spin_80s_linear_infinite]" />
-                      <div className="absolute w-[100px] h-[100px] sm:w-[115px] sm:h-[115px] rounded-full border border-stone-200/20 dark:border-stone-800/30" />
-                    </div>
+                    {/* Background Circle Frames removed for clean look */}
+                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none" />
 
                     {/* Central Masterpiece Chef Portrait with premium drop shadow */}
                     <motion.div
@@ -5683,8 +5934,12 @@ export default function App() {
 
                 {/* Photo Gallery Showcase */}
                 {galleryItems && galleryItems.length > 0 && (
-                  <div className="bg-[#141414] border border-white/10 p-5 space-y-4 rounded-xl mt-6">
-                    <div className="flex items-center justify-between border-b border-white/5 pb-2">
+                  <div className="relative bg-stone-950/60 backdrop-blur-xl border border-white/10 p-6 space-y-5 rounded-2xl mt-6 overflow-hidden shadow-2xl">
+                    {/* Elegant Ambient Glowing Layers behind the container content */}
+                    <div className="absolute -top-16 -left-16 w-56 h-56 bg-[#C1FF00]/10 rounded-full filter blur-[60px] pointer-events-none animate-pulse" style={{ animationDuration: '8s' }} />
+                    <div className="absolute -bottom-16 -right-16 w-56 h-56 bg-amber-500/10 rounded-full filter blur-[60px] pointer-events-none animate-pulse" style={{ animationDuration: '10s' }} />
+                    
+                    <div className="relative z-10 flex items-center justify-between border-b border-white/5 pb-3">
                       <div className="flex items-center gap-2">
                         <span className="text-xl">🖼️</span>
                         <h4 className="text-xs font-black text-white uppercase tracking-widest">
@@ -5696,25 +5951,63 @@ export default function App() {
                       </span>
                     </div>
 
-                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
-                      {galleryItems.map((item, idx) => (
-                        <div key={item.id || idx} className="group relative aspect-square bg-[#1c1c1c] border border-white/5 overflow-hidden rounded-lg">
-                          <img 
-                            src={item.image_url} 
-                            alt={appLang === 'am' ? item.title_am : item.title_en}
-                            className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
-                            referrerPolicy="no-referrer"
-                          />
-                          <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/30 to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end p-2.5 pointer-events-none">
-                            <span className="text-[8px] text-[#C1FF00] font-mono font-bold uppercase tracking-wider block mb-0.5">
-                              {item.category || 'General'}
-                            </span>
-                            <span className="text-[10px] text-white font-bold leading-tight line-clamp-2">
-                              {appLang === 'am' ? item.title_am : item.title_en}
-                            </span>
+                    <style>{`
+                      .gallery-scroll::-webkit-scrollbar {
+                        width: 5px;
+                      }
+                      .gallery-scroll::-webkit-scrollbar-track {
+                        background: transparent;
+                      }
+                      .gallery-scroll::-webkit-scrollbar-thumb {
+                        background: rgba(193, 255, 0, 0.2);
+                        border-radius: 9999px;
+                      }
+                      .gallery-scroll::-webkit-scrollbar-thumb:hover {
+                        background: rgba(193, 255, 0, 0.6);
+                      }
+                    `}</style>
+
+                    <div className="relative z-10 max-h-[350px] sm:max-h-[420px] overflow-y-auto pr-1 gallery-scroll">
+                      <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-7 xl:grid-cols-8 gap-2">
+                        {galleryItems.map((item, idx) => (
+                          <div 
+                            key={item.id || idx} 
+                            onClick={() => setSelectedGalleryIdx(idx)}
+                            className="group relative aspect-square bg-stone-900 border border-white/5 overflow-hidden rounded-lg cursor-pointer hover:border-[#C1FF00]/40 transition-all duration-300 shadow-lg"
+                          >
+                            {/* STRETCHED BLURRED BACKGROUND LAYER matching image colors */}
+                            <div 
+                              className="absolute inset-0 bg-cover bg-center filter blur-md scale-125 opacity-40 transition-opacity duration-300 group-hover:opacity-60" 
+                              style={{ backgroundImage: `url(${item.image_url})` }}
+                            />
+
+                            {/* CRISP FOREGROUND IMAGE */}
+                            <div className="absolute inset-1 overflow-hidden rounded-md z-10 bg-black/40 border border-white/5">
+                              <img 
+                                src={item.image_url} 
+                                alt={appLang === 'am' ? item.title_am : item.title_en}
+                                className="w-full h-full object-cover transition-transform duration-700 ease-out group-hover:scale-110"
+                                referrerPolicy="no-referrer"
+                              />
+                            </div>
+
+                            {/* CORNER SEARCH/EXPAND BADGE */}
+                            <div className="absolute top-2 right-2 bg-black/60 backdrop-blur-md rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity duration-300 z-20 shadow">
+                              <svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="#C1FF00" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+                            </div>
+
+                            {/* OVERLAY LABEL WITH BACKDROP BLUR */}
+                            <div className="absolute inset-x-1 bottom-1 bg-gradient-to-t from-black/95 via-black/80 to-transparent p-1.5 pt-3 z-20 flex flex-col justify-end rounded-b-md">
+                              <span className="text-[6.5px] text-[#C1FF00] font-mono font-black uppercase tracking-widest block mb-0.5 leading-none">
+                                {item.category || 'General'}
+                              </span>
+                              <span className="text-[8.5px] text-white font-bold leading-tight line-clamp-1 drop-shadow">
+                                {appLang === 'am' ? item.title_am : item.title_en}
+                              </span>
+                            </div>
                           </div>
-                        </div>
-                      ))}
+                        ))}
+                      </div>
                     </div>
                   </div>
                 )}
@@ -5820,8 +6113,8 @@ export default function App() {
                       </div>
                       <div className="flex-1 space-y-1">
                         <span className="text-[10px] font-mono text-white/40 uppercase block">WiFi ACCESS / ዋይፋይ</span>
-                        <p className="text-xs text-white font-bold">SSID: <span className="text-[#00f5ff]">Papyrus_Lodge_Guest</span></p>
-                        <p className="text-[10px] text-white/70">PASS: <code className="bg-white/5 px-1 py-0.5 rounded text-[#C1FF00]">papyruswelcome</code></p>
+                        <p className="text-xs text-white font-bold">SSID: <span className="text-[#00f5ff]">{wifiGuestSsid}</span></p>
+                        <p className="text-[10px] text-white/70">PASS: <code className="bg-white/5 px-1 py-0.5 rounded text-[#C1FF00]">{wifiGuestPassword}</code></p>
                       </div>
                     </div>
 
@@ -5832,8 +6125,8 @@ export default function App() {
                       </div>
                       <div className="flex-1 space-y-1">
                         <span className="text-[10px] font-mono text-white/40 uppercase block">DINING HOURS / የምግብ ሰዓት</span>
-                        <p className="text-xs text-white font-bold">{appLang === 'am' ? 'ቁርስ (Breakfast)' : 'Breakfast buffet'}</p>
-                        <p className="text-[10px] text-white/70">06:00 AM - 10:00 AM (Daily)</p>
+                        <p className="text-xs text-white font-bold">{appLang === 'am' ? diningBreakfastTitleAm : diningBreakfastTitleEn}</p>
+                        <p className="text-[10px] text-white/70">{appLang === 'am' ? diningBreakfastHoursAm : diningBreakfastHoursEn}</p>
                       </div>
                     </div>
 
@@ -5844,8 +6137,8 @@ export default function App() {
                       </div>
                       <div className="flex-1 space-y-1">
                         <span className="text-[10px] font-mono text-white/40 uppercase block">RECEPTION / ሪሴብሽን</span>
-                        <p className="text-xs text-white font-bold">{appLang === 'am' ? 'ከክፍልዎ ሆነው 0 ይደውሉ' : 'Dial 0 from room telephone'}</p>
-                        <p className="text-[10px] text-white/70">Emergency Hotline: +251 919 629347</p>
+                        <p className="text-xs text-white font-bold">{appLang === 'am' ? receptionAssistanceAm : receptionAssistanceEn}</p>
+                        <p className="text-[10px] text-white/70">Emergency Hotline: {receptionEmergency}</p>
                       </div>
                     </div>
 
@@ -6041,7 +6334,7 @@ export default function App() {
                                       <span className="font-black text-white/80">Total: {ord.total} ETB</span>
                                     </div>
 
-                                    <div>
+                                    <div className="flex flex-col gap-1.5">
                                       {(ord.cookingStatus || (ord.status === 'Paid' ? 'Pending' : ord.status)) === 'Pending' ? (
                                         <button
                                           id={`btn-waiter-prep-${ord.id}`}
@@ -6059,6 +6352,13 @@ export default function App() {
                                           አብስለህ ጨርስ (Mark Cooked ➔)
                                         </button>
                                       )}
+                                      
+                                      <button
+                                        onClick={() => setAdjustingOrder(ord)}
+                                        className="w-full bg-sky-500/10 hover:bg-sky-500 text-sky-400 hover:text-black border border-sky-500/20 py-1 text-[9px] uppercase font-black font-mono transition-colors cursor-pointer rounded"
+                                      >
+                                        ✏️ ትዕዛዝ ማስተካከያ (Adjust Order)
+                                      </button>
                                     </div>
                                   </div>
                                 ))}
@@ -6108,17 +6408,26 @@ export default function App() {
                                       <span className="font-black text-white/80">Total: {ord.total} ETB</span>
                                     </div>
 
-                                    <button
-                                      id={`btn-waiter-confirm-delivery-${ord.id}`}
-                                      onClick={() => {
-                                        setOrders(prev => prev.map(o => o.id === ord.id ? { ...o, servedByWaiter: true } : o));
-                                        playVoiceAlert(`Delivery confirmation sent to table ${ord.location} for order ${ord.id}.`);
-                                        alert(`✔ ማረጋገጫ ለደንበኛው ተልኳል! ደንበኛው ምግብ መድረሱን በስልኩ እንዲያረጋግጥ ተደርጓል።`);
-                                      }}
-                                      className="w-full bg-purple-600 hover:bg-purple-500 text-white py-2 text-[10px] uppercase font-black font-mono transition-transform active:scale-95 cursor-pointer rounded"
-                                    >
-                                      🚀 ማረጋገጫ ላክ / ምግብ አቅርብ (Send Confirmation)
-                                    </button>
+                                    <div className="flex flex-col gap-1.5">
+                                      <button
+                                        id={`btn-waiter-confirm-delivery-${ord.id}`}
+                                        onClick={() => {
+                                          setOrders(prev => prev.map(o => o.id === ord.id ? { ...o, servedByWaiter: true } : o));
+                                          playVoiceAlert(`Delivery confirmation sent to table ${ord.location} for order ${ord.id}.`);
+                                          alert(`✔ ማረጋገጫ ለደንበኛው ተልኳል! ደንበኛው ምግብ መድረሱን በስልኩ እንዲያረጋግጥ ተደርጓል።`);
+                                        }}
+                                        className="w-full bg-purple-600 hover:bg-purple-500 text-white py-2 text-[10px] uppercase font-black font-mono transition-transform active:scale-95 cursor-pointer rounded"
+                                      >
+                                        🚀 ማረጋገጫ ላክ / ምግብ አቅርብ (Send Confirmation)
+                                      </button>
+
+                                      <button
+                                        onClick={() => setAdjustingOrder(ord)}
+                                        className="w-full bg-sky-500/10 hover:bg-sky-500 text-sky-400 hover:text-black border border-sky-500/20 py-1 text-[9px] uppercase font-black font-mono transition-colors cursor-pointer rounded"
+                                      >
+                                        ✏️ ትዕዛዝ ማስተካከያ (Adjust Order)
+                                      </button>
+                                    </div>
                                   </div>
                                 ))}
                               </div>
@@ -6510,11 +6819,29 @@ export default function App() {
                 <div className="bg-gradient-to-r from-[#111] via-stone-900 to-black border border-white/10 p-6 rounded-3xl flex flex-col md:flex-row justify-between items-start md:items-center gap-4 relative overflow-hidden text-left shadow-2xl">
                   <div className="absolute top-0 right-0 w-32 h-32 bg-[#C1FF00]/5 rounded-full blur-2xl pointer-events-none"></div>
                   <div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <span className="w-2.5 h-2.5 bg-[#C1FF00] rounded-full animate-ping"></span>
                       <span className="text-[9px] bg-[#C1FF00]/10 text-[#C1FF00] font-mono font-black uppercase px-2 py-0.5 rounded tracking-wider">
                         SECURE ADMIN CONTROL
                       </span>
+                      {syncError ? (
+                        <span className="text-[9px] bg-red-600/20 text-red-400 font-mono font-bold uppercase px-2 py-0.5 rounded tracking-wider border border-red-500/20 flex items-center gap-1 animate-pulse">
+                          ⚠️ Sync Warning: {syncError}
+                        </span>
+                      ) : (
+                        <span className="text-[9px] bg-emerald-500/10 text-emerald-400 font-mono uppercase px-2 py-0.5 rounded tracking-wider border border-emerald-500/10">
+                          ✓ Sync Active
+                        </span>
+                      )}
+                      {rlsBlockedKeys.length > 0 && !isRlsBannerDismissed && (
+                        <span 
+                          onClick={() => setIsRlsBannerDismissed(true)}
+                          className="text-[9px] bg-amber-600/20 text-amber-400 font-mono font-bold uppercase px-2 py-0.5 rounded tracking-wider border border-amber-500/20 animate-pulse cursor-pointer hover:bg-amber-600/30 transition-all flex items-center gap-1.5"
+                          title="Click to dismiss"
+                        >
+                          ⚠️ {rlsBlockedKeys.length} KEYS LOCALIZED <span className="text-[7px] text-amber-300/60 font-sans">(× Dismiss)</span>
+                        </span>
+                      )}
                     </div>
                     <h2 className="text-xl font-black text-white uppercase tracking-tight mt-1.5">
                       {currentUser?.name || "አስኪያጅ ተቆጣጣሪ (System Administrator)"}
@@ -6530,6 +6857,47 @@ export default function App() {
                     🚪 Logout | ውጣ
                   </button>
                 </div>
+
+                {/* RLS Educational Guidance Banner */}
+                {rlsBlockedKeys.length > 0 && !isRlsBannerDismissed && (
+                  <div className="bg-amber-950/20 border border-amber-500/30 p-5 rounded-2xl text-left space-y-3 shadow-lg relative overflow-hidden">
+                    <div className="absolute top-0 right-0 w-24 h-24 bg-amber-500/5 rounded-full blur-2xl pointer-events-none" />
+                    <div className="flex justify-between items-start gap-4">
+                      <div className="flex items-start gap-2.5">
+                        <span className="text-xl mt-0.5">⚠️</span>
+                        <div>
+                          <h4 className="text-xs font-black uppercase text-amber-300 font-mono">
+                            {appLang === 'am' ? 'የዳታቤዝ RLS ገደብ ታይቷል (DATABASE RLS RESTRICTIONS DETECTED)' : 'DATABASE RLS RESTRICTIONS DETECTED'}
+                          </h4>
+                          <p className="text-[10px] text-stone-300 font-sans mt-0.5">
+                            {appLang === 'am' 
+                              ? `የሱፓቤዝ ሰንጠረዥ የ RLS ፖሊሲ ስላልነቃ ${rlsBlockedKeys.length} የሚሆኑ የሲስተም መረጃዎች በደመና (Cloud) ላይ መመሳሰል አልቻሉም። በአካባቢያዊ ማከማቻ (Local Storage) ግንኙነት ግን በጥሩ ሁኔታ እየሰራ ነው።` 
+                              : `Supabase Row-Level Security (RLS) policies are restricting live cloud writes for ${rlsBlockedKeys.length} keys. Local backup state is active and working perfectly.`}
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => setIsRlsBannerDismissed(true)}
+                        className="bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 hover:text-amber-300 text-[9px] font-mono font-black uppercase px-2.5 py-1.5 rounded border border-amber-500/20 tracking-wider cursor-pointer shrink-0 transition-colors"
+                      >
+                        {appLang === 'am' ? 'ደብቅ (Dismiss)' : 'Dismiss'}
+                      </button>
+                    </div>
+                    <div className="bg-black/40 p-3 rounded-lg border border-white/5 space-y-2">
+                      <p className="text-[9px] text-stone-400 font-mono leading-relaxed">
+                        {appLang === 'am' 
+                          ? 'ይህንን ለማስተካከል፡ እባክዎ በ Supabase SQL Editor ውስጥ "supabase_schema.sql" የተባለውን ፋይል ኮፒ አድርገው ይሂዱ። በተለይ ይህንን ኮድ በመፈጸም RLS ፖሊሲውን መፍቀድ ይችላሉ፦'
+                          : 'To resolve this and activate full real-time cloud sync: Please open your Supabase SQL Editor and run the following security policy updates:'}
+                      </p>
+                      <pre className="text-[9px] font-mono text-amber-200 bg-neutral-950 p-2.5 rounded overflow-x-auto select-all border border-amber-500/20 leading-tight">
+{`ALTER TABLE system_settings ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow public select of system settings" ON system_settings FOR SELECT USING (true);
+CREATE POLICY "Allow public insert of system settings" ON system_settings FOR INSERT WITH CHECK (true);
+CREATE POLICY "Allow public update of system settings" ON system_settings FOR UPDATE USING (true) WITH CHECK (true);`}
+                      </pre>
+                    </div>
+                  </div>
+                )}
 
                 {/* Admin Navigation Tabs */}
                 <div className="flex border-b border-white/10 gap-1 overflow-x-auto no-scrollbar py-1">
@@ -6782,7 +7150,7 @@ export default function App() {
                                 </div>
                                 {editingStaff.photo && (
                                   <div className="mt-1 text-center bg-black/40 p-2 rounded border border-white/5 flex flex-col items-center space-y-2">
-                                    <img src={editingStaff.photo} className="w-12 h-12 rounded-full object-cover border border-white/10 shadow-md" alt="Staff Preview" />
+                                    <img src={editingStaff.photo} referrerPolicy="no-referrer" className="w-12 h-12 rounded-full object-cover border border-white/10 shadow-md" alt="Staff Preview" />
                                     {editingStaff.photo.startsWith('data:') && (
                                       <div className="bg-yellow-400/10 border border-yellow-400/20 p-2 rounded text-center w-full">
                                         <p className="text-[9px] text-yellow-400 font-bold leading-relaxed">
@@ -6819,7 +7187,7 @@ export default function App() {
                                 </div>
                                 {editingStaff.certificatePhoto && (
                                   <div className="mt-1 text-center bg-black/40 p-2 rounded border border-white/5 flex flex-col items-center space-y-2">
-                                    <img src={editingStaff.certificatePhoto} className="max-h-24 max-w-full rounded border border-white/10 shadow-md" alt="Certificate Preview" />
+                                    <img src={editingStaff.certificatePhoto} referrerPolicy="no-referrer" className="max-h-24 max-w-full rounded border border-white/10 shadow-md" alt="Certificate Preview" />
                                     <span className="text-[8px] text-[#00f5ff] mt-1 block">ሰነድ ዝግጁ ነው! (Academic Certificate Uploaded)</span>
                                     {editingStaff.certificatePhoto.startsWith('data:') && (
                                       <div className="bg-yellow-400/10 border border-yellow-400/20 p-2 rounded text-center w-full">
@@ -7052,7 +7420,7 @@ export default function App() {
                                 </div>
                                 {addStaffPhoto && (
                                   <div className="mt-1 text-center bg-black/40 p-2 rounded border border-white/5 flex flex-col items-center space-y-2">
-                                    <img src={addStaffPhoto} className="max-h-24 max-w-full rounded border border-white/10 shadow-md" alt="Profile Preview" />
+                                    <img src={addStaffPhoto} referrerPolicy="no-referrer" className="max-h-24 max-w-full rounded border border-white/10 shadow-md" alt="Profile Preview" />
                                     <span className="text-[8px] text-[#C1FF00] mt-1 block">ፎቶ ተጭኗል! (Employee Photo Loaded)</span>
                                     {addStaffPhoto.startsWith('data:') && (
                                       <div className="bg-yellow-400/10 border border-yellow-400/20 p-2 rounded text-center w-full">
@@ -7091,7 +7459,7 @@ export default function App() {
                                 </div>
                                 {addStaffCertificatePhoto && (
                                   <div className="mt-1 text-center bg-black/40 p-2 rounded border border-white/5 flex flex-col items-center space-y-2">
-                                    <img src={addStaffCertificatePhoto} className="max-h-24 max-w-full rounded border border-white/10 shadow-md" alt="Certificate Preview" />
+                                    <img src={addStaffCertificatePhoto} referrerPolicy="no-referrer" className="max-h-24 max-w-full rounded border border-white/10 shadow-md" alt="Certificate Preview" />
                                     <span className="text-[8px] text-[#00f5ff] mt-1 block">ሰነድ ዝግጁ ነው! (Academic Certificate Uploaded)</span>
                                     {addStaffCertificatePhoto.startsWith('data:') && (
                                       <div className="bg-yellow-400/10 border border-yellow-400/20 p-2 rounded text-center w-full">
@@ -7489,7 +7857,7 @@ export default function App() {
                               {editingMenuItem.image && (
                                 <div className="mt-2 text-center p-2.5 border border-white/5 bg-black/40 rounded flex flex-col items-center space-y-2">
                                   <p className="text-[9px] font-mono text-white/50">ምስል ቅድመ-እይታ (PREVIEW):</p>
-                                  <img src={editingMenuItem.image} className="max-h-24 max-w-full rounded border border-white/10 shadow-md" alt="Current Preview" />
+                                  <img src={editingMenuItem.image} referrerPolicy="no-referrer" className="max-h-24 max-w-full rounded border border-white/10 shadow-md" alt="Current Preview" />
                                   {editingMenuItem.image.startsWith('data:') && (
                                     <div className="bg-yellow-400/10 border border-yellow-400/20 p-2 rounded text-center w-full">
                                       <p className="text-[10px] text-yellow-400 font-bold leading-relaxed">
@@ -7623,7 +7991,7 @@ export default function App() {
                               {addMenuImage && (
                                 <div className="mt-2 text-center p-3 border border-white/5 bg-black/40 rounded flex flex-col items-center space-y-2">
                                   <p className="text-[9px] font-mono text-white/50">ምስል ቅድመ-እይታ (PREVIEW):</p>
-                                  <img src={addMenuImage} className="max-h-24 max-w-full rounded border border-white/10 shadow-md" alt="Preview" />
+                                  <img src={addMenuImage} referrerPolicy="no-referrer" className="max-h-24 max-w-full rounded border border-white/10 shadow-md" alt="Preview" />
                                   {addMenuImage.startsWith('data:') && (
                                     <div className="bg-yellow-400/10 border border-yellow-400/20 p-2 rounded text-center w-full">
                                       <p className="text-[10px] text-yellow-400 font-bold leading-relaxed">
@@ -8508,7 +8876,7 @@ export default function App() {
                               {editingPromo.poster && (
                                 <div className="mt-1 text-center bg-black/30 p-2.5 rounded border border-white/5 space-y-2">
                                   <p className="text-[9px] font-mono text-white/50">ምስል ቅድመ-እይታ (PREVIEW):</p>
-                                  <img src={editingPromo.poster} className="max-h-20 max-w-full rounded mx-auto shadow-md" alt="Preview backdrop" />
+                                  <img src={editingPromo.poster} referrerPolicy="no-referrer" className="max-h-20 max-w-full rounded mx-auto shadow-md" alt="Preview backdrop" />
                                   {editingPromo.poster.startsWith('data:') && (
                                     <div className="bg-yellow-400/10 border border-yellow-400/20 p-2 rounded text-center w-full">
                                       <p className="text-[10px] text-yellow-400 font-bold leading-relaxed">
@@ -8638,7 +9006,7 @@ export default function App() {
                               {addPromoPoster && (
                                 <div className="mt-1 text-center bg-black/40 p-2.5 rounded border border-white/5 space-y-2">
                                   <p className="text-[9px] font-mono text-white/50">ምስል ቅድመ-እይታ (PREVIEW):</p>
-                                  <img src={addPromoPoster} className="max-h-20 max-w-full rounded mx-auto shadow-md" alt="Poster thumbnail" />
+                                  <img src={addPromoPoster} referrerPolicy="no-referrer" className="max-h-20 max-w-full rounded mx-auto shadow-md" alt="Poster thumbnail" />
                                   {addPromoPoster.startsWith('data:') && (
                                     <div className="bg-yellow-400/10 border border-yellow-400/20 p-2 rounded text-center w-full">
                                       <p className="text-[10px] text-yellow-400 font-bold leading-relaxed">
@@ -8761,43 +9129,381 @@ export default function App() {
                 {/* TAB CONTENT 7: ABOUT US & FEEDBACK LOG MANAGEMENT */}
                 {activeAdminTab === 'lodgeinfo' && (
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pb-6">
-                    {/* Left Panel: Edit About Lodge section */}
-                    <div className="bg-[#121212] border border-white/10 p-5 h-fit space-y-4 rounded-xl shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
-                      <div className="flex items-center gap-2 border-b border-white/5 pb-2">
-                        <span className="text-xl">🌲</span>
-                        <h4 className="text-xs font-black uppercase text-white tracking-widest">
-                          የሎጅ መግለጫ ማስተካከያ (Lodge Description)
-                        </h4>
-                      </div>
-                      <p className="text-[10px] text-white/50 uppercase font-mono leading-relaxed">
-                        በደንበኛው የሜኑ ገጽ ግርጌ ላይ የሚታየውን "ስለ ፓፒረስ ሎጅ (About Our Lodge)" መግለጫ ጽሑፍ እዚህ ማስተካከል፣ መጨመር ወይም መቀነስ ይችላሉ።
-                      </p>
-                      <form 
-                        onSubmit={(e) => {
-                          e.preventDefault();
-                          setAboutLodgeText(aboutLodgeInput);
-                          alert('🍀 ስለ ሎጁ ያለው ማብራሪያ በተሳካ ሁኔታ ተቀይሯል! / Lodge info updated successfully.');
-                        }} 
-                        className="space-y-4"
-                      >
-                        <div>
-                          <label className="text-[9px] font-mono text-white/40 uppercase block mb-1">ስለ ሎጁ የሚጻፍ ጽሑፍ (LOBBY DESCRIPTION TEXT)</label>
-                          <textarea 
-                            value={aboutLodgeInput}
-                            onChange={(e) => setAboutLodgeInput(e.target.value)}
-                            required 
-                            rows={8}
-                            placeholder="ስለ ፓፒረስ ሎጅ መግለጫ እዚህ ይጻፉ..."
-                            className="w-full bg-[#181818] border border-white/10 text-white text-xs font-semibold p-3 outline-none focus:border-[#C1FF00] resize-none leading-relaxed"
-                          />
+                    {/* Left Panel: Edit Lodge settings & customizer cards */}
+                    <div className="flex flex-col gap-6">
+                      {/* Lodge Description */}
+                      <div className="bg-[#121212] border border-white/10 p-5 space-y-4 rounded-xl shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
+                        <div className="flex items-center gap-2 border-b border-white/5 pb-2">
+                          <span className="text-xl">🌲</span>
+                          <h4 className="text-xs font-black uppercase text-white tracking-widest">
+                            የሎጅ መግለጫ ማስተካከያ (Lodge Description)
+                          </h4>
                         </div>
-                        <button 
-                          type="submit" 
-                          className="w-full bg-[#C1FF00] hover:bg-white text-black text-xs font-black uppercase py-3 font-mono shadow-[2px_2px_0px_0px_#000] border border-black cursor-pointer"
+                        <p className="text-[10px] text-white/50 uppercase font-mono leading-relaxed">
+                          በደንበኛው የሜኑ ገጽ ግርጌ ላይ የሚታየውን "ስለ ፓፒረስ ሎጅ (About Our Lodge)" መግለጫ ጽሑፍ እዚህ ማስተካከል ይችላሉ።
+                        </p>
+                        <form 
+                          onSubmit={(e) => {
+                            e.preventDefault();
+                            setAboutLodgeText(aboutLodgeInput);
+                            alert('🍀 ስለ ሎጁ ያለው ማብራሪያ በተሳካ ሁኔታ ተቀይሯል! / Lodge info updated successfully.');
+                          }} 
+                          className="space-y-4"
                         >
-                          SAVE DESCRIPTION ✔️
-                        </button>
-                      </form>
+                          <div>
+                            <label className="text-[9px] font-mono text-white/40 uppercase block mb-1">ስለ ሎጁ የሚጻፍ ጽሑፍ (ABOUT DESCRIPTION TEXT)</label>
+                            <textarea 
+                              value={aboutLodgeInput}
+                              onChange={(e) => setAboutLodgeInput(e.target.value)}
+                              required 
+                              rows={5}
+                              placeholder="ስለ ፓፒረስ ሎጅ መግለጫ እዚህ ይጻፉ..."
+                              className="w-full bg-[#181818] border border-white/10 text-white text-xs font-semibold p-3 outline-none focus:border-[#C1FF00] resize-none leading-relaxed"
+                            />
+                          </div>
+                          <button 
+                            type="submit" 
+                            className="w-full bg-[#C1FF00] hover:bg-white text-black text-xs font-black uppercase py-3 font-mono shadow-[2px_2px_0px_0px_#000] border border-black cursor-pointer"
+                          >
+                            SAVE DESCRIPTION ✔️
+                          </button>
+                        </form>
+                      </div>
+
+                      {/* Hero Section Customizer */}
+                      <div className="bg-[#121212] border border-white/10 p-5 space-y-4 rounded-xl shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
+                        <div className="flex items-center gap-2 border-b border-white/5 pb-2">
+                          <span className="text-xl">✨</span>
+                          <h4 className="text-xs font-black uppercase text-white tracking-widest">
+                            የፊት ገጽ ርዕስ ማስተካከያ (Hero Landing Text)
+                          </h4>
+                        </div>
+                        <p className="text-[10px] text-white/50 uppercase font-mono leading-relaxed">
+                          በመጀመሪያው የፊት መግቢያ ገጽ ላይ የሚታዩትን አበይት ርዕሶች እና ገለጻዎች ያስተካክሉ።
+                        </p>
+                        <form 
+                          onSubmit={(e) => {
+                            e.preventDefault();
+                            setHeroTitleAm(heroTitleAmInput);
+                            setHeroTitleEn(heroTitleEnInput);
+                            setHeroSubtitleAm(heroSubtitleAmInput);
+                            setHeroSubtitleEn(heroSubtitleEnInput);
+                            setHeroIntroAm(heroIntroAmInput);
+                            setHeroIntroEn(heroIntroEnInput);
+                            alert('🍀 የፊት ገጽ ርዕስ በተሳካ ሁኔታ ተቀይሯል! / Hero text updated successfully.');
+                          }} 
+                          className="space-y-4 text-left"
+                        >
+                          <div className="space-y-3">
+                            <div>
+                              <label className="text-[9px] font-mono text-white/40 uppercase block mb-1">ዋና ርዕስ በአማርኛ (AMHARIC TITLE)</label>
+                              <input 
+                                type="text"
+                                value={heroTitleAmInput}
+                                onChange={(e) => setHeroTitleAmInput(e.target.value)}
+                                className="w-full bg-[#181818] border border-white/10 text-white text-xs font-semibold p-2.5 outline-none focus:border-[#C1FF00]"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[9px] font-mono text-white/40 uppercase block mb-1">ዋና ርዕስ በእንግሊዝኛ (ENGLISH TITLE)</label>
+                              <input 
+                                type="text"
+                                value={heroTitleEnInput}
+                                onChange={(e) => setHeroTitleEnInput(e.target.value)}
+                                className="w-full bg-[#181818] border border-white/10 text-white text-xs font-semibold p-2.5 outline-none focus:border-[#C1FF00]"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[9px] font-mono text-white/40 uppercase block mb-1">ንዑስ ርዕስ በአማርኛ (AMHARIC SUBTITLE)</label>
+                              <input 
+                                type="text"
+                                value={heroSubtitleAmInput}
+                                onChange={(e) => setHeroSubtitleAmInput(e.target.value)}
+                                className="w-full bg-[#181818] border border-white/10 text-white text-xs font-semibold p-2.5 outline-none focus:border-[#C1FF00]"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[9px] font-mono text-white/40 uppercase block mb-1">ንዑስ ርዕስ በእንግሊዝኛ (ENGLISH SUBTITLE)</label>
+                              <input 
+                                type="text"
+                                value={heroSubtitleEnInput}
+                                onChange={(e) => setHeroSubtitleEnInput(e.target.value)}
+                                className="w-full bg-[#181818] border border-white/10 text-white text-xs font-semibold p-2.5 outline-none focus:border-[#C1FF00]"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[9px] font-mono text-white/40 uppercase block mb-1">መግለጫ በአማርኛ (AMHARIC INTRO PARAGRAPH)</label>
+                              <textarea 
+                                value={heroIntroAmInput}
+                                onChange={(e) => setHeroIntroAmInput(e.target.value)}
+                                rows={3}
+                                className="w-full bg-[#181818] border border-white/10 text-white text-xs font-semibold p-2.5 outline-none focus:border-[#C1FF00] resize-none font-sans"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[9px] font-mono text-white/40 uppercase block mb-1">መግለጫ በእንግሊዝኛ (ENGLISH INTRO PARAGRAPH)</label>
+                              <textarea 
+                                value={heroIntroEnInput}
+                                onChange={(e) => setHeroIntroEnInput(e.target.value)}
+                                rows={3}
+                                className="w-full bg-[#181818] border border-white/10 text-white text-xs font-semibold p-2.5 outline-none focus:border-[#C1FF00] resize-none font-sans"
+                              />
+                            </div>
+                          </div>
+                          <button 
+                            type="submit" 
+                            className="w-full bg-[#C1FF00] hover:bg-white text-black text-xs font-black uppercase py-3 font-mono shadow-[2px_2px_0px_0px_#000] border border-black cursor-pointer"
+                          >
+                            SAVE HERO TEXT ✔️
+                          </button>
+                        </form>
+                      </div>
+
+                      {/* Contact Info Customizer */}
+                      <div className="bg-[#121212] border border-white/10 p-5 space-y-4 rounded-xl shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
+                        <div className="flex items-center gap-2 border-b border-white/5 pb-2">
+                          <span className="text-xl">📞</span>
+                          <h4 className="text-xs font-black uppercase text-white tracking-widest">
+                            📶 HOTLINE / የስልክ ቁጥር እና LOCATION / አድራሻ ማስተካከያ (Lodge Contacts & Location)
+                          </h4>
+                        </div>
+                        <p className="text-[10px] text-white/50 uppercase font-mono leading-relaxed">
+                          በሎጅ አስኪያጅ መቆጣጠሪያ ላይ የስልክ ቁጥር (HOTLINE) እና አድራሻ (LOCATION) እዚህ ማስተካከል ይችላሉ።
+                        </p>
+                        <form 
+                          onSubmit={(e) => {
+                            e.preventDefault();
+                            setContactHotline1(contactHotline1Input);
+                            setContactHotline2(contactHotline2Input);
+                            setContactLocation(contactLocationInput);
+                            setContactAddress(contactAddressInput);
+                            alert('🍀 የHOTLINE የስልክ ቁጥር እና የLOCATION አድራሻ መረጃ በተሳካ ሁኔታ ተቀይሯል! / Contacts & Location updated successfully.');
+                          }} 
+                          className="space-y-4 text-left"
+                        >
+                          <div className="space-y-3">
+                            <div>
+                              <label className="text-[9px] font-mono text-white/40 uppercase block mb-1">ቀዳሚ የስልክ መስመር (PRIMARY HOTLINE)</label>
+                              <input 
+                                type="text"
+                                value={contactHotline1Input}
+                                onChange={(e) => setContactHotline1Input(e.target.value)}
+                                className="w-full bg-[#181818] border border-white/10 text-white text-xs font-semibold p-2.5 outline-none focus:border-[#C1FF00]"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[9px] font-mono text-white/40 uppercase block mb-1">ሁለተኛ የስልክ መስመር (SECONDARY HOTLINE)</label>
+                              <input 
+                                type="text"
+                                value={contactHotline2Input}
+                                onChange={(e) => setContactHotline2Input(e.target.value)}
+                                className="w-full bg-[#181818] border border-white/10 text-white text-xs font-semibold p-2.5 outline-none focus:border-[#C1FF00]"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[9px] font-mono text-white/40 uppercase block mb-1">ከተማ / ሀገር (LOCATION CITY)</label>
+                              <input 
+                                type="text"
+                                value={contactLocationInput}
+                                onChange={(e) => setContactLocationInput(e.target.value)}
+                                className="w-full bg-[#181818] border border-white/10 text-white text-xs font-semibold p-2.5 outline-none focus:border-[#C1FF00]"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[9px] font-mono text-white/40 uppercase block mb-1">ጎዳና / ሰፈር (STREET ADDRESS)</label>
+                              <input 
+                                type="text"
+                                value={contactAddressInput}
+                                onChange={(e) => setContactAddressInput(e.target.value)}
+                                className="w-full bg-[#181818] border border-white/10 text-white text-xs font-semibold p-2.5 outline-none focus:border-[#C1FF00]"
+                              />
+                            </div>
+                          </div>
+                          <button 
+                            type="submit" 
+                            className="w-full bg-[#C1FF00] hover:bg-white text-black text-xs font-black uppercase py-3 font-mono shadow-[2px_2px_0px_0px_#000] border border-black cursor-pointer"
+                          >
+                            SAVE CONTACTS ✔️
+                          </button>
+                        </form>
+                      </div>
+
+                      {/* Guest WiFi Customizer */}
+                      <div className="bg-[#121212] border border-white/10 p-5 space-y-4 rounded-xl shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
+                        <div className="flex items-center gap-2 border-b border-white/5 pb-2">
+                          <span className="text-xl">📶</span>
+                          <h4 className="text-xs font-black uppercase text-white tracking-widest">
+                            የእንግዳ ዋይፋይ ማስተካከያ (Guest WiFi Settings)
+                          </h4>
+                        </div>
+                        <p className="text-[10px] text-white/50 uppercase font-mono leading-relaxed">
+                          በእንግዳ ገጽ ግርጌ ላይ የሚታየውን የእንግዳ ዋይፋይ ስም (SSID) እና የይለፍ ቃል (Password) እዚህ ይቀይሩ።
+                        </p>
+                        <form 
+                          onSubmit={(e) => {
+                            e.preventDefault();
+                            setWifiGuestSsid(wifiGuestSsidInput);
+                            setWifiGuestPassword(wifiGuestPasswordInput);
+                            alert('📶 የእንግዳ ዋይፋይ መረጃ በተሳካ ሁኔታ ተቀይሯል! / WiFi settings updated successfully.');
+                          }} 
+                          className="space-y-4 text-left"
+                        >
+                          <div className="space-y-3">
+                            <div>
+                              <label className="text-[9px] font-mono text-white/40 uppercase block mb-1">የዋይፋይ ስም (WIFI SSID)</label>
+                              <input 
+                                type="text"
+                                value={wifiGuestSsidInput}
+                                onChange={(e) => setWifiGuestSsidInput(e.target.value)}
+                                className="w-full bg-[#181818] border border-white/10 text-white text-xs font-semibold p-2.5 outline-none focus:border-[#C1FF00]"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[9px] font-mono text-white/40 uppercase block mb-1">የይለፍ ቃል (WIFI PASSWORD)</label>
+                              <input 
+                                type="text"
+                                value={wifiGuestPasswordInput}
+                                onChange={(e) => setWifiGuestPasswordInput(e.target.value)}
+                                className="w-full bg-[#181818] border border-white/10 text-white text-xs font-semibold p-2.5 outline-none focus:border-[#C1FF00]"
+                              />
+                            </div>
+                          </div>
+                          <button 
+                            type="submit" 
+                            className="w-full bg-[#C1FF00] hover:bg-white text-black text-xs font-black uppercase py-3 font-mono shadow-[2px_2px_0px_0px_#000] border border-black cursor-pointer"
+                          >
+                            SAVE WiFi SETTINGS ✔️
+                          </button>
+                        </form>
+                      </div>
+
+                      {/* Dining Hours Customizer */}
+                      <div className="bg-[#121212] border border-white/10 p-5 space-y-4 rounded-xl shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
+                        <div className="flex items-center gap-2 border-b border-white/5 pb-2">
+                          <span className="text-xl">🍳</span>
+                          <h4 className="text-xs font-black uppercase text-white tracking-widest">
+                            የምግብ ሰዓት ማስተካከያ (Dining & Breakfast Hours)
+                          </h4>
+                        </div>
+                        <p className="text-[10px] text-white/50 uppercase font-mono leading-relaxed">
+                          ቁርስ እና ሌሎች የምግብ ሰዓት መግለጫዎችን እዚህ ማስተካከል ይችላሉ።
+                        </p>
+                        <form 
+                          onSubmit={(e) => {
+                            e.preventDefault();
+                            setDiningBreakfastTitleAm(diningBreakfastTitleAmInput);
+                            setDiningBreakfastTitleEn(diningBreakfastTitleEnInput);
+                            setDiningBreakfastHoursAm(diningBreakfastHoursAmInput);
+                            setDiningBreakfastHoursEn(diningBreakfastHoursEnInput);
+                            alert('🍳 የምግብ ሰዓት መረጃ በተሳካ ሁኔታ ተቀይሯል! / Dining hours updated successfully.');
+                          }} 
+                          className="space-y-4 text-left"
+                        >
+                          <div className="space-y-3">
+                            <div>
+                              <label className="text-[9px] font-mono text-white/40 uppercase block mb-1">የምግብ መገለጫ በአማርኛ (TITLE AMHARIC)</label>
+                              <input 
+                                type="text"
+                                value={diningBreakfastTitleAmInput}
+                                onChange={(e) => setDiningBreakfastTitleAmInput(e.target.value)}
+                                className="w-full bg-[#181818] border border-white/10 text-white text-xs font-semibold p-2.5 outline-none focus:border-[#C1FF00]"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[9px] font-mono text-white/40 uppercase block mb-1">የምግብ መገለጫ በእንግሊዝኛ (TITLE ENGLISH)</label>
+                              <input 
+                                type="text"
+                                value={diningBreakfastTitleEnInput}
+                                onChange={(e) => setDiningBreakfastTitleEnInput(e.target.value)}
+                                className="w-full bg-[#181818] border border-white/10 text-white text-xs font-semibold p-2.5 outline-none focus:border-[#C1FF00]"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[9px] font-mono text-white/40 uppercase block mb-1">የምግብ ሰዓት በአማርኛ (HOURS AMHARIC)</label>
+                              <input 
+                                type="text"
+                                value={diningBreakfastHoursAmInput}
+                                onChange={(e) => setDiningBreakfastHoursAmInput(e.target.value)}
+                                className="w-full bg-[#181818] border border-white/10 text-white text-xs font-semibold p-2.5 outline-none focus:border-[#C1FF00]"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[9px] font-mono text-white/40 uppercase block mb-1">የምግብ ሰዓት በእንግሊዝኛ (HOURS ENGLISH)</label>
+                              <input 
+                                type="text"
+                                value={diningBreakfastHoursEnInput}
+                                onChange={(e) => setDiningBreakfastHoursEnInput(e.target.value)}
+                                className="w-full bg-[#181818] border border-white/10 text-white text-xs font-semibold p-2.5 outline-none focus:border-[#C1FF00]"
+                              />
+                            </div>
+                          </div>
+                          <button 
+                            type="submit" 
+                            className="w-full bg-[#C1FF00] hover:bg-white text-black text-xs font-black uppercase py-3 font-mono shadow-[2px_2px_0px_0px_#000] border border-black cursor-pointer"
+                          >
+                            SAVE DINING HOURS ✔️
+                          </button>
+                        </form>
+                      </div>
+
+                      {/* Reception Assistance Customizer */}
+                      <div className="bg-[#121212] border border-white/10 p-5 space-y-4 rounded-xl shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
+                        <div className="flex items-center gap-2 border-b border-white/5 pb-2">
+                          <span className="text-xl">🛎️</span>
+                          <h4 className="text-xs font-black uppercase text-white tracking-widest">
+                            የሪሴብሽን መረጃ ማስተካከያ (Reception Assistance Details)
+                          </h4>
+                        </div>
+                        <p className="text-[10px] text-white/50 uppercase font-mono leading-relaxed">
+                          የክፍል ውስጥ ስልክ ጥሪ ወይም የአደጋ ጊዜ የእርዳታ መስመር ስልክ እዚህ ያስተካክሉ።
+                        </p>
+                        <form 
+                          onSubmit={(e) => {
+                            e.preventDefault();
+                            setReceptionAssistanceAm(receptionAssistanceAmInput);
+                            setReceptionAssistanceEn(receptionAssistanceEnInput);
+                            setReceptionEmergency(receptionEmergencyInput);
+                            alert('🛎️ የሪሴብሽን መረጃ በተሳካ ሁኔታ ተቀይሯል! / Reception details updated successfully.');
+                          }} 
+                          className="space-y-4 text-left"
+                        >
+                          <div className="space-y-3">
+                            <div>
+                              <label className="text-[9px] font-mono text-white/40 uppercase block mb-1">መመሪያ በአማርኛ (INSTRUCTION AMHARIC)</label>
+                              <input 
+                                type="text"
+                                value={receptionAssistanceAmInput}
+                                onChange={(e) => setReceptionAssistanceAmInput(e.target.value)}
+                                className="w-full bg-[#181818] border border-white/10 text-white text-xs font-semibold p-2.5 outline-none focus:border-[#C1FF00]"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[9px] font-mono text-white/40 uppercase block mb-1">መመሪያ በእንግሊዝኛ (INSTRUCTION ENGLISH)</label>
+                              <input 
+                                type="text"
+                                value={receptionAssistanceEnInput}
+                                onChange={(e) => setReceptionAssistanceEnInput(e.target.value)}
+                                className="w-full bg-[#181818] border border-white/10 text-white text-xs font-semibold p-2.5 outline-none focus:border-[#C1FF00]"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[9px] font-mono text-white/40 uppercase block mb-1">የአደጋ ጊዜ ስልክ (EMERGENCY HOTLINE)</label>
+                              <input 
+                                type="text"
+                                value={receptionEmergencyInput}
+                                onChange={(e) => setReceptionEmergencyInput(e.target.value)}
+                                className="w-full bg-[#181818] border border-white/10 text-white text-xs font-semibold p-2.5 outline-none focus:border-[#C1FF00]"
+                              />
+                            </div>
+                          </div>
+                          <button 
+                            type="submit" 
+                            className="w-full bg-[#C1FF00] hover:bg-white text-black text-xs font-black uppercase py-3 font-mono shadow-[2px_2px_0px_0px_#000] border border-black cursor-pointer"
+                          >
+                            SAVE RECEPTION INFO ✔️
+                          </button>
+                        </form>
+                      </div>
                     </div>
 
                     {/* Right Panel: Admin Feedbacks Monitor & Replies */}
@@ -9348,7 +10054,7 @@ export default function App() {
                         {tempLogoFile && (
                           <div className="mt-3 p-3 bg-black/40 border border-dashed border-[#C1FF00]/40 rounded-lg space-y-3 flex flex-col items-center">
                             <p className="text-[10px] font-bold text-yellow-400 font-mono text-center">⚠️ አዲስ የሎጎ ምስል ተመርጧል! ለማስቀመጥ ከታች ያለውን አረንጓዴ የ "SAVE" ቁልፍ ይጫኑ።</p>
-                            <img src={tempLogoFile} className="max-h-24 max-w-full rounded border border-white/10 shadow-lg" alt="Selected Logo Preview" />
+                            <img src={tempLogoFile} referrerPolicy="no-referrer" className="max-h-24 max-w-full rounded border border-white/10 shadow-lg" alt="Selected Logo Preview" />
                             <div className="flex gap-2 w-full justify-center">
                               <button
                                 type="button"
@@ -9421,7 +10127,7 @@ export default function App() {
                         {logoUrl ? (
                           <div className="space-y-4 relative z-10 flex flex-col items-center">
                             <div className="w-28 h-28 rounded-3xl overflow-hidden relative">
-                              <img src={logoUrl} alt="Live Logo Preview" className="w-full h-full object-cover" />
+                              <img src={logoUrl} alt="Live Logo Preview" referrerPolicy="no-referrer" className="w-full h-full object-cover" />
                             </div>
                             <div>
                               <h4 className="text-base font-extrabold text-white tracking-widest uppercase">HAWASSA PAPYRUS</h4>
@@ -9557,7 +10263,7 @@ export default function App() {
                             />
                             {galleryNewImgUrl && (
                               <div className="mt-2 p-2 bg-black/40 border border-[#C1FF00]/20 rounded flex items-center gap-3">
-                                <img src={galleryNewImgUrl} className="h-10 w-10 object-cover rounded border border-white/10" alt="Preview" />
+                                <img src={galleryNewImgUrl} referrerPolicy="no-referrer" className="h-10 w-10 object-cover rounded border border-white/10" alt="Preview" />
                                 <div className="flex-1 min-w-0">
                                   <p className="text-[9px] text-emerald-400 font-bold truncate">✓ Uploaded to Supabase Storage!</p>
                                   <p className="text-[8px] text-white/40 truncate font-mono">{galleryNewImgUrl}</p>
@@ -9673,11 +10379,25 @@ export default function App() {
                       👑
                     </div>
                     <div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <span className="text-[8px] bg-yellow-400 text-black font-mono font-black uppercase px-2 py-0.5 rounded">
                           SENIOR MANAGER
                         </span>
                         <span className="text-[9px] text-white/50 font-mono">AUTHORIZED SESSION</span>
+                        {syncError && (
+                          <span className="text-[8px] bg-red-600/20 text-red-400 font-mono font-bold uppercase px-2 py-0.5 rounded border border-red-500/20 animate-pulse">
+                            ⚠️ SYNC WARNING
+                          </span>
+                        )}
+                        {rlsBlockedKeys.length > 0 && !isRlsBannerDismissed && (
+                          <span 
+                            onClick={() => setIsRlsBannerDismissed(true)}
+                            className="text-[8px] bg-amber-600/20 text-amber-400 font-mono font-bold uppercase px-2 py-0.5 rounded border border-amber-500/20 animate-pulse cursor-pointer hover:bg-amber-600/30 transition-all"
+                            title="Click to dismiss"
+                          >
+                            ⚠️ {rlsBlockedKeys.length} CLOUD KEYS LOCALIZED (RLS ACTIVE) <span className="text-[7px] text-amber-300/60 font-sans font-normal">(× Dismiss)</span>
+                          </span>
+                        )}
                       </div>
                       <h2 className="text-xl font-bold text-white tracking-tight uppercase mt-0.5">
                         {currentUser?.name || "ኪያ ማሞ (Manager)"}
@@ -10514,7 +11234,7 @@ export default function App() {
                                                     {ord.receiptScreenshot ? (
                                                       <div className="space-y-1.5 w-full">
                                                         <div className="relative border border-white/10 bg-black max-h-12 flex justify-center">
-                                                          <img src={ord.receiptScreenshot} className="h-10 object-contain" alt="Receipt proof" />
+                                                          <img src={ord.receiptScreenshot} referrerPolicy="no-referrer" className="h-10 object-contain" alt="Receipt proof" />
                                                         </div>
                                                         <a href={ord.receiptScreenshot} target="_blank" referrerPolicy="no-referrer" className="text-[8px] text-[#C1FF00] hover:underline font-bold block text-center uppercase">🔍 VIEW FULL</a>
                                                         {ord.receiptComment && (
@@ -11606,6 +12326,12 @@ export default function App() {
 
                                   <div className="flex gap-2 w-full sm:w-auto mt-1">
                                     <button
+                                      onClick={() => setAdjustingOrder(ord)}
+                                      className="flex-1 sm:flex-none bg-sky-500 hover:bg-sky-600 text-black text-[10.5px] font-black uppercase px-3.5 py-2 rounded-lg cursor-pointer transition-colors font-mono"
+                                    >
+                                      ✏️ ማስተካከያ (Adjust)
+                                    </button>
+                                    <button
                                       onClick={() => {
                                         askConfirmAndRun(
                                           `የጠረጴዛ/ክፍል ${ord.location} ሂሳብ መጠን ${subtotal} ብር ለመቀበል ይፈልጋሉ? Order status will be updated to "Paid".`,
@@ -11740,7 +12466,7 @@ export default function App() {
                   <button
                     onClick={() => {
                       setActiveRole('customer');
-                      localStorage.removeItem('papyrus_active_staff_session');
+                      sessionStorage.removeItem('papyrus_active_staff_session');
                     }}
                     className="flex items-center gap-2 bg-red-950/40 border border-red-500/25 hover:bg-red-600 hover:text-white text-red-400 px-4 py-2 font-black text-[10px] uppercase tracking-widest transition-all cursor-pointer font-sans"
                   >
@@ -12119,6 +12845,124 @@ export default function App() {
           onClose={() => setPrintingStaffMember(null)} 
         />
       )}
+
+      {/* ORDER ADJUSTMENT DIALOG PANEL */}
+      <OrderAdjustmentModal
+        isOpen={adjustingOrder !== null}
+        onClose={() => setAdjustingOrder(null)}
+        order={adjustingOrder}
+        menuItems={menuItems}
+        onSave={handleSaveOrderAdjustments}
+        serviceChargeRate={serviceChargeRate}
+        vatRate={vatRate}
+        appLang={appLang}
+      />
+
+      {/* BEAUTIFUL GALLERY INTERACTIVE LIGHTBOX WITH BLURRED IMAGE BACKGROUND */}
+      <AnimatePresence>
+        {selectedGalleryIdx !== null && galleryItems[selectedGalleryIdx] && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.3 }}
+            className="fixed inset-0 z-[9999] flex flex-col items-center justify-between bg-black/95 select-none overflow-hidden"
+          >
+            {/* Blurry ambient background of the active image */}
+            <div 
+              className="absolute inset-0 bg-cover bg-center filter blur-[40px] scale-110 opacity-40 transition-all duration-500 pointer-events-none" 
+              style={{ backgroundImage: `url(${galleryItems[selectedGalleryIdx].image_url})` }}
+            />
+
+            {/* Top Bar with title & close button */}
+            <div className="relative z-10 w-full flex items-center justify-between p-4 bg-gradient-to-b from-black/80 to-transparent">
+              <div className="flex flex-col">
+                <span className="text-[10px] text-[#C1FF00] font-mono font-black uppercase tracking-widest">
+                  {galleryItems[selectedGalleryIdx].category || 'Papyrus Gallery'}
+                </span>
+                <h4 className="text-sm font-bold text-white tracking-wide">
+                  {appLang === 'am' ? galleryItems[selectedGalleryIdx].title_am : galleryItems[selectedGalleryIdx].title_en}
+                </h4>
+              </div>
+              
+              <button 
+                onClick={() => setSelectedGalleryIdx(null)}
+                className="bg-white/10 hover:bg-[#C1FF00] hover:text-black text-white p-2.5 rounded-full transition-all duration-200 border border-white/10 flex items-center justify-center cursor-pointer"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+              </button>
+            </div>
+
+            {/* Mid Container: Main Image and Prev/Next buttons */}
+            <div className="relative z-10 flex-1 w-full flex items-center justify-between px-2 sm:px-8 max-h-[75vh]">
+              {/* Prev Button */}
+              <button 
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSelectedGalleryIdx(prev => prev !== null ? (prev - 1 + galleryItems.length) % galleryItems.length : null);
+                }}
+                className="bg-black/60 hover:bg-[#C1FF00] hover:text-black text-white p-3 rounded-full transition-all duration-200 border border-white/10 flex items-center justify-center shrink-0 cursor-pointer shadow-lg"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+              </button>
+
+              {/* Main Image Stage */}
+              <div className="relative flex items-center justify-center w-full h-full max-w-4xl px-4">
+                <motion.img
+                  key={selectedGalleryIdx}
+                  initial={{ opacity: 0, scale: 0.95 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.95 }}
+                  transition={{ duration: 0.3, ease: "easeOut" }}
+                  src={galleryItems[selectedGalleryIdx].image_url}
+                  alt="Gallery Item"
+                  referrerPolicy="no-referrer"
+                  className="max-w-full max-h-[70vh] object-contain rounded-xl border border-white/20 shadow-2xl shadow-[#C1FF00]/10"
+                />
+              </div>
+
+              {/* Next Button */}
+              <button 
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSelectedGalleryIdx(prev => prev !== null ? (prev + 1) % galleryItems.length : null);
+                }}
+                className="bg-black/60 hover:bg-[#C1FF00] hover:text-[#000] text-white p-3 rounded-full transition-all duration-200 border border-white/10 flex items-center justify-center shrink-0 cursor-pointer shadow-lg"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+              </button>
+            </div>
+
+            {/* Bottom Bar: Thumbnails and descriptive metadata */}
+            <div className="relative z-10 w-full bg-gradient-to-t from-black/90 to-transparent p-6 flex flex-col items-center gap-4 border-t border-white/5">
+              {/* Image position text */}
+              <div className="text-[11px] font-mono text-white/50 bg-white/5 px-3 py-1 rounded-full border border-white/10">
+                IMAGE <span className="text-[#C1FF00] font-black">{selectedGalleryIdx + 1}</span> OF <span className="font-bold">{galleryItems.length}</span>
+              </div>
+
+              {/* Horizontal Scrollable Thumbnails */}
+              <div className="flex items-center gap-2 overflow-x-auto py-1 px-4 max-w-full scrollbar-none">
+                {galleryItems.map((item, idx) => (
+                  <button
+                    key={item.id || idx}
+                    onClick={() => setSelectedGalleryIdx(idx)}
+                    className={`relative shrink-0 w-12 h-12 rounded-lg overflow-hidden border-2 transition-all duration-200 cursor-pointer ${
+                      selectedGalleryIdx === idx ? 'border-[#C1FF00] scale-105 shadow-md shadow-[#C1FF00]/20' : 'border-white/20 hover:border-white/50 opacity-60 hover:opacity-100'
+                    }`}
+                  >
+                    <img
+                      src={item.image_url}
+                      alt="Thumbnail"
+                      className="w-full h-full object-cover animate-fade-in"
+                      referrerPolicy="no-referrer"
+                    />
+                  </button>
+                ))}
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
     </div>
   );

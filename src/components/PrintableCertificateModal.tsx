@@ -104,6 +104,7 @@ export default function PrintableCertificateModal({ staff, onClose }: PrintableC
                   <p className="text-[8px] font-mono text-slate-400 uppercase tracking-wider font-extrabold">የሰራተኛው ፎቶ / Photo</p>
                   <img 
                     src={staff.photo || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200'} 
+                    referrerPolicy="no-referrer"
                     className="w-36 h-36 border-4 border-slate-900 object-cover rounded-none shadow-md mx-auto" 
                     alt="Employee Photo" 
                   />
@@ -114,6 +115,7 @@ export default function PrintableCertificateModal({ staff, onClose }: PrintableC
                   <p className="text-[8px] font-mono text-slate-500 uppercase tracking-wider font-bold">ዲጂታል ማረጋገጫ / QR VERIFIED</p>
                   <img 
                     src={qrCodeUrl} 
+                    referrerPolicy="no-referrer"
                     className="w-24 h-24 mx-auto object-contain border border-slate-100" 
                     alt="Verification QR" 
                   />
@@ -188,6 +190,7 @@ export default function PrintableCertificateModal({ staff, onClose }: PrintableC
                     <div className="border-2 border-dashed border-slate-300 p-2 bg-slate-50 flex items-center justify-center max-w-full">
                       <img 
                         src={staff.certificatePhoto} 
+                        referrerPolicy="no-referrer"
                         className="max-h-[220px] max-w-full object-contain print:max-h-[280px]" 
                         alt="Attached Certificate" 
                       />

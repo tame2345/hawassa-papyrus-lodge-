@@ -107,6 +107,21 @@ CREATE TABLE IF NOT EXISTS system_settings (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
+-- Enable RLS and add policies to ensure reads and writes function correctly in bypassed/demo modes
+ALTER TABLE system_settings ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Allow public select of system settings" ON system_settings
+    FOR SELECT USING (true);
+
+CREATE POLICY "Allow public insert of system settings" ON system_settings
+    FOR INSERT WITH CHECK (true);
+
+CREATE POLICY "Allow public update of system settings" ON system_settings
+    FOR UPDATE USING (true) WITH CHECK (true);
+
+CREATE POLICY "Allow public delete of system settings" ON system_settings
+    FOR DELETE USING (true);
+
 
 -- ==========================================
 -- INDEXES FOR FAST RETRIEVAL & QUERYING

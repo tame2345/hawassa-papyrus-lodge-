@@ -582,10 +582,7 @@ export default function CloudVault({ onBack, appLang = 'am' }: CloudVaultProps) 
   const [syncStatus, setSyncStatus] = useState<'synced' | 'local' | 'syncing'>('local');
   const [dragActive, setDragActive] = useState(false);
   const [storageUsed, setStorageUsed] = useState(0); // in bytes
-  const [storageLimit, setStorageLimit] = useState<number>(() => {
-    const saved = localStorage.getItem('papyrus_storage_limit');
-    return saved ? parseInt(saved, 10) : 50 * 1024 * 1024; // default 50MB
-  });
+  const [storageLimit, setStorageLimit] = useState<number>(50 * 1024 * 1024); // default 50MB (dynamically fetched on mount)
   const [previewFile, setPreviewFile] = useState<VaultFile | null>(null);
 
   // New File Form State
@@ -654,48 +651,50 @@ export default function CloudVault({ onBack, appLang = 'am' }: CloudVaultProps) 
     }
   ];
 
-  // Load files from Supabase or LocalStorage
+  // Load files from Supabase using system_settings
   useEffect(() => {
     async function loadFiles() {
       setLoading(true);
       try {
-        // Attempt Supabase fetch
         let fetchedFiles: VaultFile[] = [];
         if (supabase) {
+          // 1. Fetch vault files
           const { data, error } = await supabase
-            .from('lodge_vault_files')
-            .select('*')
-            .order('uploadedAt', { ascending: false });
+            .from('system_settings')
+            .select('value')
+            .eq('key', 'vault_files')
+            .single();
 
-          if (!error && data && data.length > 0) {
-            fetchedFiles = data;
+          if (!error && data && data.value && Array.isArray(data.value.files)) {
+            fetchedFiles = data.value.files;
             setSyncStatus('synced');
+          }
+
+          // 2. Fetch storage limit
+          const { data: limitData, error: limitError } = await supabase
+            .from('system_settings')
+            .select('value')
+            .eq('key', 'storage_limit')
+            .single();
+          if (!limitError && limitData && limitData.value && typeof limitData.value.limit === 'number') {
+            setStorageLimit(limitData.value.limit);
           }
         }
 
-        // Fallback to local storage if supabase table empty or error
         if (fetchedFiles.length === 0) {
-          const localStored = localStorage.getItem('papyrus_vault_files');
-          if (localStored) {
-            fetchedFiles = JSON.parse(localStored);
-            setSyncStatus('local');
-          } else {
-            fetchedFiles = defaultFiles;
-            localStorage.setItem('papyrus_vault_files', JSON.stringify(defaultFiles));
-            setSyncStatus('local');
+          fetchedFiles = defaultFiles;
+          if (supabase) {
+            await supabase
+              .from('system_settings')
+              .upsert({ key: 'vault_files', value: { files: defaultFiles } });
           }
+          setSyncStatus('synced');
         }
 
         setFiles(fetchedFiles);
       } catch (err) {
         console.error('Error loading vault files:', err);
-        // Fallback
-        const localStored = localStorage.getItem('papyrus_vault_files');
-        if (localStored) {
-          setFiles(JSON.parse(localStored));
-        } else {
-          setFiles(defaultFiles);
-        }
+        setFiles(defaultFiles);
         setSyncStatus('local');
       } finally {
         setLoading(false);
@@ -719,21 +718,18 @@ export default function CloudVault({ onBack, appLang = 'am' }: CloudVaultProps) 
         throw new Error('Supabase client not configured.');
       }
 
-      // Upsert local files to Supabase 'lodge_vault_files' table
       const { error } = await supabase
-        .from('lodge_vault_files')
-        .upsert(files, { onConflict: 'id' });
+        .from('system_settings')
+        .upsert({ key: 'vault_files', value: { files } });
 
       if (error) throw error;
 
       setSyncStatus('synced');
       alert(t('sync_success'));
     } catch (err: any) {
-      console.warn('Sync failed, falling back to local persistent storage:', err);
-      // Ensure local sync
-      localStorage.setItem('papyrus_vault_files', JSON.stringify(files));
+      console.warn('Sync failed:', err);
       setSyncStatus('local');
-      alert(`ℹ️ ${t('sync_local_warning')} (${err.message || 'database offline'})`);
+      alert(`ℹ️ Sync failed: ${err.message || 'database offline'}`);
     }
   };
 
@@ -849,15 +845,16 @@ export default function CloudVault({ onBack, appLang = 'am' }: CloudVaultProps) 
 
       const updatedFiles = [newFile, ...files];
       setFiles(updatedFiles);
-      localStorage.setItem('papyrus_vault_files', JSON.stringify(updatedFiles));
 
-      // 3. Write record to Supabase database table 'lodge_vault_files'
+      // 3. Write record to Supabase system_settings under key 'vault_files'
       try {
-        const { error: dbErr } = await supabase.from('lodge_vault_files').insert([newFile]);
+        const { error: dbErr } = await supabase
+          .from('system_settings')
+          .upsert({ key: 'vault_files', value: { files: updatedFiles } });
         if (dbErr) throw dbErr;
         setSyncStatus('synced');
       } catch (dbErr) {
-        console.error('Failed to insert file record to DB, saved locally:', dbErr);
+        console.error('Failed to update vault files on Supabase:', dbErr);
         setSyncStatus('local');
       }
 
@@ -883,12 +880,13 @@ export default function CloudVault({ onBack, appLang = 'am' }: CloudVaultProps) 
       const fileToDelete = files.find(f => f.id === id);
       const updatedFiles = files.filter(f => f.id !== id);
       setFiles(updatedFiles);
-      localStorage.setItem('papyrus_vault_files', JSON.stringify(updatedFiles));
 
       if (supabase) {
         try {
-          // 1. Delete DB record
-          await supabase.from('lodge_vault_files').delete().eq('id', id);
+          // 1. Delete DB record by saving updated list
+          await supabase
+            .from('system_settings')
+            .upsert({ key: 'vault_files', value: { files: updatedFiles } });
 
           // 2. Also delete from Supabase storage if applicable
           if (fileToDelete && fileToDelete.url) {
@@ -897,6 +895,7 @@ export default function CloudVault({ onBack, appLang = 'am' }: CloudVaultProps) 
               await supabase.storage.from('lodge-media').remove([decodeURIComponent(match[1])]);
             }
           }
+          setSyncStatus('synced');
         } catch (dbErr) {
           console.error('Failed database delete:', dbErr);
           setSyncStatus('local');
@@ -1046,8 +1045,15 @@ export default function CloudVault({ onBack, appLang = 'am' }: CloudVaultProps) 
                 <button
                   key={tier.name}
                   onClick={() => {
-                    localStorage.setItem('papyrus_storage_limit', tier.value.toString());
                     setStorageLimit(tier.value);
+                    if (supabase) {
+                      supabase
+                        .from('system_settings')
+                        .upsert({ key: 'storage_limit', value: { limit: tier.value } })
+                        .then(({ error }) => {
+                          if (error) console.error('Failed to sync storage limit:', error);
+                        });
+                    }
                     if ('speechSynthesis' in window) {
                       const msg = new SpeechSynthesisUtterance();
                       msg.text = t('tts_upgrade_success').replace('{label}', tier.label);

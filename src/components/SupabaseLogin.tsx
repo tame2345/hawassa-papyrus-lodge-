@@ -46,10 +46,10 @@ export const SupabaseLogin: React.FC<SupabaseLoginProps> = ({ appLang }) => {
         // Fallback for demo or development purposes if Supabase project is not yet provisioned
         if (email.trim() === 'tamecolorgrading@gmail.com' && password.trim() === 'Admin123!') {
           // Bypassed mode for preview/development
-          localStorage.setItem('supabase_session_bypassed', 'true');
-          localStorage.setItem('supabase_bypassed_user_email', email.trim());
-          localStorage.setItem('supabase_bypassed_user_id', 'super-admin-demo-id');
-          localStorage.setItem('supabase_bypassed_current_user', JSON.stringify({
+          sessionStorage.setItem('supabase_session_bypassed', 'true');
+          sessionStorage.setItem('supabase_bypassed_user_email', email.trim());
+          sessionStorage.setItem('supabase_bypassed_user_id', 'super-admin-demo-id');
+          sessionStorage.setItem('supabase_bypassed_current_user', JSON.stringify({
             name: 'Super Admin',
             role: 'SuperAdmin',
             pin: '9999',
@@ -80,10 +80,10 @@ export const SupabaseLogin: React.FC<SupabaseLoginProps> = ({ appLang }) => {
 
         if (isSuperAdmin || isAuthorizedAdmin) {
           // Store session info to trigger reactive state
-          localStorage.setItem('supabase_session_bypassed', 'false');
-          localStorage.setItem('supabase_bypassed_user_email', userEmail || '');
-          localStorage.setItem('supabase_bypassed_user_id', data.user.id);
-          localStorage.setItem('supabase_bypassed_current_user', JSON.stringify({
+          sessionStorage.setItem('supabase_session_bypassed', 'false');
+          sessionStorage.setItem('supabase_bypassed_user_email', userEmail || '');
+          sessionStorage.setItem('supabase_bypassed_user_id', data.user.id);
+          sessionStorage.setItem('supabase_bypassed_current_user', JSON.stringify({
             name: adminCheck?.name || (isSuperAdmin ? 'Super Admin' : 'Admin User'),
             role: adminCheck?.role || (isSuperAdmin ? 'SuperAdmin' : 'Admin'),
             pin: '1234',
