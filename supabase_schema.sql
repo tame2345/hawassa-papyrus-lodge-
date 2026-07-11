@@ -110,15 +110,19 @@ CREATE TABLE IF NOT EXISTS system_settings (
 -- Enable RLS and add policies to ensure reads and writes function correctly in bypassed/demo modes
 ALTER TABLE system_settings ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "Allow public select of system settings" ON system_settings;
 CREATE POLICY "Allow public select of system settings" ON system_settings
     FOR SELECT USING (true);
 
+DROP POLICY IF EXISTS "Allow public insert of system settings" ON system_settings;
 CREATE POLICY "Allow public insert of system settings" ON system_settings
     FOR INSERT WITH CHECK (true);
 
+DROP POLICY IF EXISTS "Allow public update of system settings" ON system_settings;
 CREATE POLICY "Allow public update of system settings" ON system_settings
     FOR UPDATE USING (true) WITH CHECK (true);
 
+DROP POLICY IF EXISTS "Allow public delete of system settings" ON system_settings;
 CREATE POLICY "Allow public delete of system settings" ON system_settings
     FOR DELETE USING (true);
 

@@ -16,15 +16,19 @@ VALUES ('lodge-media', 'lodge-media', true)
 ON CONFLICT (id) DO NOTHING;
 
 -- Storage RLS Policies
+DROP POLICY IF EXISTS "Public Read Access" ON storage.objects;
 CREATE POLICY "Public Read Access" ON storage.objects
     FOR SELECT USING (bucket_id = 'lodge-media');
 
+DROP POLICY IF EXISTS "Public Insert Access" ON storage.objects;
 CREATE POLICY "Public Insert Access" ON storage.objects
     FOR INSERT WITH CHECK (bucket_id = 'lodge-media');
 
+DROP POLICY IF EXISTS "Public Update Access" ON storage.objects;
 CREATE POLICY "Public Update Access" ON storage.objects
     FOR UPDATE USING (bucket_id = 'lodge-media');
 
+DROP POLICY IF EXISTS "Public Delete Access" ON storage.objects;
 CREATE POLICY "Public Delete Access" ON storage.objects
     FOR DELETE USING (bucket_id = 'lodge-media');
 
@@ -43,10 +47,12 @@ CREATE TABLE IF NOT EXISTS admin_users (
 ALTER TABLE admin_users ENABLE ROW LEVEL SECURITY;
 
 -- Allow anyone to check if an email belongs to an Admin (for login checking)
+DROP POLICY IF EXISTS "Allow public read for admins" ON admin_users;
 CREATE POLICY "Allow public read for admins" ON admin_users
     FOR SELECT USING (true);
 
 -- Allow authenticated Admins/SuperAdmins write access to admin roster
+DROP POLICY IF EXISTS "Allow authenticated admin write roster" ON admin_users;
 CREATE POLICY "Allow authenticated admin write roster" ON admin_users
     FOR ALL USING (auth.role() = 'authenticated');
 
@@ -67,7 +73,9 @@ CREATE TABLE IF NOT EXISTS hero_section (
 
 -- Enable RLS for hero_section
 ALTER TABLE hero_section ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Allow public read of hero" ON hero_section;
 CREATE POLICY "Allow public read of hero" ON hero_section FOR SELECT USING (true);
+DROP POLICY IF EXISTS "Allow admin write of hero" ON hero_section;
 CREATE POLICY "Allow admin write of hero" ON hero_section FOR ALL USING (auth.role() = 'authenticated');
 
 
@@ -85,7 +93,9 @@ CREATE TABLE IF NOT EXISTS testimonials (
 
 -- Enable RLS for testimonials
 ALTER TABLE testimonials ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Allow public read of testimonials" ON testimonials;
 CREATE POLICY "Allow public read of testimonials" ON testimonials FOR SELECT USING (true);
+DROP POLICY IF EXISTS "Allow admin write of testimonials" ON testimonials;
 CREATE POLICY "Allow admin write of testimonials" ON testimonials FOR ALL USING (auth.role() = 'authenticated');
 
 
@@ -101,7 +111,9 @@ CREATE TABLE IF NOT EXISTS gallery (
 
 -- Enable RLS for gallery (Updated to allow public writes for bypassed development/testing sessions)
 ALTER TABLE gallery ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Allow public read of gallery" ON gallery;
 CREATE POLICY "Allow public read of gallery" ON gallery FOR SELECT USING (true);
+DROP POLICY IF EXISTS "Allow public write of gallery" ON gallery;
 CREATE POLICY "Allow public write of gallery" ON gallery FOR ALL USING (true) WITH CHECK (true);
 
 
@@ -120,7 +132,9 @@ CREATE TABLE IF NOT EXISTS contact_info (
 
 -- Enable RLS for contact_info
 ALTER TABLE contact_info ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Allow public read of contact" ON contact_info;
 CREATE POLICY "Allow public read of contact" ON contact_info FOR SELECT USING (true);
+DROP POLICY IF EXISTS "Allow admin write of contact" ON contact_info;
 CREATE POLICY "Allow admin write of contact" ON contact_info FOR ALL USING (auth.role() = 'authenticated');
 
 
@@ -141,7 +155,9 @@ CREATE TABLE IF NOT EXISTS menu_items_cms (
 
 -- Enable RLS for menu_items_cms
 ALTER TABLE menu_items_cms ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Allow public read of menu items" ON menu_items_cms;
 CREATE POLICY "Allow public read of menu items" ON menu_items_cms FOR SELECT USING (true);
+DROP POLICY IF EXISTS "Allow admin write of menu items" ON menu_items_cms;
 CREATE POLICY "Allow admin write of menu items" ON menu_items_cms FOR ALL USING (auth.role() = 'authenticated');
 
 

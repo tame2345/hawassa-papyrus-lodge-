@@ -40,6 +40,16 @@ import deliveryScooterIllustration from './assets/images/delivery_scooter_illust
 // Supabase Connection Import
 import { supabase } from './supabaseClient';
 
+const DEFAULT_LOGO = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="none"><rect width="100" height="100" rx="20" fill="%230F0F0F"/><circle cx="50" cy="50" r="35" stroke="%23C1FF00" stroke-width="2" stroke-dasharray="4 2"/><path d="M50 25 L54 35 L65 35 L56 41 L59 52 L50 45 L41 52 L44 41 L35 35 L46 35 Z" fill="%23C1FF00"/><path d="M30 65 Q50 55 70 65" stroke="%23C1FF00" stroke-width="2" stroke-linecap="round"/><text x="50" y="80" fill="%23C1FF00" font-family="sans-serif" font-size="8" font-weight="bold" text-anchor="middle" letter-spacing="1">PAPYRUS</text></svg>`;
+
+const sanitizeLogoUrl = (url: string | null | undefined): string => {
+  if (!url) return DEFAULT_LOGO;
+  if (url.includes('photo-1542038784456-1ea8e935640e') || url.includes('photo-1542314831-068cd1dbfeeb')) {
+    return DEFAULT_LOGO;
+  }
+  return url;
+};
+
 const FALLBACK_GALLERY_ITEMS = [
   {
     id: 'f-1',
@@ -67,7 +77,12 @@ const FALLBACK_GALLERY_ITEMS = [
   }
 ];
 
-
+interface TableAssignment {
+  id: string;
+  waiterName: string;
+  tableNumber: string;
+  date: string;
+}
 
 export default function App() {
   const [currentPath, setCurrentPath] = useState(window.location.pathname);
@@ -327,9 +342,10 @@ export default function App() {
     } catch {}
     return null;
   });
-  const [activeAdminTab, setActiveAdminTab] = useState<'sales' | 'staff' | 'menu' | 'banks' | 'qrprint' | 'promo' | 'lodgeinfo' | 'reception' | 'branding'>('sales');
+  const [activeAdminTab, setActiveAdminTab] = useState<'sales' | 'staff' | 'menu' | 'banks' | 'qrprint' | 'promo' | 'lodgeinfo' | 'reception' | 'branding' | 'gallery' | 'table_assignment'>('sales');
   const [ledgerFilterTab, setLedgerFilterTab] = useState<'daily' | 'monthly' | 'yearly'>('daily');
-  const [managerTab, setManagerTab] = useState<'bono' | 'attendance' | 'sales_review' | 'vault'>('bono');
+  const [managerTab, setManagerTab] = useState<'bono' | 'attendance' | 'sales_review' | 'vault' | 'menu_availability' | 'table_assignment'>('bono');
+  const [showMyReadyDeliveriesOnly, setShowMyReadyDeliveriesOnly] = useState<boolean>(false);
   
   // RECEPTION / BEDROOM BOOKINGS STATE
   const [bookingGuestCount, setBookingGuestCount] = useState<number>(1);
@@ -369,7 +385,7 @@ export default function App() {
   const [showLoginPassword, setShowLoginPassword] = useState(false);
 
   // BRAND LOGO & LITE-MODE (BASIC MODE TOGGLE)
-  const [logoUrl, setLogoUrl] = useState<string>('https://images.unsplash.com/photo-1542038784456-1ea8e935640e?w=150&auto=format&fit=crop&q=60');
+  const [logoUrl, setLogoUrl] = useState<string>(DEFAULT_LOGO);
   const [tempLogoFile, setTempLogoFile] = useState<string | null>(null);
 
   const [bgVideoUrl, setBgVideoUrl] = useState<string>('https://pixabay.com/videos/ai-generated-restaurant-cafe-jazz-202004/');
@@ -1225,6 +1241,7 @@ export default function App() {
 
   // ATTENDANCE & BONUSES STATE FOR STAFF PERSISTENCE
   const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
+  const [tableAssignments, setTableAssignments] = useState<TableAssignment[]>([]);
 
   const [attFilterStaff, setAttFilterStaff] = useState<string>('all');
   const [attFilterYear, setAttFilterYear] = useState<string>('all');
@@ -1238,6 +1255,30 @@ export default function App() {
     msg: string;
     onGo: () => void;
   } | null>(null);
+
+  // Helper to find the assigned waiter for a given table location
+  const getAssignedWaiterForTable = (tableLocation: string): string => {
+    if (!tableLocation) return '';
+    const cleanTable = tableLocation.trim().toLowerCase();
+    
+    // Normalize function to strip "table ", spaces, and leading zeroes
+    const normalize = (str: string) => {
+      return str
+        .toLowerCase()
+        .replace(/^table\s*/i, '') // strip "table" prefix
+        .trim()
+        .replace(/^0+/, '');       // strip leading zeroes (e.g. "05" -> "5")
+    };
+
+    const normTable = normalize(cleanTable);
+
+    const assignment = tableAssignments.find(ta => {
+      const cleanAssignTable = ta.tableNumber.trim().toLowerCase();
+      const normAssign = normalize(cleanAssignTable);
+      return cleanAssignTable === cleanTable || (normAssign && normAssign === normTable);
+    });
+    return assignment ? assignment.waiterName : '';
+  };
 
   // Helper to replace standard confirm across components
   const askConfirmAndRun = (msg: string, onGo: () => void) => {
@@ -1552,19 +1593,23 @@ export default function App() {
             .eq('key', key)
             .maybeSingle();
           if (error) {
-            console.error(`Error fetching key ${key}:`, error);
+            if (error.code === '42P01' || error.message?.includes('does not exist') || error.message?.includes('not configured')) {
+              console.warn(`Supabase: Table 'system_settings' is not initialized or configured yet. Using local state for key '${key}'.`);
+            } else {
+              console.warn(`Error fetching key ${key}:`, error);
+            }
             return null;
           }
           return data?.value;
-        } catch (err) {
-          console.error(`Exception fetching key ${key}:`, err);
+        } catch (err: any) {
+          console.warn(`Exception fetching key ${key}:`, err);
           return null;
         }
       };
 
       // 1. Fetch logoUrl
       const logoVal = await fetchKey('logoUrl');
-      if (logoVal && logoVal.url !== undefined) setLogoUrl(logoVal.url);
+      if (logoVal && logoVal.url !== undefined) setLogoUrl(sanitizeLogoUrl(logoVal.url));
 
       // 2. Fetch attendance
       const attVal = await fetchKey('attendance');
@@ -1633,6 +1678,10 @@ export default function App() {
       // 18. Fetch bonuses
       const bonusesVal = await fetchKey('bonuses');
       if (bonusesVal && Array.isArray(bonusesVal.list)) setBonuses(bonusesVal.list);
+
+      // 18.5 Fetch table assignments
+      const taVal = await fetchKey('table_assignments');
+      if (taVal && Array.isArray(taVal.list)) setTableAssignments(taVal.list);
 
       // 19. Fetch serviceChargeRate
       const scVal = await fetchKey('serviceChargeRate');
@@ -1745,10 +1794,13 @@ export default function App() {
 
             switch (data.key) {
               case 'logoUrl':
-                if (val.url !== undefined) setLogoUrl(val.url);
+                if (val.url !== undefined) setLogoUrl(sanitizeLogoUrl(val.url));
                 break;
               case 'attendance':
                 if (Array.isArray(val.records)) setAttendance(val.records);
+                break;
+              case 'table_assignments':
+                if (Array.isArray(val.list)) setTableAssignments(val.list);
                 break;
               case 'menu':
                 if (Array.isArray(val.items)) setMenuItems(val.items);
@@ -1894,6 +1946,10 @@ export default function App() {
   }, [attendance, hasLoadedCloudSettings]);
 
   useEffect(() => {
+    syncKeyToCloud('table_assignments', { list: tableAssignments });
+  }, [tableAssignments, hasLoadedCloudSettings]);
+
+  useEffect(() => {
     syncKeyToCloud('menu', { items: menuItems });
   }, [menuItems, hasLoadedCloudSettings]);
 
@@ -2017,9 +2073,7 @@ export default function App() {
     syncKeyToCloud('isBgVideoEnabled', { enabled: isBgVideoEnabled });
   }, [isBgVideoEnabled, hasLoadedCloudSettings]);
 
-  useEffect(() => {
-    syncKeyToCloud('assistanceCalls', { list: assistanceCalls });
-  }, [assistanceCalls, hasLoadedCloudSettings]);
+  // Removed automatic sync to prevent overwriting cloud state with stale/initial local state
 
   useEffect(() => {
     syncKeyToCloud('feedback', { list: feedback });
@@ -2858,6 +2912,108 @@ export default function App() {
     });
   };
 
+  // Atomic helper functions for Assistance Calls to ensure 100% reliable cloud sync without overwriting other clients
+  const addAssistanceCall = async (newCall: AssistanceCall) => {
+    setAssistanceCalls(prev => {
+      if (prev.some(c => c.id === newCall.id)) return prev;
+      return [newCall, ...prev];
+    });
+
+    try {
+      const { data, error: fetchErr } = await supabase
+        .from('system_settings')
+        .select('value')
+        .eq('key', 'assistanceCalls')
+        .maybeSingle();
+
+      if (fetchErr) {
+        if (fetchErr.code === '42P01' || fetchErr.message?.includes('does not exist')) {
+          console.warn("Supabase: Table 'system_settings' is not initialized yet. Staying in local fallback mode.");
+        } else {
+          console.warn("Error fetching assistanceCalls:", fetchErr);
+        }
+      }
+
+      let currentList: AssistanceCall[] = [];
+      if (!fetchErr && data?.value && Array.isArray(data.value.list)) {
+        currentList = data.value.list;
+      }
+
+      if (!currentList.some(c => c.id === newCall.id)) {
+        const updatedList = [newCall, ...currentList];
+        await supabase
+          .from('system_settings')
+          .upsert({ key: 'assistanceCalls', value: { list: updatedList } });
+      }
+    } catch (err) {
+      console.warn("Error adding assistance call to DB:", err);
+    }
+  };
+
+  const removeAssistanceCall = async (id: string) => {
+    setAssistanceCalls(prev => prev.filter(c => c.id !== id));
+
+    try {
+      const { data, error: fetchErr } = await supabase
+        .from('system_settings')
+        .select('value')
+        .eq('key', 'assistanceCalls')
+        .maybeSingle();
+
+      if (fetchErr) {
+        if (fetchErr.code === '42P01' || fetchErr.message?.includes('does not exist')) {
+          console.warn("Supabase: Table 'system_settings' is not initialized yet. Staying in local fallback mode.");
+        } else {
+          console.warn("Error fetching assistanceCalls:", fetchErr);
+        }
+      }
+
+      let currentList: AssistanceCall[] = [];
+      if (!fetchErr && data?.value && Array.isArray(data.value.list)) {
+        currentList = data.value.list;
+      }
+
+      const updatedList = currentList.filter(c => c.id !== id);
+      await supabase
+        .from('system_settings')
+        .upsert({ key: 'assistanceCalls', value: { list: updatedList } });
+    } catch (err) {
+      console.warn("Error removing assistance call from DB:", err);
+    }
+  };
+
+  const markAssistanceCallInactive = async (id: string) => {
+    setAssistanceCalls(prev => prev.map(c => c.id === id ? { ...c, active: false } : c));
+
+    try {
+      const { data, error: fetchErr } = await supabase
+        .from('system_settings')
+        .select('value')
+        .eq('key', 'assistanceCalls')
+        .maybeSingle();
+
+      if (fetchErr) {
+        if (fetchErr.code === '42P01' || fetchErr.message?.includes('does not exist')) {
+          console.warn("Supabase: Table 'system_settings' is not initialized yet. Staying in local fallback mode.");
+        } else {
+          console.warn("Error fetching assistanceCalls:", fetchErr);
+        }
+      }
+
+      let currentList: AssistanceCall[] = [];
+      if (!fetchErr && data?.value && Array.isArray(data.value.list)) {
+        currentList = data.value.list;
+      }
+
+      const updatedList = currentList.map(c => c.id === id ? { ...c, active: false } : c);
+      await supabase
+        .from('system_settings')
+        .upsert({ key: 'assistanceCalls', value: { list: updatedList } });
+    } catch (err) {
+      console.warn("Error marking assistance call inactive in DB:", err);
+    }
+  };
+
   // CALL FOR ASSISTANCE / CITATION BUSZ
   const handleTriggerBuzzer = () => {
     const timeNow = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
@@ -2867,12 +3023,16 @@ export default function App() {
       time: timeNow,
       active: true
     };
-    setAssistanceCalls(prev => [newCall, ...prev]);
-    alert(`🔔 ጥሪ ተልኳል! አስተናጋጅ በቅርቡ ይመጣል። / Assistance called for ${guestLocation}!`);
+    addAssistanceCall(newCall);
+    try {
+      alert(`🔔 ጥሪ ተልኳል! አስተናጋጅ በቅርቡ ይመጣል። / Assistance called for ${guestLocation}!`);
+    } catch (e) {
+      console.warn("Alert blocked:", e);
+    }
   };
 
   const handleResolveBuzzer = (id: string) => {
-    setAssistanceCalls(prev => prev.filter(c => c.id !== id));
+    removeAssistanceCall(id);
   };
 
   // ITEM CUSTOMIZERS ACCORDING TO USER FLOW
@@ -3078,6 +3238,18 @@ export default function App() {
 
     setOrders(prev => [newOrder, ...prev]);
     setCart([]);
+    
+    // Trigger real-time buzzer/assistance call on waiter dashboard when ordering
+    const orderBuzzerCall: AssistanceCall = {
+      id: 'order-' + newOrder.id.replace('#', '') + '-' + Date.now(),
+      location: details.location,
+      time: timeNow,
+      active: true,
+      type: 'pickup',
+      message: `🛍️ አዲስ ትዕዛዝ ${newOrder.id} ገብቷል! (New Order placed)`
+    };
+    addAssistanceCall(orderBuzzerCall);
+
     alert('🎉 ትዕዛዝዎ አስተማማኝ በሆነ ሁኔታ ተቀብለናል! በቅርብ ሰአት ይደርሳል። / Order placed successfully!');
   };
 
@@ -3416,11 +3588,21 @@ export default function App() {
   };
 
   const handleUpdateOrderStatus = (orderId: string, newStatus: OrderStatus) => {
+    const targetOrder = orders.find(o => o.id === orderId);
+    if (targetOrder && newStatus === 'Completed') {
+      playVoiceAlert(`Attention waiter! Order for ${targetOrder.location} is ready! Chef completed cooking.`);
+      const chefBuzzerCall: AssistanceCall = {
+        id: 'chef-' + orderId + '-' + Date.now(),
+        location: targetOrder.location,
+        time: new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' }),
+        active: true,
+        type: 'pickup',
+        message: `👨‍🍳 ትዕዛዝ ${orderId} ተዘጋጅቷል - ከኩሽና ይወሰድ! (Order Ready - Pick up from Kitchen)`
+      };
+      addAssistanceCall(chefBuzzerCall);
+    }
+
     setOrders(prev => {
-      const targetOrder = prev.find(o => o.id === orderId);
-      if (targetOrder && newStatus === 'Completed') {
-        playVoiceAlert(`Attention waiter! Order for ${targetOrder.location} is ready! Chef completed cooking.`);
-      }
       return prev.map(o => {
         if (o.id === orderId) {
           const updatedCooking = newStatus === 'Preparing' ? 'Preparing' : (newStatus === 'Completed' ? 'Completed' : o.cookingStatus);
@@ -3435,6 +3617,49 @@ export default function App() {
         return o;
       });
     });
+  };
+
+  const handleSendReadyOrderToWaiter = (orderId: string, waiterName: string) => {
+    const targetOrder = orders.find(o => o.id === orderId);
+    if (!targetOrder) return;
+
+    // Mark as completed and update the assigned waiter
+    setOrders(prev => {
+      return prev.map(o => {
+        if (o.id === orderId) {
+          const finalStatus = o.status === 'Paid' ? 'Paid' : 'Completed';
+          return {
+            ...o,
+            status: finalStatus,
+            cookingStatus: 'Completed',
+            servedByWaiter: false,
+            waiter: waiterName || o.waiter
+          };
+        }
+        return o;
+      });
+    });
+
+    const targetMsg = waiterName 
+      ? `👨‍🍳 ${waiterName} - ጠረጴዛ ${targetOrder.location} ያዘዙት ትዕዛዝ #${orderId} ተዘጋጅቷል - እባክዎ ከኩሽና ይውሰዱ! (Targeted Waiter Delivery)`
+      : `👨‍🍳 ትዕዛዝ #${orderId} ለጠረጴዛ ${targetOrder.location} ተዘጋጅቷል - ከኩሽና ይወሰድ! (Order Ready - Pick up)`;
+
+    if (waiterName) {
+      playVoiceAlert(`Attention ${waiterName}! Order for ${targetOrder.location} is ready! Please deliver it.`);
+    } else {
+      playVoiceAlert(`Attention waiter! Order for ${targetOrder.location} is ready!`);
+    }
+
+    const chefBuzzerCall: AssistanceCall = {
+      id: 'chef-' + orderId + '-' + Date.now(),
+      location: targetOrder.location,
+      time: new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' }),
+      active: true,
+      type: 'pickup',
+      message: targetMsg
+    };
+
+    addAssistanceCall(chefBuzzerCall);
   };
 
   const handleSaveOrderAdjustments = (updatedOrder: Order) => {
@@ -4568,9 +4793,22 @@ export default function App() {
                                   setUnifiedError('🗝️ Demo admin loaded! Click "SECURE SIGN IN"');
                                 }}
                                 className="w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-xs font-black cursor-pointer shadow border border-white/10"
-                                title="Prefill manager/admin credentials"
+                                title="Prefill admin credentials"
                               >
                                 👑
+                              </button>
+                              <button
+                                onClick={() => {
+                                  setUnifiedUsername('manager');
+                                  setUnifiedPassword('4444');
+                                  setUnifiedRole('manager');
+                                  setUnifiedMethod('password');
+                                  setUnifiedError('⚡ Demo manager loaded! Click "SECURE SIGN IN"');
+                                }}
+                                className="w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-xs font-black cursor-pointer shadow border border-white/10"
+                                title="Prefill manager credentials"
+                              >
+                                ⚡
                               </button>
                               <button
                                 onClick={() => {
@@ -5276,7 +5514,7 @@ export default function App() {
                                             type: 'pickup',
                                             message: `ትዕዛዝ ${ord.id} - ደንበኛው ምግብ መውሰዱን አረጋግጧል ✔️`
                                           };
-                                          setAssistanceCalls(prev => [newBuzzerCall, ...prev]);
+                                          addAssistanceCall(newBuzzerCall);
                                           alert(`👍 ምግብ መረከብዎን ለአስተናጋጅ አሳውቀናል። እናመሰግናለን! (Notification sent to waiter. Thank you!)`);
                                         }}
                                         className="w-full bg-[#C1FF00] hover:bg-white text-black font-black text-[10px] py-2 rounded-lg uppercase font-mono tracking-wider shadow-[0_3px_10px_rgba(193,255,0,0.2)] transition-all flex items-center justify-center gap-1.5 cursor-pointer"
@@ -6236,6 +6474,34 @@ export default function App() {
 
                 {renderWiFiClockInWidget()}
 
+                {/* Assigned Tables Widget */}
+                {(() => {
+                  const assignedTables = tableAssignments
+                    .filter(ta => ta.waiterName === currentUser?.name)
+                    .map(ta => ta.tableNumber);
+                  return (
+                    <div className="bg-[#141414] border border-yellow-400/20 p-4 rounded-xl flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                      <div className="text-left">
+                        <span className="text-[9px] text-yellow-400 font-mono font-bold tracking-widest block uppercase">YOUR ASSIGNED TABLES TODAY</span>
+                        <h4 className="text-sm font-black text-white uppercase mt-0.5">
+                          📋 የዛሬ የጠረጴዛ ምደባዎ (Your Tables)
+                        </h4>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {assignedTables.length === 0 ? (
+                          <span className="text-xs text-stone-500 font-mono italic">ምንም የተመደበ ጠረጴዛ የለም (No tables assigned yet today)</span>
+                        ) : (
+                          assignedTables.map((t, idx) => (
+                            <span key={idx} className="bg-yellow-400 text-black px-3 py-1.5 text-xs font-black font-mono rounded-lg border border-black shadow-[1px_1px_0px_0px_rgba(0,0,0,1)]">
+                              🍽️ {t}
+                            </span>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
+
                 {/* Active buzzer tables calling */}
                 {assistanceCalls.length > 0 && (
                   <div className="bg-[#141414] border border-red-500/30 p-4">
@@ -6286,7 +6552,21 @@ export default function App() {
                   {/* Left columns: Orders in progress */}
                   {(() => {
                     const inPrepOrders = orders.filter(o => (o.cookingStatus || (o.status === 'Paid' ? 'Pending' : o.status)) === 'Pending' || (o.cookingStatus || (o.status === 'Paid' ? 'Pending' : o.status)) === 'Preparing');
-                    const readyToDeliverOrders = orders.filter(o => (o.cookingStatus || o.status) === 'Completed' && !o.servedByWaiter);
+                    
+                    const isOrderAssignedToMe = (ord: Order) => {
+                      if (!currentUser?.name) return false;
+                      const orderWaiter = (ord.waiter || '').trim().toLowerCase();
+                      const curName = currentUser.name.trim().toLowerCase();
+                      if (orderWaiter === curName) return true;
+                      
+                      const tableWaiter = getAssignedWaiterForTable(ord.location).trim().toLowerCase();
+                      return tableWaiter === curName;
+                    };
+
+                    const allReadyOrders = orders.filter(o => (o.cookingStatus || o.status) === 'Completed' && !o.servedByWaiter);
+                    const readyToDeliverOrders = showMyReadyDeliveriesOnly 
+                      ? allReadyOrders.filter(isOrderAssignedToMe)
+                      : allReadyOrders;
                     return (
                       <div className="lg:col-span-2 space-y-6">
                         {/* Two-part grid inside the waiter's left pan */}
@@ -6377,59 +6657,115 @@ export default function App() {
                               </span>
                             </div>
 
+                            {/* Toggle for My Deliveries vs All */}
+                            {currentUser?.name && (
+                              <div className="flex gap-2 pb-1">
+                                <button
+                                  onClick={() => setShowMyReadyDeliveriesOnly(false)}
+                                  className={`flex-1 py-1.5 px-2 font-mono text-[9px] font-black uppercase tracking-wider rounded border cursor-pointer transition-all ${
+                                    !showMyReadyDeliveriesOnly
+                                      ? 'bg-[#01f5ff]/20 text-[#01f5ff] border-[#01f5ff]/40'
+                                      : 'bg-transparent text-stone-400 border-white/5 hover:bg-white/5'
+                                  }`}
+                                >
+                                  {appLang === 'am' ? 'ሁሉንም አሳይ' : 'All Deliveries'}
+                                </button>
+                                <button
+                                  onClick={() => setShowMyReadyDeliveriesOnly(true)}
+                                  className={`flex-1 py-1.5 px-2 font-mono text-[9px] font-black uppercase tracking-wider rounded border cursor-pointer transition-all ${
+                                    showMyReadyDeliveriesOnly
+                                      ? 'bg-yellow-400/20 text-yellow-400 border-yellow-400/40 shadow-[0_0_8px_rgba(250,204,21,0.15)]'
+                                      : 'bg-transparent text-stone-400 border-white/5 hover:bg-white/5'
+                                  }`}
+                                >
+                                  {appLang === 'am' ? 'የእኔ ምድቦች ብቻ 🎯' : 'My Tables Only 🎯'}
+                                </button>
+                              </div>
+                            )}
+
                             {readyToDeliverOrders.length === 0 ? (
                               <p className="text-white/30 text-[11px] py-10 text-center font-semibold">
-                                ከኩሽና ያለቀ የሚላክ ምግብ የለም።
+                                {showMyReadyDeliveriesOnly 
+                                  ? (appLang === 'am' ? 'ለእርስዎ የተመደበ ያለቀ ምግብ የለም።' : 'No ready deliveries assigned to your tables today.')
+                                  : (appLang === 'am' ? 'ከኩሽና ያለቀ የሚላክ ምግብ የለም።' : 'No ready deliveries from kitchen.')}
                               </p>
                             ) : (
                               <div className="space-y-3">
-                                {readyToDeliverOrders.map(ord => (
-                                  <div key={ord.id} className="bg-purple-950/10 border border-purple-500/20 p-3 flex flex-col justify-between gap-3 shadow-[0_0_8px_rgba(168,85,247,0.05)]">
-                                    <div className="flex justify-between items-start border-b border-purple-500/15 pb-1.5">
-                                      <div>
-                                        <span className="font-mono text-[11px] font-black text-purple-400">{ord.id}</span>
-                                        <span className="text-[9px] uppercase font-mono text-white/40 block">Time: {ord.time}</span>
+                                {readyToDeliverOrders.map(ord => {
+                                  const isAssigned = isOrderAssignedToMe(ord);
+                                  const assignedToName = ord.waiter || getAssignedWaiterForTable(ord.location);
+                                  return (
+                                    <div 
+                                      key={ord.id} 
+                                      className={`p-3 flex flex-col justify-between gap-3 transition-all rounded-lg border ${
+                                        isAssigned 
+                                          ? 'bg-yellow-400/5 border-yellow-400/40 shadow-[0_0_12px_rgba(250,204,21,0.08)]' 
+                                          : 'bg-purple-950/10 border border-purple-500/20 shadow-[0_0_8px_rgba(168,85,247,0.05)]'
+                                      }`}
+                                    >
+                                      {assignedToName && (
+                                        <div className={`text-[9px] font-mono font-black uppercase px-2 py-1 rounded border tracking-wider flex items-center justify-between ${
+                                          isAssigned 
+                                            ? 'bg-yellow-400/20 text-yellow-400 border-yellow-400/30' 
+                                            : 'bg-stone-500/10 text-stone-400 border-white/10'
+                                        }`}>
+                                          <span>🏃 DELIVERER: {assignedToName}</span>
+                                          {isAssigned && <span className="bg-yellow-400 text-black px-1 rounded text-[8px] font-black">YOURS 🎯</span>}
+                                        </div>
+                                      )}
+
+                                      <div className="flex justify-between items-start border-b border-white/5 pb-1.5">
+                                        <div>
+                                          <span className="font-mono text-[11px] font-black text-purple-400">{ord.id}</span>
+                                          <span className="text-[9px] uppercase font-mono text-white/40 block">Time: {ord.time}</span>
+                                        </div>
+                                        <div className="text-right">
+                                          <span className={`font-black text-xs block font-sans ${isAssigned ? 'text-yellow-400 text-sm' : 'text-purple-300'}`}>
+                                            🍽️ {ord.location}
+                                          </span>
+                                        </div>
                                       </div>
-                                      <div className="text-right">
-                                        <span className="font-black text-xs block text-purple-300 font-sans">{ord.location}</span>
+
+                                      <div className="space-y-1">
+                                        {ord.items.map((i, idx) => (
+                                          <p key={idx} className="text-xs font-bold text-white/90">
+                                            • {i.qty} × {i.name}
+                                          </p>
+                                        ))}
+                                      </div>
+
+                                      <div className="flex justify-between items-center pt-1.5 border-t border-white/5 text-[9px] font-mono">
+                                        <span className="text-purple-300/60 font-sans">ከኩሽና አልቋል (Cooked)</span>
+                                        <span className="font-black text-white/80 font-mono">Total: {ord.total} ETB</span>
+                                      </div>
+
+                                      <div className="flex flex-col gap-1.5">
+                                        <button
+                                          id={`btn-waiter-confirm-delivery-${ord.id}`}
+                                          onClick={() => {
+                                            setOrders(prev => prev.map(o => o.id === ord.id ? { ...o, servedByWaiter: true } : o));
+                                            playVoiceAlert(`Delivery confirmation sent to table ${ord.location} for order ${ord.id}.`);
+                                            alert(`✔ ማረጋገጫ ለደንበኛው ተልኳል! ደንበኛው ምግብ መድረሱን በስልኩ እንዲያረጋግጥ ተደርጓል።`);
+                                          }}
+                                          className={`w-full py-2 text-[10px] uppercase font-black font-mono transition-transform active:scale-95 cursor-pointer rounded ${
+                                            isAssigned 
+                                              ? 'bg-yellow-400 text-black hover:bg-white shadow-[0_0_10px_rgba(250,204,21,0.2)]'
+                                              : 'bg-purple-600 hover:bg-purple-500 text-white'
+                                          }`}
+                                        >
+                                          🚀 ማረጋገጫ ላክ / ምግብ አቅርብ (Send Confirmation)
+                                        </button>
+
+                                        <button
+                                          onClick={() => setAdjustingOrder(ord)}
+                                          className="w-full bg-sky-500/10 hover:bg-sky-500 text-sky-400 hover:text-black border border-sky-500/20 py-1 text-[9px] uppercase font-black font-mono transition-colors cursor-pointer rounded"
+                                        >
+                                          ✏️ ትዕዛዝ ማስተካከያ (Adjust Order)
+                                        </button>
                                       </div>
                                     </div>
-
-                                    <div className="space-y-1">
-                                      {ord.items.map((i, idx) => (
-                                        <p key={idx} className="text-xs font-bold text-white/90">
-                                          • {i.qty} × {i.name}
-                                        </p>
-                                      ))}
-                                    </div>
-
-                                    <div className="flex justify-between items-center pt-1.5 border-t border-purple-500/10 text-[9px] font-mono">
-                                      <span className="text-purple-300/60 font-sans">ከኩሽና አልቋል (Cooked)</span>
-                                      <span className="font-black text-white/80">Total: {ord.total} ETB</span>
-                                    </div>
-
-                                    <div className="flex flex-col gap-1.5">
-                                      <button
-                                        id={`btn-waiter-confirm-delivery-${ord.id}`}
-                                        onClick={() => {
-                                          setOrders(prev => prev.map(o => o.id === ord.id ? { ...o, servedByWaiter: true } : o));
-                                          playVoiceAlert(`Delivery confirmation sent to table ${ord.location} for order ${ord.id}.`);
-                                          alert(`✔ ማረጋገጫ ለደንበኛው ተልኳል! ደንበኛው ምግብ መድረሱን በስልኩ እንዲያረጋግጥ ተደርጓል።`);
-                                        }}
-                                        className="w-full bg-purple-600 hover:bg-purple-500 text-white py-2 text-[10px] uppercase font-black font-mono transition-transform active:scale-95 cursor-pointer rounded"
-                                      >
-                                        🚀 ማረጋገጫ ላክ / ምግብ አቅርብ (Send Confirmation)
-                                      </button>
-
-                                      <button
-                                        onClick={() => setAdjustingOrder(ord)}
-                                        className="w-full bg-sky-500/10 hover:bg-sky-500 text-sky-400 hover:text-black border border-sky-500/20 py-1 text-[9px] uppercase font-black font-mono transition-colors cursor-pointer rounded"
-                                      >
-                                        ✏️ ትዕዛዝ ማስተካከያ (Adjust Order)
-                                      </button>
-                                    </div>
-                                  </div>
-                                ))}
+                                  );
+                                })}
                               </div>
                             )}
                           </div>
@@ -6463,6 +6799,42 @@ export default function App() {
                           08:30 AM | ACTIVE
                         </h4>
                       </div>
+                    </div>
+                  </div>
+
+                  {/* Waiter Menu Stock Toggle Panel */}
+                  <div className="col-span-1 md:col-span-12 lg:col-span-12 xl:col-span-12 bg-[#121212] border border-white/10 p-5 rounded-2xl text-left space-y-4 mt-6">
+                    <div className="border-b border-white/5 pb-2">
+                      <h3 className="text-xs font-black uppercase text-yellow-400 tracking-wider flex items-center gap-1.5">
+                        <span>🍽️</span>
+                        <span>የምግብ መኖር/ማለቅ መቆጣጠሪያ (Menu Item Stock / Availability Toggles)</span>
+                      </h3>
+                      <p className="text-[10px] text-stone-400 font-sans">
+                        ምግብ ሲያልቅ ከአስተናጋጅና ደንበኛ ሜኑ ላይ በቅጽበት ለመደበቅ እዚህ ጋር ያጥፉት።
+                      </p>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                      {menuItems.map(m => (
+                        <div key={m.id} className="bg-black/40 border border-white/5 p-3 rounded-xl flex items-center justify-between gap-3">
+                          <div className="truncate min-w-0">
+                            <h4 className="text-[11px] font-bold text-stone-200 truncate">{appLang === 'am' ? m.nameAm : (m.nameEn || m.nameAm)}</h4>
+                            <span className="text-[8px] font-mono text-stone-500 uppercase block leading-none mt-0.5">{m.cat}</span>
+                          </div>
+                          <button
+                            onClick={() => {
+                              handleToggleMenuItemAvailable(m.id);
+                              playVoiceAlert(`${m.nameEn || m.nameAm} availability updated.`);
+                            }}
+                            className={`px-2.5 py-1 text-[9px] font-black uppercase rounded font-mono shrink-0 transition-all cursor-pointer ${
+                              m.available 
+                                ? 'bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20' 
+                                : 'bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20'
+                            }`}
+                          >
+                            {m.available ? '✓ IN STOCK' : '❌ OUT'}
+                          </button>
+                        </div>
+                      ))}
                     </div>
                   </div>
 
@@ -6780,24 +7152,69 @@ export default function App() {
                               ))}
                             </div>
 
-                            <div className="pt-2 border-t border-white/5 flex justify-between items-center">
-                              <span className="text-[10px] font-mono text-stone-400">{ord.location}</span>
-                              {ord.cookingStatus === 'Pending' ? (
-                                <button
-                                  onClick={() => handleUpdateOrderStatus(ord.id, 'Preparing')}
-                                  className="px-3 py-1 bg-amber-500 hover:bg-amber-600 text-black text-[10px] font-black uppercase rounded cursor-pointer transition-colors"
-                                >
-                                  {appLang === 'am' ? 'ጀምር' : 'Start'} ➔
-                                </button>
-                              ) : (
-                                <button
-                                  onClick={() => handleUpdateOrderStatus(ord.id, 'Completed')}
-                                  className="px-3 py-1 bg-emerald-500 hover:bg-emerald-600 text-white text-[10px] font-black uppercase rounded cursor-pointer transition-colors animate-pulse"
-                                >
-                                  {appLang === 'am' ? 'ጨርስ' : 'Ready'} ✓
-                                </button>
-                              )}
-                            </div>
+                            {(() => {
+                              const assignedWaiterName = getAssignedWaiterForTable(ord.location);
+                              const waiterSelectId = `chef-select-waiter-${ord.id}`;
+                              return (
+                                <div className="space-y-2 w-full text-left font-sans">
+                                  <div className="flex flex-col gap-1 text-[10px]">
+                                    <div className="flex items-center gap-1.5 font-mono">
+                                      <span className="text-stone-500">{appLang === 'am' ? '👤 በእለቱ የተመደበ አስተናጋጅ: ' : '👤 Assigned Waiter: '}</span>
+                                      {assignedWaiterName ? (
+                                        <span className="text-yellow-400 font-bold bg-yellow-400/10 px-2 py-0.5 rounded border border-yellow-400/20">
+                                          {assignedWaiterName} 🏃
+                                        </span>
+                                      ) : (
+                                        <span className="text-red-400 font-bold bg-red-500/10 px-2 py-0.5 rounded border border-red-500/20">
+                                          {appLang === 'am' ? 'ያልተመደበ ⚠️' : 'Unassigned ⚠️'}
+                                        </span>
+                                      )}
+                                    </div>
+                                    
+                                    {/* Select Waiter Dropdown */}
+                                    {ord.cookingStatus === 'Preparing' && (
+                                      <div className="mt-1 space-y-1">
+                                        <label className="text-[9px] text-stone-400 font-mono block">🎯 ምግብ አድራሽ አስተናጋጅ ይምረጡ (Select Deliverer):</label>
+                                        <select
+                                          id={waiterSelectId}
+                                          defaultValue={assignedWaiterName}
+                                          className="w-full bg-[#121212] border border-white/10 text-white text-[10px] font-mono p-1.5 outline-none focus:border-yellow-400"
+                                        >
+                                          <option value="">-- አስተናጋጅ ይምረጡ --</option>
+                                          {staff.filter(s => (s.role || '').toLowerCase() === 'waiter' || (s.accessPrivilege || '').toLowerCase() === 'waiter').map((w, idx) => (
+                                            <option key={idx} value={w.name}>{w.name}</option>
+                                          ))}
+                                        </select>
+                                      </div>
+                                    )}
+                                  </div>
+
+                                  <div className="pt-2 border-t border-white/5 flex justify-between items-center w-full">
+                                    <span className="text-[10px] font-mono text-[#C1FF00] font-black">{ord.location}</span>
+                                    {ord.cookingStatus === 'Pending' ? (
+                                      <button
+                                        onClick={() => handleUpdateOrderStatus(ord.id, 'Preparing')}
+                                        className="px-3 py-1 bg-amber-500 hover:bg-amber-600 text-black text-[10px] font-black uppercase rounded cursor-pointer transition-colors"
+                                      >
+                                        {appLang === 'am' ? 'ጀምር' : 'Start'} ➔
+                                      </button>
+                                    ) : (
+                                      <button
+                                        onClick={() => {
+                                          const selEl = document.getElementById(waiterSelectId) as HTMLSelectElement;
+                                          const finalWaiter = selEl ? selEl.value : assignedWaiterName;
+                                          handleSendReadyOrderToWaiter(ord.id, finalWaiter);
+                                        }}
+                                        className="px-3 py-1 bg-emerald-500 hover:bg-emerald-600 text-white text-[10px] font-black uppercase rounded cursor-pointer transition-colors animate-pulse flex items-center gap-1"
+                                      >
+                                        <span>{appLang === 'am' ? 'ላክ' : 'Send'}</span>
+                                        <span>✓</span>
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })()}
                           </div>
                         ))}
                       </div>
@@ -6911,7 +7328,8 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                     { id: 'lodgeinfo', label: appLang === 'am' ? '🛖 መረጃ' : '🛖 Lodge Info', color: 'text-indigo-400' },
                     { id: 'reception', label: appLang === 'am' ? '🏨 ሪሴብሽን' : '🏨 Reception', color: 'text-teal-400' },
                     { id: 'branding', label: appLang === 'am' ? '🎨 ሎጎ' : '🎨 Branding', color: 'text-rose-400' },
-                    { id: 'gallery', label: appLang === 'am' ? '🖼️ ጋለሪ' : '🖼️ Gallery', color: 'text-[#C1FF00]' }
+                    { id: 'gallery', label: appLang === 'am' ? '🖼️ ጋለሪ' : '🖼️ Gallery', color: 'text-[#C1FF00]' },
+                    { id: 'table_assignment', label: appLang === 'am' ? '📋 ጠረጴዛ መመደቢያ' : '📋 Assignments', color: 'text-yellow-400' }
                   ].map(tab => (
                     <button
                       key={tab.id}
@@ -9885,7 +10303,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                 </div>
                                 <button 
                                   onClick={() => {
-                                    setAssistanceCalls(prev => prev.map(c => c.id === call.id ? { ...c, active: false } : c));
+                                    markAssistanceCallInactive(call.id);
                                   }}
                                   className="bg-[#1D1D16] hover:bg-emerald-500 hover:text-black border border-emerald-500/30 text-[#C1FF00] hover:border-emerald-400 text-[9px] font-black uppercase px-2.5 py-1.5 transition-colors cursor-pointer"
                                 >
@@ -10147,10 +10565,9 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                       <button
                         type="button"
                         onClick={() => {
-                          const fallback = 'https://images.unsplash.com/photo-1542314831-068cd1dbfeeb?w=300';
-                          handleUpdateLogoAndSync(fallback);
+                          handleUpdateLogoAndSync(DEFAULT_LOGO);
                           const inputEl = document.getElementById('manager-logo-input-field') as HTMLInputElement;
-                          if (inputEl) inputEl.value = fallback;
+                          if (inputEl) inputEl.value = '';
                           alert('🔄 ሎጎው ወደ ቀድሞው የፓፒረስ ሎጅ አርማ ተመልሷል!');
                         }}
                         className="w-full py-2 border border-white/10 hover:border-white/25 hover:bg-white/5 text-white/60 hover:text-white transition-all rounded text-[10px] font-mono font-bold uppercase cursor-pointer"
@@ -10356,6 +10773,126 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                   </div>
                 )}
 
+                {/* TAB CONTENT: ADMIN TABLE ASSIGNMENTS */}
+                {activeAdminTab === 'table_assignment' && (
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 text-left font-sans">
+                    {/* Add Assignment Form */}
+                    <div className="lg:col-span-4 bg-[#121212] border border-white/10 p-5 rounded-xl space-y-4">
+                      <div className="border-b border-white/5 pb-2">
+                        <span className="text-[9px] text-yellow-400 font-mono font-bold tracking-wider block uppercase">ROSTER & ASSIGNMENT</span>
+                        <h3 className="text-xs font-black text-white uppercase mt-0.5">📋 አዲስ ጠረጴዛ መደብ (Assign Table to Waiter)</h3>
+                        <p className="text-[10px] text-stone-400 mt-1">
+                          ለአስተናጋጆች በእለቱ የሚያገለግሉበትን የጠረጴዛ ቁጥር እዚህ ጋር መመደብ ይችላሉ።
+                        </p>
+                      </div>
+
+                      <form onSubmit={(e) => {
+                        e.preventDefault();
+                        const waiter = (e.currentTarget.querySelector('#admin-assign-waiter-select') as HTMLSelectElement).value;
+                        const table = (e.currentTarget.querySelector('#admin-assign-table-input') as HTMLInputElement).value.trim();
+                        if (!waiter || !table) {
+                          alert('እባክዎ መጀመሪያ አስተናጋጅ እና የጠረጴዛ ቁጥር ይምረጡ/ያስገቡ!');
+                          return;
+                        }
+
+                        // Add new assignment
+                        const newAssignment: TableAssignment = {
+                          id: 'ta-' + Date.now(),
+                          waiterName: waiter,
+                          tableNumber: table,
+                          date: new Date().toLocaleDateString('en-US')
+                        };
+
+                        setTableAssignments(prev => [...prev, newAssignment]);
+                        alert(`👍 ጠረጴዛ ${table} ለአስተናጋጅ ${waiter} በተሳካ ሁኔታ ተመድቧል!`);
+                      }} className="space-y-4">
+                        <div>
+                          <label className="text-[9px] font-mono text-white/40 uppercase block mb-1">🏃 አስተናጋጅ ይምረጡ (Select Waiter)</label>
+                          <select
+                            id="admin-assign-waiter-select"
+                            className="w-full bg-[#181818] border border-white/10 text-white text-xs font-bold p-2.5 outline-none focus:border-yellow-400"
+                            required
+                          >
+                            <option value="">-- አስተናጋጅ ይምረጡ --</option>
+                            {staff.filter(s => (s.role || '').toLowerCase() === 'waiter' || (s.accessPrivilege || '').toLowerCase() === 'waiter').map((w, idx) => (
+                              <option key={idx} value={w.name}>{w.name} (PIN: {w.pin})</option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="text-[9px] font-mono text-white/40 uppercase block mb-1">🍽️ የጠረጴዛ ቁጥር (Table Location)</label>
+                          <input
+                            type="text"
+                            id="admin-assign-table-input"
+                            placeholder="e.g. Table 05"
+                            defaultValue="Table 05"
+                            className="w-full bg-[#181818] border border-white/10 text-white text-xs font-bold p-2.5 outline-none focus:border-yellow-400"
+                            required
+                          />
+                          <p className="text-[9px] text-stone-500 font-mono mt-1">
+                            ማስታወሻ፡ እንደ "Table 05"፣ "Table 04" አድርገው ቢጽፉ ይመረጣል።
+                          </p>
+                        </div>
+
+                        <button 
+                          type="submit"
+                          className="w-full bg-yellow-400 hover:bg-white text-black text-xs font-black uppercase py-2.5 font-mono cursor-pointer transition-all border border-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]"
+                        >
+                          ASSIGN TABLE | መደብ 💾
+                        </button>
+                      </form>
+                    </div>
+
+                    {/* Active Assignments List */}
+                    <div className="lg:col-span-8 bg-[#121212] border border-white/10 p-5 rounded-xl space-y-4">
+                      <div className="border-b border-white/5 pb-2">
+                        <span className="text-[9px] text-yellow-400 font-mono font-bold tracking-wider block uppercase">ACTIVE ASSIGNMENTS</span>
+                        <h3 className="text-xs font-black text-white uppercase mt-0.5">📋 የዛሬው የጠረጴዛ ምደባዎች ዝርዝር</h3>
+                      </div>
+
+                      {tableAssignments.length === 0 ? (
+                        <div className="text-center py-12 text-stone-500 font-mono text-xs uppercase">
+                          ምንም የጠረጴዛ ምደባ አልተደረገም! (No tables assigned yet today)
+                        </div>
+                      ) : (
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-left border-collapse text-xs">
+                            <thead>
+                              <tr className="border-b border-white/15 text-stone-400 uppercase font-mono text-[9px]">
+                                <th className="pb-2">👤 አስተናጋጅ (Waiter)</th>
+                                <th className="pb-2">🍽️ የጠረጴዛ ቁጥር (Table)</th>
+                                <th className="pb-2">📅 ቀን (Date)</th>
+                                <th className="pb-2 text-right">እርምጃ (Action)</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {tableAssignments.map((ta) => (
+                                <tr key={ta.id} className="border-b border-white/5 hover:bg-white/5">
+                                  <td className="py-3 font-bold text-white">{ta.waiterName}</td>
+                                  <td className="py-3 font-mono font-black text-yellow-400">{ta.tableNumber}</td>
+                                  <td className="py-3 font-mono text-stone-400">{ta.date}</td>
+                                  <td className="py-3 text-right">
+                                    <button
+                                      onClick={() => {
+                                        setTableAssignments(prev => prev.filter(item => item.id !== ta.id));
+                                        alert('ምደባው ተሰርዟል!');
+                                      }}
+                                      className="px-2 py-1 bg-red-600/10 hover:bg-red-600 border border-red-500/20 hover:border-red-600 text-red-400 hover:text-white rounded text-[10px] font-bold font-mono transition-colors"
+                                    >
+                                      DELETE
+                                    </button>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
 
 
               </motion.div>
@@ -10415,6 +10952,112 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                   </button>
                 </div>
 
+                {/* Manager Quick Hub Dashboard */}
+                <div className="bg-[#121212]/80 border border-white/10 p-5 rounded-2xl space-y-4 text-left">
+                  <div>
+                    <span className="text-[9px] text-yellow-400 font-mono font-bold tracking-wider block uppercase">CONTROL CENTER HUB</span>
+                    <h3 className="text-sm font-black text-white uppercase mt-0.5">🚀 ማናጀር ፈጣን መቆጣጠሪያ ማዕከል (Manager Quick Control Panel)</h3>
+                    <p className="text-[11px] text-stone-400 mt-1">
+                      የጠረጴዛ መደብ፣ የምግብ መኖርና ማለቅ መቆጣጠሪያዎችን እንዲሁም ሌሎች ሁሉንም የማናጀር መቆጣጠሪያዎች እዚህ በፍጥነት ያግኙ።
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+                    {[
+                      {
+                        id: 'bono',
+                        titleAm: 'አስተናጋጅ ቦኖ',
+                        titleEn: 'Waiter Bono',
+                        icon: '🎟️',
+                        desc: 'አስተናጋጆችን በስራቸው መሸለም',
+                        badge: `${bonuses.length} ቦኖ`,
+                        badgeClass: 'bg-yellow-400/10 text-yellow-400 border border-yellow-500/20'
+                      },
+                      {
+                        id: 'attendance',
+                        titleAm: 'የስራተኛ አቴንዳንስ',
+                        titleEn: 'Attendance Logs',
+                        icon: '📅',
+                        desc: 'የሰራተኞች የዛሬ አቴንዳንስ',
+                        badge: `${attendance.length} መዝገብ`,
+                        badgeClass: 'bg-blue-400/10 text-blue-400 border border-blue-500/20'
+                      },
+                      {
+                        id: 'sales_review',
+                        titleAm: 'የባንክ ሂሳብ & ደረሰኝ',
+                        titleEn: 'Receipts & Ledger',
+                        icon: '💳',
+                        desc: 'የገቢና ወጪዎች ቁጥጥር',
+                        badge: 'ሪፖርቶች',
+                        badgeClass: 'bg-emerald-400/10 text-emerald-400 border border-emerald-500/20'
+                      },
+                      {
+                        id: 'vault',
+                        titleAm: 'ፋይል ማከማቻ',
+                        titleEn: 'Cloud Vault',
+                        icon: '📁',
+                        desc: 'ሰነዶችና መግቢያ ቪዲዮ',
+                        badge: 'ሰነዶች',
+                        badgeClass: 'bg-[#00f5ff]/10 text-[#00f5ff] border border-[#00f5ff]/20'
+                      },
+                      {
+                        id: 'menu_availability',
+                        titleAm: 'የምግብ መኖር/ማለቅ',
+                        titleEn: 'Stock Control',
+                        icon: '🍽️',
+                        desc: 'የተዘጋጁ/ያለቁ ምግቦች መለያ',
+                        badge: `${menuItems.filter(m => !m.available).length} ያለቀባቸው`,
+                        badgeClass: menuItems.filter(m => !m.available).length > 0 ? 'bg-red-500/20 text-red-400 border border-red-500/30' : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                      },
+                      {
+                        id: 'table_assignment',
+                        titleAm: 'ጠረጴዛ መመደቢያ',
+                        titleEn: 'Table Assignments',
+                        icon: '📋',
+                        desc: 'ለአስተናጋጅ ጠረጴዛ መደብ',
+                        badge: `${tableAssignments.length} የተመደበ`,
+                        badgeClass: 'bg-purple-400/10 text-purple-400 border border-purple-500/20'
+                      }
+                    ].map((tab) => (
+                      <button
+                        key={tab.id}
+                        onClick={() => {
+                          setManagerTab(tab.id as any);
+                          const element = document.getElementById('manager-tab-content-start');
+                          if (element) {
+                            element.scrollIntoView({ behavior: 'smooth' });
+                          }
+                        }}
+                        className={`p-3.5 rounded-xl border text-left flex flex-col justify-between gap-2.5 transition-all cursor-pointer group active:scale-95 ${
+                          managerTab === tab.id
+                            ? 'bg-yellow-400/10 border-yellow-400/60 shadow-[0_0_15px_rgba(234,179,8,0.15)]'
+                            : 'bg-black/30 border-white/5 hover:bg-white/5 hover:border-white/10'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between w-full">
+                          <span className="text-xl group-hover:scale-110 transition-transform">{tab.icon}</span>
+                          <span className={`text-[8px] font-mono font-bold px-1.5 py-0.5 rounded ${tab.badgeClass}`}>
+                            {tab.badge}
+                          </span>
+                        </div>
+                        <div className="space-y-0.5">
+                          <h4 className="text-[10px] font-black text-white group-hover:text-yellow-400 transition-colors uppercase leading-tight">
+                            {tab.titleAm}
+                          </h4>
+                          <p className="text-[8px] text-stone-400 font-mono leading-none">
+                            {tab.titleEn}
+                          </p>
+                          <p className="text-[7.5px] text-stone-500 leading-none mt-1 group-hover:text-stone-400 transition-colors">
+                            {tab.desc}
+                          </p>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div id="manager-tab-content-start" className="h-1"></div>
+
                 {/* Sub-navigation tabs */}
                 <div className="flex border-b border-white/10 gap-2 overflow-x-auto no-scrollbar">
                   <button 
@@ -10456,6 +11099,26 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                     }`}
                   >
                     📁 የክላውድ ፋይል ማከማቻ (CLOUD VAULT)
+                  </button>
+                  <button 
+                    onClick={() => setManagerTab('menu_availability')}
+                    className={`px-5 py-3 font-mono text-[11px] uppercase font-black tracking-widest border-b-2 transition-all shrink-0 cursor-pointer ${
+                      managerTab === 'menu_availability' 
+                        ? 'border-yellow-400 text-yellow-400 bg-yellow-400/5' 
+                        : 'border-transparent text-white/60 hover:text-white hover:bg-white/5'
+                    }`}
+                  >
+                    🍽️ የምግብ መኖር/ማለቅ (STOCK CONTROL)
+                  </button>
+                  <button 
+                    onClick={() => setManagerTab('table_assignment')}
+                    className={`px-5 py-3 font-mono text-[11px] uppercase font-black tracking-widest border-b-2 transition-all shrink-0 cursor-pointer ${
+                      managerTab === 'table_assignment' 
+                        ? 'border-yellow-400 text-yellow-400 bg-yellow-400/5' 
+                        : 'border-transparent text-white/60 hover:text-white hover:bg-white/5'
+                    }`}
+                  >
+                    📋 ለአስተናጋጆች ጠረጴዛ መመደቢያ (TABLE ASSIGNMENTS)
                   </button>
                 </div>
 
@@ -11573,6 +12236,165 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                   </div>
                 )}
 
+                {/* TAB CONTENT: STOCK CONTROL / MENU AVAILABILITY */}
+                {managerTab === 'menu_availability' && (
+                  <div className="bg-[#121212] border border-white/10 p-6 rounded-3xl space-y-6 text-left">
+                    <div className="border-b border-white/5 pb-3">
+                      <span className="text-[10px] text-yellow-400 font-mono font-bold tracking-wider block uppercase">MENU STOCK MANAGEMENT</span>
+                      <h3 className="text-md font-black text-white uppercase mt-0.5">🍽️ የምግብ ማለቅና መኖር መቆጣጠሪያ (Menu Item Stock & Availability)</h3>
+                      <p className="text-[11px] text-stone-400 font-sans mt-1">
+                        በእለቱ ያለቁ ወይም የተዘጋጁ ምግቦችን እዚህ ጋር በማብራት እና በማጥፋት ከደንበኞች እና ከአስተናጋጆች ሜኑ ላይ በቅጽበት መደበቅ ወይም ማሳየት ይችላሉ።
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {menuItems.map((m) => (
+                        <div key={m.id} className="bg-black/40 border border-white/5 p-4 rounded-xl flex items-center justify-between gap-3 hover:border-yellow-500/20 transition-all">
+                          <div className="space-y-1">
+                            <span className="text-[9px] bg-white/5 font-mono text-stone-400 px-1.5 py-0.5 rounded uppercase block w-fit">{m.cat}</span>
+                            <h4 className="text-xs font-black text-white uppercase">{appLang === 'am' ? m.nameAm : (m.nameEn || m.nameAm)}</h4>
+                            <p className="text-[10px] text-stone-500 font-mono">{m.price} ETB</p>
+                          </div>
+                          
+                          <button
+                            onClick={() => {
+                              handleToggleMenuItemAvailable(m.id);
+                              playVoiceAlert(`${m.nameEn || m.nameAm} availability updated.`);
+                            }}
+                            className={`px-3 py-1.5 rounded text-[10px] font-bold font-mono uppercase tracking-wider cursor-pointer border transition-all ${
+                              m.available 
+                                ? 'bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border-emerald-500/30' 
+                                : 'bg-red-500/10 hover:bg-red-500/20 text-red-400 border-red-500/30'
+                            }`}
+                          >
+                            {m.available ? '● IN STOCK (በክምችት አለ)' : '○ OUT OF STOCK (አልቋል)'}
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* TAB CONTENT: TABLE ASSIGNMENTS */}
+                {managerTab === 'table_assignment' && (
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 text-left">
+                    {/* Add Assignment Form */}
+                    <div className="lg:col-span-4 bg-[#121212] border border-white/10 p-5 rounded-xl space-y-4">
+                      <div className="border-b border-white/5 pb-2">
+                        <span className="text-[9px] text-yellow-400 font-mono font-bold tracking-wider block uppercase">ROSTER & ASSIGNMENT</span>
+                        <h3 className="text-xs font-black text-white uppercase mt-0.5">📋 አዲስ ጠረጴዛ መደብ (Assign Table to Waiter)</h3>
+                        <p className="text-[10px] text-stone-400 mt-1">
+                          ለአስተናጋጆች በእለቱ የሚያገለግሉበትን የጠረጴዛ ቁጥር እዚህ ጋር መመደብ ይችላሉ።
+                        </p>
+                      </div>
+
+                      <form onSubmit={(e) => {
+                        e.preventDefault();
+                        const waiter = (e.currentTarget.querySelector('#assign-waiter-select') as HTMLSelectElement).value;
+                        const table = (e.currentTarget.querySelector('#assign-table-input') as HTMLInputElement).value.trim();
+                        if (!waiter || !table) {
+                          alert('እባክዎ መጀመሪያ አስተናጋጅ እና የጠረጴዛ ቁጥር ይምረጡ/ያስገቡ!');
+                          return;
+                        }
+
+                        // Add new assignment
+                        const newAssignment: TableAssignment = {
+                          id: 'ta-' + Date.now(),
+                          waiterName: waiter,
+                          tableNumber: table,
+                          date: new Date().toLocaleDateString('en-US')
+                        };
+
+                        setTableAssignments(prev => [...prev, newAssignment]);
+                        alert(`👍 ጠረጴዛ ${table} ለአስተናጋጅ ${waiter} በተሳካ ሁኔታ ተመድቧል!`);
+                      }} className="space-y-4">
+                        <div>
+                          <label className="text-[9px] font-mono text-white/40 uppercase block mb-1">🏃 አስተናጋጅ ይምረጡ (Select Waiter)</label>
+                          <select
+                            id="assign-waiter-select"
+                            className="w-full bg-[#181818] border border-white/10 text-white text-xs font-bold p-2.5 outline-none focus:border-yellow-400"
+                            required
+                          >
+                            <option value="">-- አስተናጋጅ ይምረጡ --</option>
+                            {staff.filter(s => (s.role || '').toLowerCase() === 'waiter' || (s.accessPrivilege || '').toLowerCase() === 'waiter').map((w, idx) => (
+                              <option key={idx} value={w.name}>{w.name} (PIN: {w.pin})</option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="text-[9px] font-mono text-white/40 uppercase block mb-1">🍽️ የጠረጴዛ ቁጥር (Table Location)</label>
+                          <input
+                            type="text"
+                            id="assign-table-input"
+                            placeholder="e.g. Table 05"
+                            defaultValue="Table 05"
+                            className="w-full bg-[#181818] border border-white/10 text-white text-xs font-bold p-2.5 outline-none focus:border-yellow-400"
+                            required
+                          />
+                          <p className="text-[9px] text-stone-500 font-mono mt-1">
+                            ማስታወሻ፡ እንደ "Table 05"፣ "Table 04" አድርገው ቢጽፉ ይመረጣል።
+                          </p>
+                        </div>
+
+                        <button 
+                          type="submit"
+                          className="w-full bg-yellow-400 hover:bg-white text-black text-xs font-black uppercase py-2.5 font-mono cursor-pointer transition-all border border-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]"
+                        >
+                          ASSIGN TABLE | መደብ 💾
+                        </button>
+                      </form>
+                    </div>
+
+                    {/* Active Assignments List */}
+                    <div className="lg:col-span-8 bg-[#121212] border border-white/10 p-5 rounded-xl space-y-4">
+                      <div className="border-b border-white/5 pb-2">
+                        <span className="text-[9px] text-yellow-400 font-mono font-bold tracking-wider block uppercase">ACTIVE ASSIGNMENTS</span>
+                        <h3 className="text-xs font-black text-white uppercase mt-0.5">📋 የዛሬው የጠረጴዛ ምደባዎች ዝርዝር</h3>
+                      </div>
+
+                      {tableAssignments.length === 0 ? (
+                        <div className="text-center py-12 text-stone-500 font-mono text-xs uppercase">
+                          ምንም የጠረጴዛ ምደባ አልተደረገም! (No tables assigned yet today)
+                        </div>
+                      ) : (
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-left border-collapse text-xs">
+                            <thead>
+                              <tr className="border-b border-white/15 text-stone-400 uppercase font-mono text-[9px]">
+                                <th className="pb-2">👤 አስተናጋጅ (Waiter)</th>
+                                <th className="pb-2">🍽️ የጠረጴዛ ቁጥር (Table)</th>
+                                <th className="pb-2">📅 ቀን (Date)</th>
+                                <th className="pb-2 text-right">እርምጃ (Action)</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {tableAssignments.map((ta) => (
+                                <tr key={ta.id} className="border-b border-white/5 hover:bg-white/5">
+                                  <td className="py-3 font-bold text-white">{ta.waiterName}</td>
+                                  <td className="py-3 font-mono font-black text-yellow-400">{ta.tableNumber}</td>
+                                  <td className="py-3 font-mono text-stone-400">{ta.date}</td>
+                                  <td className="py-3 text-right">
+                                    <button
+                                      onClick={() => {
+                                        setTableAssignments(prev => prev.filter(item => item.id !== ta.id));
+                                        alert('ምደባው ተሰርዟል!');
+                                      }}
+                                      className="px-2 py-1 bg-red-600/10 hover:bg-red-600 border border-red-500/20 hover:border-red-600 text-red-400 hover:text-white rounded text-[10px] font-bold font-mono transition-colors"
+                                    >
+                                      DELETE
+                                    </button>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
 
 
 
@@ -11980,7 +12802,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                               </div>
                               <button 
                                 onClick={() => {
-                                  setAssistanceCalls(prev => prev.map(c => c.id === call.id ? { ...c, active: false } : c));
+                                  markAssistanceCallInactive(call.id);
                                 }}
                                 className="bg-[#1D1D16] hover:bg-emerald-500 hover:text-black border border-emerald-500/30 text-[#C1FF00] hover:border-emerald-400 text-[9px] font-black uppercase px-2.5 py-1.5 transition-colors cursor-pointer"
                               >
