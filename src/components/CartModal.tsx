@@ -450,12 +450,12 @@ export default function CartModal({
     <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-50 flex items-center justify-center p-4">
       <div className="bg-[#121212] w-full max-w-md rounded-none border border-white/10 shadow-2xl relative overflow-hidden flex flex-col max-h-[90vh]">
         
-        {/* Acid top accent header */}
-        <div className="h-1 w-full bg-[#C1FF00]"></div>
+        {/* Yellow, White, Red top accent header */}
+        <div className="h-1.5 w-full bg-gradient-to-r from-yellow-400 via-white to-red-600"></div>
 
         <div className="p-4 border-b border-white/10 flex justify-between items-center text-white">
           <div>
-            <h3 className="text-sm font-black uppercase tracking-widest text-[#C1FF00]">
+            <h3 className="text-sm font-black uppercase tracking-widest text-yellow-400">
               {cartUiLocales.cart_title[appLang as keyof typeof cartUiLocales.cart_title] || cartUiLocales.cart_title.en}
             </h3>
             <p className="font-mono text-[9px] uppercase tracking-wider text-white/50">
@@ -917,16 +917,16 @@ export default function CartModal({
             <span className="font-bold">{tipAmount} {appLang === 'am' ? 'ብር' : 'Birr'}</span>
           </div>
           <div className="flex justify-between border-t border-white/10 pt-2 text-xs">
-            <span className="font-black uppercase tracking-widest text-[#C1FF00]">
+            <span className="font-black uppercase tracking-widest text-yellow-400">
               {cartUiLocales.grand_total[appLang as keyof typeof cartUiLocales.grand_total] || cartUiLocales.grand_total.en}
             </span>
-            <span className="font-mono font-black text-lg text-[#C1FF00]">{grandTotal} {appLang === 'am' ? 'ብር' : 'Birr'}</span>
+            <span className="font-mono font-black text-lg text-yellow-400">{grandTotal} {appLang === 'am' ? 'ብር' : 'Birr'}</span>
           </div>
 
           <button 
             id="checkout-confirm-btn"
             onClick={handleSubmit}
-            className="w-full bg-[#C1FF00] hover:bg-white text-black font-black uppercase text-xs tracking-wider py-3 mt-3 transition-colors shrink-0 font-sans"
+            className="w-full bg-gradient-to-r from-yellow-400 via-white to-red-600 hover:from-yellow-300 hover:to-red-500 text-black font-black uppercase text-xs tracking-wider py-3.5 mt-3 transition-all rounded-xl border-2 border-red-600 shadow-lg shrink-0 font-sans cursor-pointer active:scale-95"
           >
             {cartUiLocales.place_order_btn[appLang as keyof typeof cartUiLocales.place_order_btn] || cartUiLocales.place_order_btn.en}
           </button>

@@ -44,6 +44,11 @@ const DEFAULT_LOGO = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000
 
 const sanitizeLogoUrl = (url: string | null | undefined): string => {
   if (!url) return DEFAULT_LOGO;
+  // External web link URLs (http/https) can fail to load, cause CORS/security issues, or break the layout.
+  // As requested, we treat link-based logo images as invalid and fallback to the robust built-in default logo.
+  if (url.startsWith('http://') || url.startsWith('https://')) {
+    return DEFAULT_LOGO;
+  }
   if (url.includes('photo-1542038784456-1ea8e935640e') || url.includes('photo-1542314831-068cd1dbfeeb')) {
     return DEFAULT_LOGO;
   }
@@ -100,7 +105,7 @@ export default function App() {
 
   // Sync logo globally via Supabase
   const handleUpdateLogoAndSync = async (newUrl: string) => {
-    setLogoUrl(newUrl);
+    setLogoUrl(sanitizeLogoUrl(newUrl));
     try {
       const { error } = await supabase
         .from('system_settings')
@@ -292,6 +297,18 @@ export default function App() {
 
   // Sync state helper with explicit error checking
   const syncKeyToCloud = async (key: string, value: any) => {
+    // Write to local cache first if enabled, for instant UI responsiveness
+    try {
+      if (localStorage.getItem('papyrus_cache_enabled') !== 'false') {
+        const fullCache = JSON.parse(localStorage.getItem('papyrus_settings_cache') || '{}');
+        fullCache[key] = value;
+        localStorage.setItem('papyrus_settings_cache', JSON.stringify(fullCache));
+        localStorage.setItem('papyrus_cache_last_sync', new Date().toISOString());
+      }
+    } catch (e) {
+      console.warn('Error writing local cache:', e);
+    }
+
     if (!hasLoadedCloudSettings) return;
     try {
       const { error } = await supabase
@@ -344,7 +361,14 @@ export default function App() {
   });
   const [activeAdminTab, setActiveAdminTab] = useState<'sales' | 'staff' | 'menu' | 'banks' | 'qrprint' | 'promo' | 'lodgeinfo' | 'reception' | 'branding' | 'gallery' | 'table_assignment'>('sales');
   const [ledgerFilterTab, setLedgerFilterTab] = useState<'daily' | 'monthly' | 'yearly'>('daily');
-  const [managerTab, setManagerTab] = useState<'bono' | 'attendance' | 'sales_review' | 'vault' | 'menu_availability' | 'table_assignment'>('bono');
+  const [managerTab, setManagerTab] = useState<'bono' | 'attendance' | 'sales_review' | 'vault' | 'menu_availability' | 'table_assignment' | 'cleaner' | 'cache'>('bono');
+  const [isCacheEnabled, setIsCacheEnabled] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('papyrus_cache_enabled') !== 'false';
+    } catch {
+      return true;
+    }
+  });
   const [showMyReadyDeliveriesOnly, setShowMyReadyDeliveriesOnly] = useState<boolean>(false);
   
   // RECEPTION / BEDROOM BOOKINGS STATE
@@ -1328,8 +1352,10 @@ export default function App() {
 
   // GUEST CONTROLS
   const [selectedCategory, setSelectedCategory] = useState<string>('food');
+  const [activeNavTab, setActiveNavTab] = useState<'home' | 'categories' | 'drinks' | 'about'>('home');
   const [selectedMenuCardId, setSelectedMenuCardId] = useState<string | null>(null);
   const menuScrollRef = React.useRef<HTMLDivElement>(null);
+  const categoryScrollRef = React.useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setSelectedMenuCardId(null);
@@ -1584,6 +1610,70 @@ export default function App() {
 
   useEffect(() => {
     const fetchCloudSettings = async () => {
+      // Read from local cache first if enabled, for instantaneous loading
+      try {
+        if (localStorage.getItem('papyrus_cache_enabled') !== 'false') {
+          const raw = localStorage.getItem('papyrus_settings_cache');
+          if (raw) {
+            const cachedData = JSON.parse(raw);
+            console.log('⚡ Loaded configurations from local cache system!');
+            
+            if (cachedData.logoUrl && cachedData.logoUrl.url !== undefined) setLogoUrl(sanitizeLogoUrl(cachedData.logoUrl.url));
+            if (Array.isArray(cachedData.attendance?.records)) setAttendance(cachedData.attendance.records);
+            if (Array.isArray(cachedData.menu?.items)) setMenuItems(cachedData.menu.items);
+            if (Array.isArray(cachedData.categories?.list)) setCategories(cachedData.categories.list);
+            if (Array.isArray(cachedData.banks?.accounts)) setBanks(cachedData.banks.accounts);
+            if (Array.isArray(cachedData.staff?.list)) setStaff(cachedData.staff.list);
+            if (Array.isArray(cachedData.orders?.list)) setOrders(cachedData.orders.list);
+            if (Array.isArray(cachedData.roomBookings?.list)) setRoomBookings(cachedData.roomBookings.list);
+            if (Array.isArray(cachedData.visitorLog?.list)) setVisitorLog(cachedData.visitorLog.list);
+            if (Array.isArray(cachedData.promos?.list)) setPromos(cachedData.promos.list);
+            if (cachedData.aboutLodgeText?.text !== undefined) setAboutLodgeText(cachedData.aboutLodgeText.text);
+            if (cachedData.bgVideoUrl?.url !== undefined) setBgVideoUrl(cachedData.bgVideoUrl.url);
+            if (cachedData.bgVideoType?.type !== undefined) setBgVideoType(cachedData.bgVideoType.type);
+            if (cachedData.isBgVideoEnabled?.enabled !== undefined) setIsBgVideoEnabled(cachedData.isBgVideoEnabled.enabled);
+            if (Array.isArray(cachedData.assistanceCalls?.list)) setAssistanceCalls(cachedData.assistanceCalls.list);
+            if (Array.isArray(cachedData.feedback?.list)) setFeedback(cachedData.feedback.list);
+            if (Array.isArray(cachedData.expenses?.list)) setExpenses(cachedData.expenses.list);
+            if (Array.isArray(cachedData.bonuses?.list)) setBonuses(cachedData.bonuses.list);
+            if (Array.isArray(cachedData.table_assignments?.list)) setTableAssignments(cachedData.table_assignments.list);
+            if (typeof cachedData.serviceChargeRate?.rate === 'number') setServiceChargeRate(cachedData.serviceChargeRate.rate);
+            if (typeof cachedData.vatRate?.rate === 'number') setVatRate(cachedData.vatRate.rate);
+            if (cachedData.chapa) {
+              if (cachedData.chapa.key !== undefined) setChapaKey(cachedData.chapa.key);
+              if (cachedData.chapa.active !== undefined) setChapaActive(cachedData.chapa.active);
+              if (cachedData.chapa.mode !== undefined) setChapaMode(cachedData.chapa.mode);
+            }
+            if (Array.isArray(cachedData.custom_roles?.list)) setCustomRoles(cachedData.custom_roles.list);
+            if (Array.isArray(cachedData.custom_privileges?.list)) setCustomPrivileges(cachedData.custom_privileges.list);
+            if (Array.isArray(cachedData.pending_attendance?.list)) setPendingAttendanceRequests(cachedData.pending_attendance.list);
+            if (cachedData.hero_title_am?.text !== undefined) setHeroTitleAm(cachedData.hero_title_am.text);
+            if (cachedData.hero_title_en?.text !== undefined) setHeroTitleEn(cachedData.hero_title_en.text);
+            if (cachedData.hero_subtitle_am?.text !== undefined) setHeroSubtitleAm(cachedData.hero_subtitle_am.text);
+            if (cachedData.hero_subtitle_en?.text !== undefined) setHeroSubtitleEn(cachedData.hero_subtitle_en.text);
+            if (cachedData.hero_intro_am?.text !== undefined) setHeroIntroAm(cachedData.hero_intro_am.text);
+            if (cachedData.hero_intro_en?.text !== undefined) setHeroIntroEn(cachedData.hero_intro_en.text);
+            if (cachedData.contact_hotline1?.text !== undefined) setContactHotline1(cachedData.contact_hotline1.text);
+            if (cachedData.contact_hotline2?.text !== undefined) setContactHotline2(cachedData.contact_hotline2.text);
+            if (cachedData.contact_location?.text !== undefined) setContactLocation(cachedData.contact_location.text);
+            if (cachedData.contact_address?.text !== undefined) setContactAddress(cachedData.contact_address.text);
+            if (cachedData.wifi_guest_ssid?.text !== undefined) setWifiGuestSsid(cachedData.wifi_guest_ssid.text);
+            if (cachedData.wifi_guest_password?.text !== undefined) setWifiGuestPassword(cachedData.wifi_guest_password.text);
+            if (cachedData.dining_breakfast_title_am?.text !== undefined) setDiningBreakfastTitleAm(cachedData.dining_breakfast_title_am.text);
+            if (cachedData.dining_breakfast_title_en?.text !== undefined) setDiningBreakfastTitleEn(cachedData.dining_breakfast_title_en.text);
+            if (cachedData.dining_breakfast_hours_am?.text !== undefined) setDiningBreakfastHoursAm(cachedData.dining_breakfast_hours_am.text);
+            if (cachedData.dining_breakfast_hours_en?.text !== undefined) setDiningBreakfastHoursEn(cachedData.dining_breakfast_hours_en.text);
+            if (cachedData.reception_assistance_am?.text !== undefined) setReceptionAssistanceAm(cachedData.reception_assistance_am.text);
+            if (cachedData.reception_assistance_en?.text !== undefined) setReceptionAssistanceEn(cachedData.reception_assistance_en.text);
+            if (cachedData.reception_emergency?.text !== undefined) setReceptionEmergency(cachedData.reception_emergency.text);
+            
+            setHasLoadedCloudSettings(true);
+          }
+        }
+      } catch (err) {
+        console.warn('Error parsing cached data:', err);
+      }
+
       // Helper to fetch key
       const fetchKey = async (key: string) => {
         try {
@@ -1607,170 +1697,197 @@ export default function App() {
         }
       };
 
-      // 1. Fetch logoUrl
-      const logoVal = await fetchKey('logoUrl');
-      if (logoVal && logoVal.url !== undefined) setLogoUrl(sanitizeLogoUrl(logoVal.url));
-
-      // 2. Fetch attendance
-      const attVal = await fetchKey('attendance');
-      if (attVal && Array.isArray(attVal.records)) setAttendance(attVal.records);
-
-      // 3. Fetch menu
-      const menuVal = await fetchKey('menu');
-      if (menuVal && Array.isArray(menuVal.items)) setMenuItems(menuVal.items);
-
-      // 4. Fetch categories
-      const catVal = await fetchKey('categories');
-      if (catVal && Array.isArray(catVal.list)) setCategories(catVal.list);
-
-      // 5. Fetch banks
-      const banksVal = await fetchKey('banks');
-      if (banksVal && Array.isArray(banksVal.accounts)) setBanks(banksVal.accounts);
-
-      // 6. Fetch staff
-      const staffVal = await fetchKey('staff');
-      if (staffVal && Array.isArray(staffVal.list)) setStaff(staffVal.list);
-
-      // 7. Fetch orders
-      const ordersVal = await fetchKey('orders');
-      if (ordersVal && Array.isArray(ordersVal.list)) setOrders(ordersVal.list);
-
-      // 8. Fetch roomBookings
-      const bookingsVal = await fetchKey('roomBookings');
-      if (bookingsVal && Array.isArray(bookingsVal.list)) setRoomBookings(bookingsVal.list);
-
-      // 9. Fetch visitorLog
-      const visitorVal = await fetchKey('visitorLog');
-      if (visitorVal && Array.isArray(visitorVal.list)) setVisitorLog(visitorVal.list);
-
-      // 10. Fetch promos
-      const promosVal = await fetchKey('promos');
-      if (promosVal && Array.isArray(promosVal.list)) setPromos(promosVal.list);
-
-      // 11. Fetch aboutLodgeText
-      const aboutVal = await fetchKey('aboutLodgeText');
-      if (aboutVal && aboutVal.text !== undefined) setAboutLodgeText(aboutVal.text);
-
-      // 12. Fetch bgVideoUrl
-      const bgUrlVal = await fetchKey('bgVideoUrl');
-      if (bgUrlVal && bgUrlVal.url !== undefined) setBgVideoUrl(bgUrlVal.url);
-
-      // 13. Fetch bgVideoType
-      const bgTypeVal = await fetchKey('bgVideoType');
-      if (bgTypeVal && bgTypeVal.type !== undefined) setBgVideoType(bgTypeVal.type);
-
-      // 14. Fetch isBgVideoEnabled
-      const bgEnabledVal = await fetchKey('isBgVideoEnabled');
-      if (bgEnabledVal && bgEnabledVal.enabled !== undefined) setIsBgVideoEnabled(bgEnabledVal.enabled);
-
-      // 15. Fetch assistanceCalls
-      const callsVal = await fetchKey('assistanceCalls');
-      if (callsVal && Array.isArray(callsVal.list)) setAssistanceCalls(callsVal.list);
-
-      // 16. Fetch feedback
-      const feedbackVal = await fetchKey('feedback');
-      if (feedbackVal && Array.isArray(feedbackVal.list)) setFeedback(feedbackVal.list);
-
-      // 17. Fetch expenses
-      const expensesVal = await fetchKey('expenses');
-      if (expensesVal && Array.isArray(expensesVal.list)) setExpenses(expensesVal.list);
-
-      // 18. Fetch bonuses
-      const bonusesVal = await fetchKey('bonuses');
-      if (bonusesVal && Array.isArray(bonusesVal.list)) setBonuses(bonusesVal.list);
-
-      // 18.5 Fetch table assignments
-      const taVal = await fetchKey('table_assignments');
-      if (taVal && Array.isArray(taVal.list)) setTableAssignments(taVal.list);
-
-      // 19. Fetch serviceChargeRate
-      const scVal = await fetchKey('serviceChargeRate');
-      if (scVal && typeof scVal.rate === 'number') setServiceChargeRate(scVal.rate);
-
-      // 20. Fetch vatRate
-      const vatVal = await fetchKey('vatRate');
-      if (vatVal && typeof vatVal.rate === 'number') setVatRate(vatVal.rate);
-
-      // 21. Fetch chapa settings
-      const chapaVal = await fetchKey('chapa');
-      if (chapaVal) {
-        if (chapaVal.key !== undefined) setChapaKey(chapaVal.key);
-        if (chapaVal.active !== undefined) setChapaActive(chapaVal.active);
-        if (chapaVal.mode !== undefined) setChapaMode(chapaVal.mode);
-      }
-
-      // 22. Fetch gallery table rows
-      try {
-        console.log("Fetching gallery items from Supabase...");
-        const { data: galleryData, error: galleryErr } = await supabase
-          .from('gallery')
-          .select('*')
-          .order('created_at', { ascending: false });
-        if (galleryErr) {
-          console.warn("Could not fetch gallery items from Supabase, retaining local defaults:", galleryErr);
-        } else if (galleryData) {
-          console.log(`Fetched ${galleryData.length} gallery items successfully.`);
-          setGalleryItems(galleryData);
+      // Wrapper to fetch key and save to local cache
+      const fetchKeyAndCache = async (key: string) => {
+        const val = await fetchKey(key);
+        if (val !== null) {
+          try {
+            if (localStorage.getItem('papyrus_cache_enabled') !== 'false') {
+              const currentCache = JSON.parse(localStorage.getItem('papyrus_settings_cache') || '{}');
+              currentCache[key] = val;
+              localStorage.setItem('papyrus_settings_cache', JSON.stringify(currentCache));
+              localStorage.setItem('papyrus_cache_last_sync', new Date().toISOString());
+            }
+          } catch (e) {
+            console.warn('Cache write error:', e);
+          }
         }
+        return val;
+      };
+
+      try {
+        // 1. Fetch logoUrl
+        const logoVal = await fetchKeyAndCache('logoUrl');
+        if (logoVal && logoVal.url !== undefined) {
+          setLogoUrl(sanitizeLogoUrl(logoVal.url));
+          if (logoVal.url.startsWith('http://') || logoVal.url.startsWith('https://')) {
+            handleUpdateLogoAndSync(DEFAULT_LOGO);
+          }
+        }
+
+        // 2. Fetch attendance
+        const attVal = await fetchKeyAndCache('attendance');
+        if (attVal && Array.isArray(attVal.records)) setAttendance(attVal.records);
+
+        // 3. Fetch menu
+        const menuVal = await fetchKeyAndCache('menu');
+        if (menuVal && Array.isArray(menuVal.items)) setMenuItems(menuVal.items);
+
+        // 4. Fetch categories
+        const catVal = await fetchKeyAndCache('categories');
+        if (catVal && Array.isArray(catVal.list)) setCategories(catVal.list);
+
+        // 5. Fetch banks
+        const banksVal = await fetchKeyAndCache('banks');
+        if (banksVal && Array.isArray(banksVal.accounts)) setBanks(banksVal.accounts);
+
+        // 6. Fetch staff
+        const staffVal = await fetchKeyAndCache('staff');
+        if (staffVal && Array.isArray(staffVal.list)) setStaff(staffVal.list);
+
+        // 7. Fetch orders
+        const ordersVal = await fetchKeyAndCache('orders');
+        if (ordersVal && Array.isArray(ordersVal.list)) setOrders(ordersVal.list);
+
+        // 8. Fetch roomBookings
+        const bookingsVal = await fetchKeyAndCache('roomBookings');
+        if (bookingsVal && Array.isArray(bookingsVal.list)) setRoomBookings(bookingsVal.list);
+
+        // 9. Fetch visitorLog
+        const visitorVal = await fetchKeyAndCache('visitorLog');
+        if (visitorVal && Array.isArray(visitorVal.list)) setVisitorLog(visitorVal.list);
+
+        // 10. Fetch promos
+        const promosVal = await fetchKeyAndCache('promos');
+        if (promosVal && Array.isArray(promosVal.list)) setPromos(promosVal.list);
+
+        // 11. Fetch aboutLodgeText
+        const aboutVal = await fetchKeyAndCache('aboutLodgeText');
+        if (aboutVal && aboutVal.text !== undefined) setAboutLodgeText(aboutVal.text);
+
+        // 12. Fetch bgVideoUrl
+        const bgUrlVal = await fetchKeyAndCache('bgVideoUrl');
+        if (bgUrlVal && bgUrlVal.url !== undefined) setBgVideoUrl(bgUrlVal.url);
+
+        // 13. Fetch bgVideoType
+        const bgTypeVal = await fetchKeyAndCache('bgVideoType');
+        if (bgTypeVal && bgTypeVal.type !== undefined) setBgVideoType(bgTypeVal.type);
+
+        // 14. Fetch isBgVideoEnabled
+        const bgEnabledVal = await fetchKeyAndCache('isBgVideoEnabled');
+        if (bgEnabledVal && bgEnabledVal.enabled !== undefined) setIsBgVideoEnabled(bgEnabledVal.enabled);
+
+        // 15. Fetch assistanceCalls
+        const callsVal = await fetchKeyAndCache('assistanceCalls');
+        if (callsVal && Array.isArray(callsVal.list)) setAssistanceCalls(callsVal.list);
+
+        // 16. Fetch feedback
+        const feedbackVal = await fetchKeyAndCache('feedback');
+        if (feedbackVal && Array.isArray(feedbackVal.list)) setFeedback(feedbackVal.list);
+
+        // 17. Fetch expenses
+        const expensesVal = await fetchKeyAndCache('expenses');
+        if (expensesVal && Array.isArray(expensesVal.list)) setExpenses(expensesVal.list);
+
+        // 18. Fetch bonuses
+        const bonusesVal = await fetchKeyAndCache('bonuses');
+        if (bonusesVal && Array.isArray(bonusesVal.list)) setBonuses(bonusesVal.list);
+
+        // 18.5 Fetch table assignments
+        const taVal = await fetchKeyAndCache('table_assignments');
+        if (taVal && Array.isArray(taVal.list)) setTableAssignments(taVal.list);
+
+        // 19. Fetch serviceChargeRate
+        const scVal = await fetchKeyAndCache('serviceChargeRate');
+        if (scVal && typeof scVal.rate === 'number') setServiceChargeRate(scVal.rate);
+
+        // 20. Fetch vatRate
+        const vatVal = await fetchKeyAndCache('vatRate');
+        if (vatVal && typeof vatVal.rate === 'number') setVatRate(vatVal.rate);
+
+        // 21. Fetch chapa settings
+        const chapaVal = await fetchKeyAndCache('chapa');
+        if (chapaVal) {
+          if (chapaVal.key !== undefined) setChapaKey(chapaVal.key);
+          if (chapaVal.active !== undefined) setChapaActive(chapaVal.active);
+          if (chapaVal.mode !== undefined) setChapaMode(chapaVal.mode);
+        }
+
+        // 22. Fetch gallery table rows
+        try {
+          console.log("Fetching gallery items from Supabase...");
+          const { data: galleryData, error: galleryErr } = await supabase
+            .from('gallery')
+            .select('*')
+            .order('created_at', { ascending: false });
+          if (galleryErr) {
+            console.warn("Could not fetch gallery items from Supabase, retaining local defaults:", galleryErr);
+          } else if (galleryData) {
+            console.log(`Fetched ${galleryData.length} gallery items successfully.`);
+            setGalleryItems(galleryData);
+          }
+        } catch (err) {
+          console.warn("Exception fetching gallery items, retaining local defaults:", err);
+        }
+
+        // 23. Fetch custom roles, privileges, and pending attendance from system_settings
+        const customRolesVal = await fetchKeyAndCache('custom_roles');
+        if (customRolesVal && Array.isArray(customRolesVal.list)) setCustomRoles(customRolesVal.list);
+
+        const customPrivsVal = await fetchKeyAndCache('custom_privileges');
+        if (customPrivsVal && Array.isArray(customPrivsVal.list)) setCustomPrivileges(customPrivsVal.list);
+
+        const pendingAttVal = await fetchKeyAndCache('pending_attendance');
+        if (pendingAttVal && Array.isArray(pendingAttVal.list)) setPendingAttendanceRequests(pendingAttVal.list);
+
+        // Load Hero Title & Contact values
+        const hta = await fetchKeyAndCache('hero_title_am');
+        if (hta && hta.text !== undefined) setHeroTitleAm(hta.text);
+        const hte = await fetchKeyAndCache('hero_title_en');
+        if (hte && hte.text !== undefined) setHeroTitleEn(hte.text);
+        const hsa = await fetchKeyAndCache('hero_subtitle_am');
+        if (hsa && hsa.text !== undefined) setHeroSubtitleAm(hsa.text);
+        const hse = await fetchKeyAndCache('hero_subtitle_en');
+        if (hse && hse.text !== undefined) setHeroSubtitleEn(hse.text);
+        const hia = await fetchKeyAndCache('hero_intro_am');
+        if (hia && hia.text !== undefined) setHeroIntroAm(hia.text);
+        const hie = await fetchKeyAndCache('hero_intro_en');
+        if (hie && hie.text !== undefined) setHeroIntroEn(hie.text);
+
+        const ch1 = await fetchKeyAndCache('contact_hotline1');
+        if (ch1 && ch1.text !== undefined) setContactHotline1(ch1.text);
+        const ch2 = await fetchKeyAndCache('contact_hotline2');
+        if (ch2 && ch2.text !== undefined) setContactHotline2(ch2.text);
+        const cl = await fetchKeyAndCache('contact_location');
+        if (cl && cl.text !== undefined) setContactLocation(cl.text);
+        const ca = await fetchKeyAndCache('contact_address');
+        if (ca && ca.text !== undefined) setContactAddress(ca.text);
+
+        const wgs = await fetchKeyAndCache('wifi_guest_ssid');
+        if (wgs && wgs.text !== undefined) setWifiGuestSsid(wgs.text);
+        const wgp = await fetchKeyAndCache('wifi_guest_password');
+        if (wgp && wgp.text !== undefined) setWifiGuestPassword(wgp.text);
+
+        const dbta = await fetchKeyAndCache('dining_breakfast_title_am');
+        if (dbta && dbta.text !== undefined) setDiningBreakfastTitleAm(dbta.text);
+        const dbte = await fetchKeyAndCache('dining_breakfast_title_en');
+        if (dbte && dbte.text !== undefined) setDiningBreakfastTitleEn(dbte.text);
+        const dbha = await fetchKeyAndCache('dining_breakfast_hours_am');
+        if (dbha && dbha.text !== undefined) setDiningBreakfastHoursAm(dbha.text);
+        const dbhe = await fetchKeyAndCache('dining_breakfast_hours_en');
+        if (dbhe && dbhe.text !== undefined) setDiningBreakfastHoursEn(dbhe.text);
+
+        const raa = await fetchKeyAndCache('reception_assistance_am');
+        if (raa && raa.text !== undefined) setReceptionAssistanceAm(raa.text);
+        const rae = await fetchKeyAndCache('reception_assistance_en');
+        if (rae && rae.text !== undefined) setReceptionAssistanceEn(rae.text);
+        const re = await fetchKeyAndCache('reception_emergency');
+        if (re && re.text !== undefined) setReceptionEmergency(re.text);
       } catch (err) {
-        console.warn("Exception fetching gallery items, retaining local defaults:", err);
+        console.warn("Error fetching configurations from Supabase, using local state and cache systems:", err);
+      } finally {
+        setHasLoadedCloudSettings(true);
       }
-
-      // 23. Fetch custom roles, privileges, and pending attendance from system_settings
-      const customRolesVal = await fetchKey('custom_roles');
-      if (customRolesVal && Array.isArray(customRolesVal.list)) setCustomRoles(customRolesVal.list);
-
-      const customPrivsVal = await fetchKey('custom_privileges');
-      if (customPrivsVal && Array.isArray(customPrivsVal.list)) setCustomPrivileges(customPrivsVal.list);
-
-      const pendingAttVal = await fetchKey('pending_attendance');
-      if (pendingAttVal && Array.isArray(pendingAttVal.list)) setPendingAttendanceRequests(pendingAttVal.list);
-
-      // Load Hero Title & Contact values
-      const hta = await fetchKey('hero_title_am');
-      if (hta && hta.text !== undefined) setHeroTitleAm(hta.text);
-      const hte = await fetchKey('hero_title_en');
-      if (hte && hte.text !== undefined) setHeroTitleEn(hte.text);
-      const hsa = await fetchKey('hero_subtitle_am');
-      if (hsa && hsa.text !== undefined) setHeroSubtitleAm(hsa.text);
-      const hse = await fetchKey('hero_subtitle_en');
-      if (hse && hse.text !== undefined) setHeroSubtitleEn(hse.text);
-      const hia = await fetchKey('hero_intro_am');
-      if (hia && hia.text !== undefined) setHeroIntroAm(hia.text);
-      const hie = await fetchKey('hero_intro_en');
-      if (hie && hie.text !== undefined) setHeroIntroEn(hie.text);
-
-      const ch1 = await fetchKey('contact_hotline1');
-      if (ch1 && ch1.text !== undefined) setContactHotline1(ch1.text);
-      const ch2 = await fetchKey('contact_hotline2');
-      if (ch2 && ch2.text !== undefined) setContactHotline2(ch2.text);
-      const cl = await fetchKey('contact_location');
-      if (cl && cl.text !== undefined) setContactLocation(cl.text);
-      const ca = await fetchKey('contact_address');
-      if (ca && ca.text !== undefined) setContactAddress(ca.text);
-
-      const wgs = await fetchKey('wifi_guest_ssid');
-      if (wgs && wgs.text !== undefined) setWifiGuestSsid(wgs.text);
-      const wgp = await fetchKey('wifi_guest_password');
-      if (wgp && wgp.text !== undefined) setWifiGuestPassword(wgp.text);
-
-      const dbta = await fetchKey('dining_breakfast_title_am');
-      if (dbta && dbta.text !== undefined) setDiningBreakfastTitleAm(dbta.text);
-      const dbte = await fetchKey('dining_breakfast_title_en');
-      if (dbte && dbte.text !== undefined) setDiningBreakfastTitleEn(dbte.text);
-      const dbha = await fetchKey('dining_breakfast_hours_am');
-      if (dbha && dbha.text !== undefined) setDiningBreakfastHoursAm(dbha.text);
-      const dbhe = await fetchKey('dining_breakfast_hours_en');
-      if (dbhe && dbhe.text !== undefined) setDiningBreakfastHoursEn(dbhe.text);
-
-      const raa = await fetchKey('reception_assistance_am');
-      if (raa && raa.text !== undefined) setReceptionAssistanceAm(raa.text);
-      const rae = await fetchKey('reception_assistance_en');
-      if (rae && rae.text !== undefined) setReceptionAssistanceEn(rae.text);
-      const re = await fetchKey('reception_emergency');
-      if (re && re.text !== undefined) setReceptionEmergency(re.text);
-
-      setHasLoadedCloudSettings(true);
     };
     fetchCloudSettings();
   }, []);
@@ -3091,6 +3208,16 @@ export default function App() {
     }
   };
 
+  const scrollCategories = (direction: 'left' | 'right') => {
+    if (categoryScrollRef.current) {
+      const scrollAmount = 200;
+      categoryScrollRef.current.scrollBy({
+        left: direction === 'left' ? -scrollAmount : scrollAmount,
+        behavior: 'smooth'
+      });
+    }
+  };
+
   // ADD TO CLIENT BASKET
   const handleAddToBasket = (itemId: string) => {
     const item = menuItems.find(m => m.id === itemId);
@@ -4220,137 +4347,286 @@ export default function App() {
       )}
       <div className="absolute inset-0 bg-[radial-gradient(ellipse_80%_80%_at_50%_-20%,rgba(193,255,0,0.04),rgba(255,255,255,0))] pointer-events-none z-[2]" />
 
-      <header className="sticky top-0 z-50 bg-[#0F0F0F]/95 backdrop-blur-md border-b-2 border-white/5 py-4 px-4 md:px-8 flex justify-between items-center transition-all">
-        <div className="flex items-center gap-3">
-          {/* Company Dynamic Logo */}
-          <div className="w-10 h-10 rounded-xl overflow-hidden flex items-center justify-center">
-            {logoUrl ? (
-              <img src={logoUrl} alt="Logo" referrerPolicy="no-referrer" className="w-full h-full object-cover" />
+      {activeRole === 'customer' ? (
+        <header className="sticky top-0 z-50 bg-[#f4c22b] text-black py-3 px-3 sm:px-6 flex items-center justify-between border-b-4 border-[#cf9d12] shadow-xl transition-all gap-3">
+          {/* Logo Section */}
+          <div 
+            onClick={() => {
+              setActiveRole('entry');
+              setCurrentUser(null);
+            }}
+            className="flex items-center gap-2 shrink-0 cursor-pointer hover:scale-105 active:scale-95 transition-transform"
+          >
+            <div className="w-10 h-10 rounded-full overflow-hidden flex items-center justify-center bg-white border-2 border-[#b21f1f] shadow-md shrink-0">
+              <img src={sanitizeLogoUrl(logoUrl)} alt="Logo" referrerPolicy="no-referrer" className="w-full h-full object-cover" />
+            </div>
+            <div className="flex flex-col text-left leading-none shrink-0">
+              <span className="text-[10px] sm:text-[12px] font-extrabold text-[#b21f1f] uppercase tracking-tight">HAWASSA</span>
+              <span className="text-[6px] sm:text-[8px] text-stone-800 font-mono tracking-widest uppercase">PAPYRUS</span>
+            </div>
+          </div>
+
+          {/* Horizontally Scrollable Navigation Links */}
+          <div className="flex-1 flex items-center gap-2 overflow-x-auto no-scrollbar scroll-smooth py-1 px-1">
+            <button 
+              onClick={() => {
+                setActiveNavTab('home');
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+              }} 
+              className={`px-3 py-1.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all duration-300 shrink-0 cursor-pointer ${
+                activeNavTab === 'home'
+                  ? 'bg-white text-[#b21f1f] border border-white shadow-md'
+                  : 'bg-[#b21f1f] text-white hover:bg-[#8c1414] border border-[#8c1414]'
+              }`}
+            >
+              {appLang === 'am' ? 'መነሻ' : 'Home'}
+            </button>
+            <button 
+              onClick={() => {
+                setActiveNavTab('categories');
+                const catSec = document.getElementById('category-highlights-section');
+                if (catSec) catSec.scrollIntoView({ behavior: 'smooth' });
+              }} 
+              className={`px-3 py-1.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all duration-300 shrink-0 cursor-pointer ${
+                activeNavTab === 'categories'
+                  ? 'bg-white text-[#b21f1f] border border-white shadow-md'
+                  : 'bg-[#b21f1f] text-white hover:bg-[#8c1414] border border-[#8c1414]'
+              }`}
+            >
+              {appLang === 'am' ? 'ምድቦች' : 'Category'}
+            </button>
+            <button 
+              onClick={() => {
+                setActiveNavTab('drinks');
+                setSelectedCategory('drinks');
+                const catSec = document.getElementById('category-highlights-section');
+                if (catSec) catSec.scrollIntoView({ behavior: 'smooth' });
+              }} 
+              className={`px-3 py-1.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all duration-300 shrink-0 cursor-pointer ${
+                activeNavTab === 'drinks'
+                  ? 'bg-white text-[#b21f1f] border border-white shadow-md'
+                  : 'bg-[#b21f1f] text-white hover:bg-[#8c1414] border border-[#8c1414]'
+              }`}
+            >
+              {appLang === 'am' ? 'መጠጦች' : 'Drinks'}
+            </button>
+            <button 
+              onClick={() => {
+                setActiveNavTab('about');
+                const elements = document.getElementsByClassName('gallery-section-tag');
+                if (elements.length > 0) {
+                  elements[0].scrollIntoView({ behavior: 'smooth' });
+                }
+              }} 
+              className={`px-3 py-1.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all duration-300 shrink-0 cursor-pointer ${
+                activeNavTab === 'about'
+                  ? 'bg-white text-[#b21f1f] border border-white shadow-md'
+                  : 'bg-[#b21f1f] text-white hover:bg-[#8c1414] border border-[#8c1414]'
+              }`}
+            >
+              {appLang === 'am' ? 'ስለ እኛ' : 'About'}
+            </button>
+            
+            {/* Need Help Button */}
+            <button 
+              onClick={handleTriggerBuzzer} 
+              className="bg-[#b21f1f] hover:bg-[#8c1414] text-white px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all shadow-md active:scale-95 cursor-pointer border border-[#8c1414] shrink-0"
+            >
+              {appLang === 'am' ? 'እርዳታ ይጥሩ 🛎️' : 'Need Help? 🛎️'}
+            </button>
+
+            {/* Room Location Selector */}
+            <div className="flex items-center gap-1.5 bg-white border border-stone-200 px-2.5 py-1 rounded-xl shadow-md shrink-0">
+              <MapPin className="text-[#b21f1f] w-3.5 h-3.5 shrink-0" />
+              <div className="flex flex-col text-left">
+                <span className="text-[6px] uppercase font-mono font-black text-stone-500 tracking-wider block leading-none">Room</span>
+                <input 
+                  type="text" 
+                  value={guestLocation}
+                  onChange={(e) => setGuestLocation(e.target.value)}
+                  placeholder="Room 101"
+                  className="bg-transparent text-stone-900 font-black text-xs outline-none w-14 uppercase leading-none p-0 border-none focus:ring-0"
+                  id="guest-location-input-top-main"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Right section: Lang & Cart */}
+          <div className="flex items-center gap-2 shrink-0">
+            {/* Universal Lang Selector with all native and foreign options */}
+            <div className="flex items-center gap-1 bg-white hover:bg-stone-50 border border-stone-200 px-2 py-1 rounded-xl transition-all shrink-0">
+              <span className="text-xs">🌐</span>
+              <select
+                value={appLang}
+                onChange={(e) => {
+                  const selected = e.target.value as any;
+                  setAppLang(selected);
+                  sessionStorage.setItem('papyrus_app_lang', selected);
+                }}
+                className="bg-transparent text-stone-900 font-black text-[9px] tracking-wider uppercase border-none outline-none cursor-pointer pr-1 flex focus:ring-0"
+              >
+                <optgroup label="Native" className="bg-stone-100 text-stone-900">
+                  <option value="am">አማርኛ</option>
+                  <option value="or">Oromoo</option>
+                  <option value="ti">ትግርኛ</option>
+                </optgroup>
+                <optgroup label="Foreign" className="bg-stone-100 text-stone-900">
+                  <option value="en">English</option>
+                  <option value="fr">Français</option>
+                  <option value="de">Deutsch</option>
+                  <option value="it">Italiano</option>
+                </optgroup>
+              </select>
+            </div>
+
+            {/* Shopping Cart Button */}
+            <button 
+              onClick={() => setIsCartOpen(true)}
+              className="relative px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-yellow-400 via-white to-red-600 hover:from-yellow-300 hover:via-amber-50 hover:to-red-500 text-red-950 font-black text-xs border-2 border-red-700 flex items-center gap-1.5 shadow-md active:scale-95 transition-all cursor-pointer shrink-0"
+              title="የትእዛዝ ማስቀመጫ ዘንቢል / Order Basket"
+            >
+              <ShoppingCart className="w-4 h-4 text-red-700 fill-yellow-300" />
+              <span className="hidden sm:inline font-mono uppercase tracking-wider">{appLang === 'am' ? 'ዘንቢል' : 'Cart'}</span>
+              {cart.length > 0 ? (
+                <span className="bg-red-600 text-white text-[9px] font-black font-mono px-1.5 py-0.5 rounded-full border border-white shadow-sm animate-bounce">
+                  {cart.reduce((sum, i) => sum + i.qty, 0)}
+                </span>
+              ) : (
+                <span className="w-2.5 h-2.5 bg-red-600 rounded-full ring-2 ring-white" />
+              )}
+            </button>
+          </div>
+        </header>
+      ) : (
+        <header className="sticky top-0 z-50 bg-[#0F0F0F]/95 backdrop-blur-md border-b-2 border-white/5 py-4 px-4 md:px-8 flex justify-between items-center transition-all">
+          <div className="flex items-center gap-3">
+            {/* Company Dynamic Logo */}
+            <div className="w-10 h-10 rounded-xl overflow-hidden flex items-center justify-center">
+              <img src={sanitizeLogoUrl(logoUrl)} alt="Logo" referrerPolicy="no-referrer" className="w-full h-full object-cover" />
+            </div>
+            <div>
+              <span className="text-white font-extrabold tracking-widest text-[#C1FF00] text-xs block">HAWASSA PAPYRUS</span>
+              <span className="text-[8px] text-[#00f5ff] font-mono tracking-wider block font-bold">DIGITAL ECO-PORTAL v2</span>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2.5">
+            {/* UNIVERSAL COMPACT LANGUAGE DROPDOWN */}
+            <div className="flex items-center gap-1 bg-white/5 hover:bg-white/10 border border-white/10 px-2 py-1 rounded-xl transition-all">
+              <span className="text-xs">🌐</span>
+              <select
+                id="header-lang-selector"
+                value={appLang}
+                onChange={(e) => {
+                  const selected = e.target.value as any;
+                  setAppLang(selected);
+                  sessionStorage.setItem('papyrus_app_lang', selected);
+                  const descMap: any = {
+                    am: 'ቋንቋ ወደ አማርኛ ተቀይሯል',
+                    en: 'Language changed to English',
+                    or: 'Afaan gara Oromootti jijjiirameera',
+                    ti: 'ቋንቋ ናብ ትግርኛ ተቐይሩ ኣሎ',
+                    fr: 'La langue est changée en Français',
+                    de: 'Sprache auf Deutsch umgestellt',
+                    it: 'Lingua impostata su Italiano'
+                  };
+                  runVoiceOver(descMap[selected] || 'Language changed', true);
+                }}
+                className="bg-transparent text-white font-black text-[9px] tracking-wider uppercase border-none outline-none cursor-pointer pr-1 flex focus:ring-0"
+                style={{ colorScheme: 'dark' }}
+              >
+                <optgroup label="ሀገረሰብ (NATIVE)" className="bg-[#0F0F0F] text-white">
+                  <option value="am">አማርኛ</option>
+                  <option value="or">Oromoo</option>
+                  <option value="ti">ትግርኛ</option>
+                </optgroup>
+                <optgroup label="የውጭ (FOREIGN)" className="bg-[#0F0F0F] text-white">
+                  <option value="en">English</option>
+                  <option value="fr">Français</option>
+                  <option value="de">Deutsch</option>
+                  <option value="it">Italiano</option>
+                </optgroup>
+              </select>
+            </div>
+
+            {/* DYNAMIC VOICE READER ACCESSIBILITY TACTILE SWITCH (for visually impaired) */}
+            <button
+              id="btn-header-voiceover-toggle"
+              onClick={() => {
+                const nextVal = !isVoiceOverEnabled;
+                setIsVoiceOverEnabled(nextVal);
+                if (nextVal) {
+                  setTimeout(() => {
+                    runVoiceOver(appLang === 'am' ? 'የድምፅ ረዳት አገልግሎት በርቷል' : 'Screen reader enabled.', true);
+                  }, 100);
+                }
+              }}
+              className={`px-2 py-1.5 rounded-xl text-[9px] font-black uppercase tracking-wider transition-all flex items-center gap-1 border hover:scale-[1.01] cursor-pointer ${
+                isVoiceOverEnabled 
+                  ? 'bg-[#C1FF00]/10 text-[#C1FF00] border-[#C1FF00]/30 font-extrabold' 
+                  : 'bg-white/5 text-white/40 border-white/10 hover:text-white hover:bg-white/10'
+              }`}
+              title="Voice Reader Activation"
+            >
+              <span>{isVoiceOverEnabled ? '🔊 AUDIO-ON' : '🔇 AUDIO-OFF'}</span>
+            </button>
+
+            {activeRole !== 'entry' ? (
+              <div className="flex items-center gap-2">
+                <button
+                  id="btn-header-back-home"
+                  onClick={() => {
+                    setActiveRole('entry');
+                    setCurrentUser(null);
+                  }}
+                  className="bg-white/5 hover:bg-white/10 text-white font-mono text-[9px] uppercase font-black tracking-widest px-2.5 py-1.5 rounded border border-white/10 cursor-pointer flex items-center gap-1 transition-all leading-none"
+                >
+                  <span>🏡 {appLang === 'am' ? 'ዋና በር' : 'HOME'}</span>
+                </button>
+
+                {activeRole === 'customer' && (
+                  <button 
+                    id="btn-basket-react"
+                    onClick={() => setIsCartOpen(true)}
+                    className="bg-gradient-to-r from-yellow-400 via-white to-red-600 hover:from-yellow-300 hover:via-amber-50 hover:to-red-500 text-red-950 border-2 border-red-700 px-3.5 py-1.5 font-black text-xs uppercase tracking-wider relative flex items-center gap-1.5 cursor-pointer rounded-xl shadow-md active:scale-95 transition-all"
+                  >
+                    <ShoppingCart className="w-3.5 h-3.5 text-red-700 fill-yellow-300" />
+                    <span>{appLang === 'am' ? 'የትእዛዝ ዘንቢል' : 'Cart Basket'}</span>
+                    {cart.length > 0 && (
+                      <span id="badge-cart-qty" className="bg-red-600 text-white px-1.5 py-0.5 text-[9px] font-black font-mono rounded-full border border-white shadow-sm animate-pulse">
+                        {cart.reduce((sum, i) => sum + i.qty, 0)}
+                      </span>
+                    )}
+                  </button>
+                )}
+
+                {currentUser && (
+                  <div className="flex items-center gap-1.5 bg-[#00f5ff]/10 border border-[#00f5ff]/30 px-2 py-1 text-[8px] font-mono rounded text-[#00f5ff] max-w-[120px] truncate">
+                    <span>🟢 {currentUser.name}</span>
+                  </div>
+                )}
+              </div>
             ) : (
-              <span className="text-xl">🏨</span>
+              <div className="flex items-center gap-2">
+                {/* LITE-MODE TOGGLE BUTTON */}
+                <button
+                  id="btn-toggle-lite-mode"
+                  onClick={() => setLiteMode(prev => !prev)}
+                  className={`text-[8px] font-black uppercase font-mono px-2 py-1 rounded border transition-all cursor-pointer flex items-center gap-1 ${
+                    liteMode 
+                      ? 'bg-orange-500/20 text-orange-400 border-orange-500/40 animate-pulse' 
+                      : 'bg-white/5 text-white/50 border-white/10 hover:text-white hover:bg-white/10'
+                  }`}
+                  title="Facebook-style Basic / Offline mode"
+                >
+                  <span>📶 {liteMode ? 'BASIC' : 'NORMAL'}</span>
+                </button>
+              </div>
             )}
           </div>
-          <div>
-            <span className="text-white font-extrabold tracking-widest text-[#C1FF00] text-xs block">HAWASSA PAPYRUS</span>
-            <span className="text-[8px] text-[#00f5ff] font-mono tracking-wider block font-bold">DIGITAL ECO-PORTAL v2</span>
-          </div>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2.5">
-          {/* UNIVERSAL COMPACT LANGUAGE DROPDOWN */}
-          <div className="flex items-center gap-1 bg-white/5 hover:bg-white/10 border border-white/10 px-2 py-1 rounded-xl transition-all">
-            <span className="text-xs">🌐</span>
-            <select
-              id="header-lang-selector"
-              value={appLang}
-              onChange={(e) => {
-                const selected = e.target.value as any;
-                setAppLang(selected);
-                sessionStorage.setItem('papyrus_app_lang', selected);
-                const descMap: any = {
-                  am: 'ቋንቋ ወደ አማርኛ ተቀይሯል',
-                  en: 'Language changed to English',
-                  or: 'Afaan gara Oromootti jijjiirameera',
-                  ti: 'ቋንቋ ናብ ትግርኛ ተቐይሩ ኣሎ',
-                  fr: 'La langue est changée en Français',
-                  de: 'Sprache auf Deutsch umgestellt',
-                  it: 'Lingua impostata su Italiano'
-                };
-                runVoiceOver(descMap[selected] || 'Language changed', true);
-              }}
-              className="bg-transparent text-white font-black text-[9px] tracking-wider uppercase border-none outline-none cursor-pointer pr-1 flex focus:ring-0"
-              style={{ colorScheme: 'dark' }}
-            >
-              <optgroup label="ሀገረሰብ (NATIVE)" className="bg-[#0F0F0F] text-white">
-                <option value="am">አማርኛ</option>
-                <option value="or">Oromoo</option>
-                <option value="ti">ትግርኛ</option>
-              </optgroup>
-              <optgroup label="የውጭ (FOREIGN)" className="bg-[#0F0F0F] text-white">
-                <option value="en">English</option>
-                <option value="fr">Français</option>
-                <option value="de">Deutsch</option>
-                <option value="it">Italiano</option>
-              </optgroup>
-            </select>
-          </div>
-
-          {/* DYNAMIC VOICE READER ACCESSIBILITY TACTILE SWITCH (for visually impaired) */}
-          <button
-            id="btn-header-voiceover-toggle"
-            onClick={() => {
-              const nextVal = !isVoiceOverEnabled;
-              setIsVoiceOverEnabled(nextVal);
-              if (nextVal) {
-                setTimeout(() => {
-                  runVoiceOver(appLang === 'am' ? 'የድምፅ ረዳት አገልግሎት በርቷል' : 'Screen reader enabled.', true);
-                }, 100);
-              }
-            }}
-            className={`px-2 py-1.5 rounded-xl text-[9px] font-black uppercase tracking-wider transition-all flex items-center gap-1 border hover:scale-[1.01] cursor-pointer ${
-              isVoiceOverEnabled 
-                ? 'bg-[#C1FF00]/10 text-[#C1FF00] border-[#C1FF00]/30 font-extrabold' 
-                : 'bg-white/5 text-white/40 border-white/10 hover:text-white hover:bg-white/10'
-            }`}
-            title="Voice Reader Activation"
-          >
-            <span>{isVoiceOverEnabled ? '🔊 AUDIO-ON' : '🔇 AUDIO-OFF'}</span>
-          </button>
-
-          {activeRole !== 'entry' ? (
-            <div className="flex items-center gap-2">
-              <button
-                id="btn-header-back-home"
-                onClick={() => {
-                  setActiveRole('entry');
-                  setCurrentUser(null);
-                }}
-                className="bg-white/5 hover:bg-white/10 text-white font-mono text-[9px] uppercase font-black tracking-widest px-2.5 py-1.5 rounded border border-white/10 cursor-pointer flex items-center gap-1 transition-all leading-none"
-              >
-                <span>🏡 {appLang === 'am' ? 'ዋና በር' : 'HOME'}</span>
-              </button>
-
-              {activeRole === 'customer' && (
-                <button 
-                  id="btn-basket-react"
-                  onClick={() => setIsCartOpen(true)}
-                  className="bg-white/5 hover:bg-white/10 border border-white/10 text-white px-2.5 py-1.5 font-black text-[9px] uppercase tracking-wider relative flex items-center gap-1 cursor-pointer rounded-lg"
-                >
-                  <ShoppingCart className="w-3 h-3" />
-                  <span>{appLang === 'am' ? 'ቅርጫት' : 'CART'}</span>
-                  {cart.length > 0 && (
-                    <span id="badge-cart-qty" className="bg-[#C1FF00] text-black px-1 py-0.5 text-[8px] font-black font-mono rounded">
-                      {cart.reduce((sum, i) => sum + i.qty, 0)}
-                    </span>
-                  )}
-                </button>
-              )}
-
-              {currentUser && (
-                <div className="flex items-center gap-1.5 bg-[#00f5ff]/10 border border-[#00f5ff]/30 px-2 py-1 text-[8px] font-mono rounded text-[#00f5ff] max-w-[120px] truncate">
-                  <span>🟢 {currentUser.name}</span>
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="flex items-center gap-2">
-              {/* LITE-MODE TOGGLE BUTTON */}
-              <button
-                id="btn-toggle-lite-mode"
-                onClick={() => setLiteMode(prev => !prev)}
-                className={`text-[8px] font-black uppercase font-mono px-2 py-1 rounded border transition-all cursor-pointer flex items-center gap-1 ${
-                  liteMode 
-                    ? 'bg-orange-500/20 text-orange-400 border-orange-500/40 animate-pulse' 
-                    : 'bg-white/5 text-white/50 border-white/10 hover:text-white hover:bg-white/10'
-                }`}
-                title="Facebook-style Basic / Offline mode"
-              >
-                <span>📶 {liteMode ? 'BASIC' : 'NORMAL'}</span>
-              </button>
-            </div>
-          )}
-        </div>
-      </header>
+        </header>
+      )}
 
       {/* MAIN VIEW CONTROLLER SECTION */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 md:p-8 flex flex-col justify-between relative z-10">
@@ -4366,13 +4642,11 @@ export default function App() {
               >
                 {/* Intro Title */}
                 <div className="text-center space-y-2 relative z-10 max-w-2xl px-4">
-                  {logoUrl && (
-                    <div className="flex justify-center mb-1">
-                      <div className="w-16 h-16 rounded-2xl overflow-hidden relative group">
-                        <img src={logoUrl} alt="Company Logo" referrerPolicy="no-referrer" className="w-full h-full object-cover" />
-                      </div>
+                  <div className="flex justify-center mb-1">
+                    <div className="w-16 h-16 rounded-2xl overflow-hidden relative group">
+                      <img src={sanitizeLogoUrl(logoUrl)} alt="Company Logo" referrerPolicy="no-referrer" className="w-full h-full object-cover" />
                     </div>
-                  )}
+                  </div>
 
                   <h1 className="text-4xl md:text-5xl font-black tracking-tight font-sans mt-1 text-[#C1FF00]">
                     {entryTranslation.app_title[appLang]}
@@ -5162,415 +5436,202 @@ export default function App() {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="space-y-6 max-w-6xl mx-auto w-full pb-10"
+                className="space-y-6 max-w-6xl mx-auto w-full pb-10 pt-4"
               >
-                {/* Banner section */}
-                <div className="relative overflow-hidden rounded-xl border-2 border-slate-800 bg-gradient-to-r from-slate-900 via-slate-950 to-slate-900 p-5 flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 shadow-[5px_5px_0px_0px_rgba(255,255,255,0.05)]">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-lg bg-[#C1FF00]/10 flex items-center justify-center border border-[#C1FF00]/35 shadow-[2px_2px_0px_0px_#C1FF00]">
-                      <MapPin className="text-[#C1FF00] w-5 h-5 animate-bounce shrink-0" />
+                {/* Vibrant High-End Red Hero Banner exactly matching the reference image layout */}
+                <div className="rounded-[2.5rem] overflow-hidden relative bg-[#b21f1f] p-8 sm:p-12 md:p-16 shadow-2xl flex flex-col md:flex-row justify-between items-center gap-8 text-white min-h-[380px] border-b-8 border-[#8c1414]">
+                  {/* Subtle decorative vector patterns in background */}
+                  <div className="absolute top-[-10%] left-[-10%] w-[350px] h-[350px] rounded-full bg-white/5 blur-[85px] pointer-events-none" />
+                  <div className="absolute bottom-[-15%] right-[10%] w-[400px] h-[400px] rounded-full bg-yellow-400/10 blur-[100px] pointer-events-none" />
+
+                  {/* Pointed red triangle matching the visual cut-out transition in Image 1 */}
+                  <div className="absolute bottom-[-14px] left-[15%] w-0 h-0 border-l-[14px] border-l-transparent border-r-[14px] border-r-transparent border-t-[14px] border-t-[#b21f1f] z-20" />
+
+                  {/* Left Column: Bold display typography and direct action */}
+                  <div className="flex-1 space-y-6 text-left z-10 w-full">
+                    <div className="inline-flex items-center gap-2 px-3.5 py-1.5 bg-yellow-400/20 border border-yellow-400/35 text-yellow-300 rounded-full font-mono font-black text-[9px] sm:text-[10px] uppercase tracking-wider shadow-sm">
+                      <span>🍔 MOKR SPECIAL</span>
+                      <span>{appLang === 'am' ? 'ትኩስ እና ፈጣን የክፍል መስተንግዶ' : 'Lodge Room Service'}</span>
                     </div>
-                    <div>
-                      <span className="text-[10px] uppercase font-mono text-white/50 block tracking-wider">የክፍል ቁጥር (ROOM NUMBER)</span>
-                      <input 
-                        type="text" 
-                        value={guestLocation}
-                        onChange={(e) => setGuestLocation(e.target.value)}
-                        placeholder="Room 101"
-                        className="bg-transparent text-[#C1FF00] font-black text-sm border-b border-[#C1FF00]/40 outline-none w-32 uppercase transition-all focus:border-[#C1FF00] focus:w-40"
-                        id="guest-location-input-top"
-                      />
+
+                    <h2 className="text-4xl sm:text-5xl md:text-6xl font-black tracking-tight leading-none text-white font-sans uppercase">
+                      Order Your<br />Favorites in<br />Minutes.
+                    </h2>
+
+                    <p className="text-white/95 text-xs sm:text-sm font-semibold max-w-lg leading-relaxed font-sans">
+                      {appLang === 'am' ? (
+                        'የክፍል አገልግሎት ትዕዛዞች በፍጥነት እና ትኩስ ሆነው እርስዎ ያሉበት ክፍል ይደርሳሉ! ለመጠቀም ቀላል እና ቀልጣፋ አማራጭ።'
+                      ) : (
+                        'To take more choice of options this delivery to get away easily. Signature dishes delivered fresh straight to your room.'
+                      )}
+                    </p>
+
+                    <div className="pt-3 flex flex-wrap items-center gap-4">
+                      <button 
+                        onClick={() => {
+                          const catSec = document.getElementById('category-highlights-section');
+                          if (catSec) catSec.scrollIntoView({ behavior: 'smooth' });
+                        }}
+                        className="bg-[#f4c22b] hover:bg-white text-black hover:text-[#b21f1f] font-black text-xs px-8 py-3.5 rounded-full uppercase tracking-widest transition-all shadow-md active:scale-95 cursor-pointer border-b-4 border-[#cf9d12] hover:border-stone-200"
+                      >
+                        {appLang === 'am' ? 'አሁን እዘዝ' : 'Exstob Now'}
+                      </button>
+
+                      <div className="flex items-center gap-2 bg-black/20 px-3.5 py-2 rounded-full border border-white/5">
+                        <span className="text-xs">🛵</span>
+                        <span className="text-[10px] font-mono font-black text-yellow-300 uppercase tracking-widest">
+                          {appLang === 'am' ? 'ፈጣን ክፍል አገልግሎት' : 'Fast Room Delivery'}
+                        </span>
+                      </div>
                     </div>
                   </div>
 
-                  {/* 🛎️ RESTORED CALL WAITER BUZZER */}
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      id="btn-customer-call-waiter"
-                      onClick={handleTriggerBuzzer}
-                      className="bg-pink-600 hover:bg-pink-500 text-white border-2 border-pink-400 font-mono text-[10px] font-black uppercase tracking-wider px-4 py-2.5 rounded-lg shadow-[3px_3px_0px_#000] active:translate-y-0.5 active:shadow-[1px_1px_0px_#000] transition-all cursor-pointer flex items-center gap-2"
+                  {/* Right Column: Beautiful animated overlapping signature burger image representing Mokr Express */}
+                  <div className="relative w-full md:w-[360px] flex items-center justify-center">
+                    <motion.div
+                      animate={{
+                        y: [0, -12, 0],
+                      }}
+                      transition={{
+                        repeat: Infinity,
+                        duration: 5,
+                        ease: "easeInOut"
+                      }}
+                      className="relative w-[260px] h-[260px] sm:w-[320px] sm:h-[320px] flex items-center justify-center"
                     >
-                      <span className="text-sm animate-bounce">🛎️</span>
-                      <span>አስተናጋጅ ጥራ (CALL WAITER)</span>
-                    </button>
-                  </div>
-
-                  <div className="hidden sm:block text-right">
-                    <p className="text-[#00f5ff] text-[10px] font-mono uppercase tracking-widest font-black">Hawassa Papyrus Specials 🌟</p>
-                    <p className="text-white text-xs font-bold font-mono">SERVICE_CHARGE: {serviceChargeRate}% & VAT: {vatRate}% INC</p>
+                      <img 
+                        src="https://images.unsplash.com/photo-1568901346375-23c9450c58cd?q=80&w=600"
+                        alt="Signature Burger representation"
+                        referrerPolicy="no-referrer"
+                        className="w-full h-full object-cover rounded-full border-8 border-[#f4c22b]/40 shadow-2xl"
+                      />
+                    </motion.div>
                   </div>
                 </div>
 
-                {/* High-end custom-crafted UI/UX Promo Banner inspired by the premium reference design */}
-                {promos.length > 0 && (() => {
-                  const currentPromo = promos[promoIndex] || promos[0];
-                  return (
-                    <motion.div 
-                      initial={{ opacity: 0, y: 30 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ duration: 0.8, ease: "easeOut" }}
-                      className="rounded-3xl overflow-hidden relative border border-white/20 dark:border-stone-800/80 flex flex-col lg:flex-row justify-between items-center p-8 sm:p-12 md:p-14 shadow-2xl gap-10 min-h-[500px] text-stone-800 dark:text-stone-100 bg-gradient-to-tr from-[#ffe6d9]/50 via-[#e0f7fa]/30 to-white/95 dark:from-[#3a1d13]/20 dark:via-[#132c3a]/15 dark:to-stone-900/90 backdrop-blur-md"
-                    >
-                      {/* Ambient background blur flares (mesh gradient effect) */}
-                      <div className="absolute top-[-10%] left-[-10%] w-[350px] h-[350px] rounded-full bg-[#ff7b54]/12 blur-[80px] pointer-events-none" />
-                      <div className="absolute bottom-[-15%] right-[20%] w-[400px] h-[400px] rounded-full bg-[#00bcd4]/10 blur-[100px] pointer-events-none" />
-
-                      {/* LEFT COLUMN: Deep Typographic Hierarchy & Interactive Search Bar */}
-                      <div className="flex-1 space-y-6 relative z-10 text-left w-full">
-                        {/* Elegant Pill Tags */}
-                        <div className="flex flex-wrap items-center gap-2">
-                          <motion.span 
-                            initial={{ scale: 0.8, opacity: 0 }}
-                            animate={{ scale: 1, opacity: 1 }}
-                            transition={{ delay: 0.2 }}
-                            className="bg-stone-900 dark:bg-white text-white dark:text-stone-900 text-[9px] font-mono px-3.5 py-1.5 rounded-full uppercase font-black tracking-widest shadow-sm"
-                          >
-                            {getTranslatedPromoTag(currentPromo.tag)}
-                          </motion.span>
-                          <motion.span 
-                            initial={{ scale: 0.8, opacity: 0 }}
-                            animate={{ scale: 1, opacity: 1 }}
-                            transition={{ delay: 0.3 }}
-                            className="bg-[#ff5722] text-white text-[9px] font-mono px-3 py-1.5 rounded-full uppercase font-black tracking-widest shadow-sm"
-                          >
-                            15% OFF WEEKEND SPECIAL
-                          </motion.span>
-                        </div>
-
-                        {/* Title text with high-contrast display layout */}
-                        <motion.h3 
-                          key={currentPromo.title}
-                          initial={{ opacity: 0, x: -20 }}
-                          animate={{ opacity: 1, x: 0 }}
-                          transition={{ duration: 0.5, ease: "easeOut" }}
-                          className="text-3xl sm:text-4xl lg:text-5xl font-black tracking-tight leading-tight text-stone-900 dark:text-white max-w-2xl font-sans uppercase"
-                        >
-                          {getTranslatedPromoTitle(currentPromo.title).split(' ').map((word, i) => (
-                            <span key={i} className={i % 3 === 0 ? "text-[#ff5722]" : ""}>
-                              {word}{' '}
-                            </span>
-                          ))}
-                        </motion.h3>
-
-                        {/* Description paragraphs */}
-                        <motion.p 
-                          key={currentPromo.desc}
-                          initial={{ opacity: 0 }}
-                          animate={{ opacity: 1 }}
-                          transition={{ delay: 0.2 }}
-                          className="text-stone-600 dark:text-stone-300 text-xs sm:text-sm font-semibold leading-relaxed max-w-xl"
-                        >
-                          {getTranslatedPromoDesc(currentPromo.desc)}
-                        </motion.p>
-
-                        {/* Interactive Location/Room Specification Bar modeled on the reference design */}
-                        <div className="space-y-2 pt-2">
-                          <span className="text-[10px] text-stone-400 dark:text-stone-500 font-mono font-bold tracking-wider block uppercase">📍 የእርስዎ ክፍል ቁጥር (ENTER YOUR ROOM TO ORDER)</span>
-                          <motion.div 
-                            whileHover={{ scale: 1.01 }}
-                            className="bg-white dark:bg-stone-800/90 rounded-full py-1.5 pl-4 pr-1.5 shadow-lg border border-stone-100 dark:border-stone-700/60 flex items-center max-w-md w-full justify-between gap-2"
-                          >
-                            <div className="flex items-center gap-2.5 flex-1 min-w-0">
-                              <MapPin className="text-[#ff5722] w-5 h-5 animate-pulse shrink-0" />
-                              <input 
-                                type="text" 
-                                value={guestLocation}
-                                onChange={(e) => setGuestLocation(e.target.value)}
-                                placeholder="Room 101, Villa 4, Table 5..."
-                                className="bg-transparent text-stone-900 dark:text-white font-bold text-xs outline-none w-full placeholder-stone-400 dark:placeholder-stone-500 uppercase"
-                                id="guest-location-input-promo"
-                              />
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                if (guestLocation.trim()) {
-                                  // Quick micro feedback toast/alert
-                                  const sound = new Audio();
-                                  sound.play().catch(() => {});
-                                }
-                              }}
-                              className="bg-[#ff5722] hover:bg-[#e64a19] text-white font-mono text-[9px] font-black uppercase tracking-wider px-5 py-3 rounded-full shadow-md active:scale-95 transition-all cursor-pointer shrink-0"
-                            >
-                              {appLang === 'am' ? 'አረጋግጥ' : 'Locate Me'}
-                            </button>
-                          </motion.div>
-                        </div>
-
-                        {/* Bottom Left Scroll down label */}
-                        <div className="pt-4 hidden sm:flex items-center gap-2.5 text-stone-400 dark:text-stone-500 font-mono text-[10px]">
-                          <motion.div 
-                            animate={{ y: [0, 6, 0] }}
-                            transition={{ repeat: Infinity, duration: 1.5 }}
-                            className="w-5 h-8 border-2 border-stone-300 dark:border-stone-600 rounded-full flex justify-center pt-1"
-                          >
-                            <div className="w-1.5 h-1.5 bg-[#ff5722] rounded-full" />
-                          </motion.div>
-                          <span>SCROLL DOWN TO EXPLORE OUR DELICIOUS CULINARY MENU</span>
-                        </div>
-                      </div>
-
-                      {/* RIGHT COLUMN: Rotating Circular Platter, Frame Circles, & Floating Glassmorphic Badges */}
-                      <div className="relative w-full lg:w-[450px] flex items-center justify-center min-h-[300px] lg:min-h-[400px]">
-                        
-                        {/* Semicircle / Crescent Graphic Frame behind the dish removed for clean look */}
-                        <div className="absolute inset-0 flex items-center justify-center pointer-events-none" />
-
-                        {/* Central Rotating Masterpiece Signature Dish */}
-                        <motion.div
-                          style={{
-                            x: mousePos.x * 15,
-                            y: mousePos.y * 15,
-                          }}
-                          animate={{
-                            y: [0, -12, 0],
-                          }}
-                          transition={{
-                            duration: 6,
-                            repeat: Infinity,
-                            ease: "easeInOut"
-                          }}
-                          className="relative w-[240px] h-[240px] sm:w-[280px] sm:h-[280px] z-10 flex items-center justify-center rounded-full shadow-2xl"
-                        >
-                          {/* Ambient shadow glow inside plate circle */}
-                          <div className="absolute inset-2 bg-gradient-to-tr from-[#ff5722]/30 to-[#00bcd4]/20 rounded-full blur-2xl" />
-                          
-                          <motion.img
-                            src={signatureDish}
-                            alt="Signature Dish Platter"
-                            referrerPolicy="no-referrer"
-                            className="w-full h-full object-cover rounded-full border-[6px] border-white dark:border-stone-800 shadow-xl filter drop-shadow-[0_15px_30px_rgba(0,0,0,0.3)]"
-                            animate={{ rotate: 360 }}
-                            transition={{ duration: 45, repeat: Infinity, ease: "linear" }}
-                          />
-
-                          {/* Floating small orange dot accents */}
-                          <span className="absolute top-4 right-4 w-4 h-4 rounded-full bg-[#ff5722] border-2 border-white shadow-md animate-ping" />
-                          <span className="absolute bottom-6 left-2 w-3 h-3 rounded-full bg-[#00bcd4] border-2 border-white shadow-md" />
-                        </motion.div>
-
-                        {/* Floating Reviews/Rating Badge Card with glassmorphic transparency */}
-                        <motion.div
-                          style={{
-                            x: mousePos.x * 25,
-                            y: mousePos.y * 25,
-                          }}
-                          animate={{
-                            y: [0, 8, 0],
-                          }}
-                          transition={{
-                            duration: 4.5,
-                            repeat: Infinity,
-                            ease: "easeInOut"
-                          }}
-                          className="absolute bottom-6 right-2 sm:right-6 bg-white/70 dark:bg-stone-800/80 backdrop-blur-md px-5 py-3.5 rounded-2xl border border-white/50 dark:border-stone-700/50 shadow-lg z-20 flex flex-col gap-1 max-w-[170px]"
-                        >
-                          <span className="text-stone-900 dark:text-white font-extrabold text-sm sm:text-base tracking-tight block">5K+ Reviews</span>
-                          
-                          {/* Client avatar bubbles */}
-                          <div className="flex items-center gap-1 mt-0.5">
-                            <div className="flex -space-x-1.5 overflow-hidden">
-                              <img className="inline-block h-5 w-5 rounded-full ring-2 ring-white dark:ring-stone-800" src="https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=80" alt="" referrerPolicy="no-referrer" />
-                              <img className="inline-block h-5 w-5 rounded-full ring-2 ring-white dark:ring-stone-800" src="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=80" alt="" referrerPolicy="no-referrer" />
-                              <img className="inline-block h-5 w-5 rounded-full ring-2 ring-white dark:ring-stone-800" src="https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=80" alt="" referrerPolicy="no-referrer" />
-                            </div>
-                            <span className="text-[10px] text-stone-500 dark:text-stone-400 font-mono font-bold pl-1">★ 4.9</span>
-                          </div>
-                        </motion.div>
-
-                        {/* Pager Indicators (Previous & Next Arrow Buttons) in beautiful layouts */}
-                        <div className="absolute bottom-[-15px] sm:bottom-[-20px] right-2 sm:right-6 flex items-center gap-2 z-20">
-                          <button
-                            type="button"
-                            onClick={() => setPromoIndex(idx => (idx - 1 + promos.length) % promos.length)}
-                            className="w-10 h-10 rounded-xl bg-stone-200/80 hover:bg-stone-300 dark:bg-stone-800/80 dark:hover:bg-stone-700 border border-stone-300/40 dark:border-stone-700/40 flex items-center justify-center text-stone-700 dark:text-stone-200 transition-colors active:scale-95 cursor-pointer"
-                          >
-                            <span className="text-sm font-bold">←</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setPromoIndex(idx => (idx + 1) % promos.length)}
-                            className="w-10 h-10 rounded-xl bg-[#ff5722] hover:bg-[#e64a19] text-white flex items-center justify-center shadow-md shadow-[#ff5722]/25 transition-colors active:scale-95 cursor-pointer"
-                          >
-                            <span className="text-sm font-bold">→</span>
-                          </button>
-                        </div>
-
-                      </div>
-                    </motion.div>
-                  );
-                })()}
-
-                {/* GUEST ACTIVE ORDERS TRACKER */}
+                {/* GUEST ACTIVE ORDERS TRACKER - Styled cleanly to fit the layout */}
                 {(() => {
                   const guestOrdersList = orders.filter(o => o.location.trim().toLowerCase() === guestLocation.trim().toLowerCase() && !(o.status === 'Paid' && o.servedByWaiter));
                   if (guestOrdersList.length === 0) return null;
                   return (
-                    <div className="bg-[#0b0c10] border border-dashed border-[#C1FF00]/20 p-3.5 rounded-xl space-y-3 shadow-sm max-w-5xl mx-auto w-full mb-8">
-                      <div className="flex justify-between items-center border-b border-white/5 pb-2">
-                        <h4 className="text-[10.5px] font-black uppercase text-white/80 flex items-center gap-1.5 align-middle">
-                          <span className="w-1.5 h-1.5 bg-[#C1FF00] rounded-full animate-ping inline-block"></span>
+                    <div className="bg-[#fcfbf7] border border-[#f0e7d5] p-6 rounded-[2.5rem] space-y-4 shadow-xl max-w-5xl mx-auto w-full mb-8 text-black">
+                      <div className="flex justify-between items-center border-b border-stone-200 pb-3">
+                        <h4 className="text-[11.5px] font-black uppercase text-stone-900 flex items-center gap-2 align-middle">
+                          <span className="w-2.5 h-2.5 bg-[#b21f1f] rounded-full animate-ping inline-block"></span>
                           <span>📦 የትዕዛዝዎ ሁኔታ መከታተያ (Active Order Tracking)</span>
                         </h4>
-                        <span className="text-[9px] font-mono text-[#C1FF00] font-black bg-[#C1FF00]/10 px-1.5 py-0.5 rounded">
+                        <span className="text-[10px] font-mono text-white font-black bg-[#b21f1f] px-3 py-1 rounded-full border border-[#8c1414]">
                           {guestOrdersList.length} {guestOrdersList.length === 1 ? 'ORDER' : 'ORDERS'}
                         </span>
                       </div>
 
-                      <div className="divide-y divide-white/5 space-y-2">
+                      <div className="space-y-4 pt-1">
                         {guestOrdersList.map(ord => {
                           const currentCooking = ord.cookingStatus || (ord.status === 'Paid' ? 'Pending' : ord.status);
                           const isReady = currentCooking === 'Completed' && ord.servedByWaiter;
                           const isCompletedButNotServedYet = currentCooking === 'Completed' && !ord.servedByWaiter;
                           
-                          // Expanded state (default true if only one order)
                           const isExpanded = expandedOrders[ord.id] !== undefined 
                             ? expandedOrders[ord.id] 
-                            : guestOrdersList.length === 1;
+                            : true;
 
                           return (
-                            <div 
-                              key={ord.id} 
-                              className={`pt-2 transition-all ${
-                                isReady 
-                                  ? 'bg-emerald-950/5 border border-emerald-500/20 px-3 py-2 rounded-lg' 
-                                  : isCompletedButNotServedYet
-                                  ? 'bg-purple-950/5 border border-purple-500/20 px-3 py-2 rounded-lg'
-                                  : ''
-                              }`}
-                            >
-                              {/* Expandable Order Header */}
+                            <div key={ord.id} className="bg-white border border-[#ebe5d8] p-4 rounded-3xl transition-all duration-300">
+                              {/* Order summary header */}
                               <div 
                                 onClick={() => setExpandedOrders(prev => ({ ...prev, [ord.id]: !isExpanded }))}
-                                className="flex justify-between items-center cursor-pointer select-none py-1 group"
+                                className="flex justify-between items-center cursor-pointer hover:bg-stone-50 p-2 rounded-xl transition-all"
                               >
-                                <div className="flex items-center gap-2">
-                                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded font-mono ${
-                                    isExpanded ? 'bg-white/10 text-white' : 'bg-white/5 text-white/60 group-hover:bg-white/10'
-                                  }`}>
-                                    #{ord.id.substring(0, 5)}...
-                                  </span>
-                                  <span className="text-[10px] text-white/40 font-mono">⏰ {ord.time}</span>
+                                <div className="space-y-1">
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-xs font-mono font-black text-stone-850">#{ord.id.substring(0, 8).toUpperCase()}</span>
+                                    <span className={`text-[9.5px] px-2.5 py-1 rounded-full font-mono font-black uppercase tracking-wider border ${
+                                      ord.status === 'Paid' 
+                                        ? 'bg-emerald-50 border-emerald-500 text-emerald-600' 
+                                        : 'bg-amber-50 border-amber-500 text-amber-600'
+                                    }`}>
+                                      {ord.status === 'Paid' ? (appLang === 'am' ? 'የተከፈለ' : 'Paid') : (appLang === 'am' ? 'ያልተከፈለ' : 'Unpaid')}
+                                    </span>
+                                  </div>
+                                  <p className="text-[11px] text-stone-500 font-bold">
+                                    {ord.items.length} {appLang === 'am' ? 'ምግቦች' : 'items'} • {new Date(ord.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                  </p>
                                 </div>
 
                                 <div className="flex items-center gap-3">
-                                  {/* Compact Status Badge */}
-                                  <span className={`text-[9px] font-extrabold uppercase font-mono px-2 py-0.5 rounded ${
-                                    currentCooking === 'Pending' 
-                                      ? 'bg-amber-500/10 text-amber-500 border border-amber-500/20' 
-                                      : currentCooking === 'Preparing' 
-                                      ? 'bg-[#00f5ff]/10 text-[#00f5ff] border border-[#00f5ff]/20'
-                                      : isCompletedButNotServedYet
-                                      ? 'bg-purple-500/15 text-purple-400 border border-purple-500/20 animate-pulse'
-                                      : 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/20'
-                                  }`}>
-                                    {currentCooking === 'Pending' ? '⏱️ በመጠባበቅ ላይ' : 
-                                     currentCooking === 'Preparing' ? '🥘 እየተዘጋጀ ነው' : 
-                                     isCompletedButNotServedYet ? '🧑‍🍳 እየቀረበ ነው...' :
-                                     '✅ ደርሷል / መውሰድ ይችላሉ'}
-                                  </span>
-
-                                  <div className="text-right flex items-center gap-1">
-                                    <span className="font-mono text-xs font-black text-[#C1FF00]">{ord.total} ብር</span>
-                                    <span className="text-white/30 text-[10px] font-bold font-mono">
-                                      {isExpanded ? '▲' : '▼'}
-                                    </span>
+                                  <div className="text-right space-y-0.5">
+                                    <span className="text-[10px] uppercase font-mono font-black text-stone-400 block tracking-wider">የዝግጅት ሁኔታ (STATUS)</span>
+                                    <div className="flex items-center gap-1.5 justify-end">
+                                      <span className={`w-2 h-2 rounded-full ${
+                                        currentCooking === 'Completed' 
+                                          ? 'bg-emerald-500 animate-pulse' 
+                                          : currentCooking === 'Preparing' 
+                                            ? 'bg-sky-500 animate-spin' 
+                                            : 'bg-amber-500 animate-pulse'
+                                      }`} />
+                                      <span className="text-xs font-black text-stone-800">
+                                        {currentCooking === 'Completed' ? (appLang === 'am' ? 'ተጠናቋል' : 'Completed') :
+                                         currentCooking === 'Preparing' ? (appLang === 'am' ? 'እየተዘጋጀ ነው' : 'Preparing') :
+                                         (appLang === 'am' ? 'ወረፋ ላይ' : 'Pending')}
+                                      </span>
+                                    </div>
                                   </div>
+                                  <span className="text-stone-500 text-xs">{isExpanded ? '▲' : '▼'}</span>
                                 </div>
                               </div>
 
-                              {/* Items list & Actions (Collapsible) */}
+                              {/* Order detail list */}
                               {isExpanded && (
                                 <motion.div 
                                   initial={{ opacity: 0, height: 0 }}
                                   animate={{ opacity: 1, height: 'auto' }}
-                                  className="mt-3 pl-2 border-l border-white/5 space-y-2 overflow-hidden pb-1"
+                                  className="pl-2 pr-2 pb-2 pt-3 border-t border-stone-200 mt-2 space-y-3 font-sans"
                                 >
-                                  {/* Items Table/List */}
-                                  <div className="divide-y divide-white/5 py-1 text-[11px]">
-                                    {ord.items.map((it, idx) => (
-                                      <div key={idx} className="flex justify-between py-1 text-white/80">
-                                        <span>{it.qty} × {it.name}</span>
-                                        <span className="font-mono text-white/40">{it.price * it.qty} ብር</span>
+                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-1.5">
+                                    {ord.items.map((i, idx) => (
+                                      <div key={idx} className="bg-[#fcfbf7] p-3 rounded-xl border border-stone-200 flex justify-between items-center text-[11px]">
+                                        <div className="space-y-0.5">
+                                          <p className="font-extrabold text-stone-900">{appLang === 'am' ? i.nameAm : (i.nameEn || i.nameAm)}</p>
+                                          <p className="text-[10px] text-stone-500 font-mono">
+                                            Qty: {i.qty} • Modifiers: {i.modifiers ? Object.entries(i.modifiers).map(([k, v]) => `${k}:${v}`).join(', ') : 'none'}
+                                          </p>
+                                        </div>
+                                        <span className="font-mono font-black text-stone-750">{i.price * i.qty} ብር</span>
                                       </div>
                                     ))}
                                   </div>
 
-                                  {/* Conditional Action Buttons */}
-                                  {isReady ? (
-                                    <div className="pt-2">
+                                  <div className="flex justify-between items-center bg-stone-50 p-3 rounded-xl border border-stone-200">
+                                    <span className="text-[10px] font-mono text-stone-500 font-black">TOTAL:</span>
+                                    <span className="text-xs font-black text-[#b21f1f] font-mono">{ord.total} ብር</span>
+                                  </div>
+
+                                  {/* Edit/Cancel actions only available if still in Pending state */}
+                                  {currentCooking === 'Pending' && (
+                                    <div className="flex gap-2.5 pt-1.5">
                                       <button
                                         type="button"
                                         onClick={(e) => {
                                           e.stopPropagation();
-                                          setOrders(prev => prev.map(o => o.id === ord.id ? { ...o, status: 'Paid' } : o));
-                                          playVoiceAlert(`Customer at ${ord.location} has confirmed they received order ${ord.id}.`);
-                                          const newBuzzerCall: AssistanceCall = {
-                                            id: 'pickup-' + Date.now(),
-                                            location: ord.location,
-                                            time: new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' }),
-                                            active: true,
-                                            type: 'pickup',
-                                            message: `ትዕዛዝ ${ord.id} - ደንበኛው ምግብ መውሰዱን አረጋግጧል ✔️`
-                                          };
-                                          addAssistanceCall(newBuzzerCall);
-                                          alert(`👍 ምግብ መረከብዎን ለአስተናጋጅ አሳውቀናል። እናመሰግናለን! (Notification sent to waiter. Thank you!)`);
+                                          setAdjustingOrder(ord);
                                         }}
-                                        className="w-full bg-[#C1FF00] hover:bg-white text-black font-black text-[10px] py-2 rounded-lg uppercase font-mono tracking-wider shadow-[0_3px_10px_rgba(193,255,0,0.2)] transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                                        className="bg-[#f4c22b] hover:bg-yellow-400 text-black font-extrabold text-[10px] py-2 rounded-lg uppercase tracking-wider transition-all flex-1 text-center cursor-pointer shadow-md border-b-2 border-[#cf9d12]"
                                       >
-                                        <span>ምግብ መረከብዎን ያረጋግጡ (Confirm Food Handover) ✔️</span>
+                                        ✏️ ማስተካከያ (Edit Order)
                                       </button>
-                                    </div>
-                                  ) : isCompletedButNotServedYet ? (
-                                    <div className="text-center bg-purple-950/20 border border-purple-500/20 rounded p-1.5">
-                                      <p className="text-[10px] text-purple-300 leading-relaxed font-sans">
-                                        🧑‍🍳 ምግብዎ ተዘጋጅቶ አልቋል፤ አሁን አስተናጋጁ እያመጣልዎ ነው። ሲያደርስ የመረከቢያ ቁልፍ እዚህ ይበራል።
-                                      </p>
-                                    </div>
-                                  ) : (
-                                    <div className="space-y-3">
-                                      {currentCooking === 'Pending' ? (
-                                        <div className="space-y-2.5 bg-amber-500/5 p-3 rounded-xl border border-amber-500/15">
-                                          <p className="text-[10px] text-amber-300 font-bold leading-relaxed text-center font-sans">
-                                            ⚠️ ትዕዛዝዎ ገና መዘጋጀት አልጀመረም! በስህተት ካዘዙ ማስተካከል ወይም መሰረዝ ይችላሉ። (Cooking has not started yet. You can edit or cancel this order.)
-                                          </p>
-                                          <div className="grid grid-cols-2 gap-2.5">
-                                            <button
-                                              type="button"
-                                              onClick={(e) => {
-                                                e.stopPropagation();
-                                                setAdjustingOrder(ord);
-                                              }}
-                                              className="bg-sky-500 hover:bg-sky-400 text-black font-extrabold text-[10.5px] py-2 rounded-lg uppercase font-mono tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-md hover:shadow-sky-500/20 active:scale-95"
-                                            >
-                                              ✏️ ማስተካከያ (Edit Order)
-                                            </button>
-                                            <button
-                                              type="button"
-                                              onClick={(e) => {
-                                                e.stopPropagation();
-                                                askConfirmAndRun('ይህንን ትዕዛዝ ሙሉ በሙሉ መሰረዝ ይፈልጋሉ? (Are you sure you want to cancel this order?)', () => {
-                                                  setOrders(prev => prev.filter(o => o.id !== ord.id));
-                                                  alert('❌ ትዕዛዝዎ በተሳካ ሁኔታ ተሰርዟል! (Order canceled successfully!)');
-                                                });
-                                              }}
-                                              className="bg-red-500 hover:bg-red-400 text-white font-extrabold text-[10.5px] py-2 rounded-lg uppercase font-mono tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-md hover:shadow-red-500/20 active:scale-95"
-                                            >
-                                              ❌ ሰርዝ (Cancel Order)
-                                            </button>
-                                          </div>
-                                        </div>
-                                      ) : (
-                                        <div className="text-center bg-[#00f5ff]/5 border border-[#00f5ff]/20 rounded-xl p-3">
-                                          <p className="text-[10px] text-[#00f5ff] leading-relaxed font-black font-sans">
-                                            🥘 ምግብዎ አሁን በሼፍ እየተዘጋጀ ነው! (Your food is now being prepared by the chef!)
-                                          </p>
-                                          <p className="text-[9.5px] text-white/40 leading-relaxed font-sans mt-0.5">
-                                            ማብሰል ስለተጀመረ አሁን ማሻሻል ወይም መሰረዝ አይቻልም።
-                                          </p>
-                                        </div>
-                                      )}
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          askConfirmAndRun('ይህንን ትዕዛዝ ሙሉ በሙሉ መሰረዝ ይፈልጋሉ? (Are you sure you want to cancel this order?)', () => {
+                                            setOrders(prev => prev.filter(o => o.id !== ord.id));
+                                            alert('❌ ትዕዛዝዎ በተሳካ ሁኔታ ተሰርዟል! (Order canceled successfully!)');
+                                          });
+                                        }}
+                                        className="bg-[#b21f1f] hover:bg-[#8c1414] text-white font-extrabold text-[10px] py-2 rounded-lg uppercase tracking-wider transition-all flex-1 text-center cursor-pointer shadow-md border-b-2 border-[#5a0c0c]"
+                                      >
+                                        ❌ ሰርዝ (Cancel Order)
+                                      </button>
                                     </div>
                                   )}
                                 </motion.div>
@@ -5583,49 +5644,13 @@ export default function App() {
                   );
                 })()}
 
-                {/* PREMIUM ORGANIC CULINARY BACKSTAGE CONTAINER WITH SCATTERED HERB LEAVES (Matches the uploaded reference design) */}
-                <div className="relative mt-8 p-6 sm:p-8 md:p-10 rounded-[2.5rem] bg-gradient-to-tr from-[#14120E] via-[#221B14] to-[#120E0C] border border-[#ff8d4f]/15 overflow-hidden shadow-2xl">
-                  {/* Glowing light-mesh spots */}
-                  <div className="absolute top-[-10%] left-[5%] w-[400px] h-[400px] bg-amber-500/5 rounded-full filter blur-[120px] pointer-events-none" />
-                  <div className="absolute bottom-[-10%] right-[5%] w-[450px] h-[450px] bg-emerald-600/5 rounded-full filter blur-[150px] pointer-events-none" />
-
-                  {/* Organic Floating Cilantro & Mint leaves scattered around with parallax sway animations matching the reference */}
-                  <div className="absolute top-10 left-[7%] w-16 h-16 pointer-events-none opacity-80 z-20 animate-bounce" style={{ animationDuration: '6s', animationTimingFunction: 'ease-in-out' }}>
-                    <svg viewBox="0 0 24 24" fill="none" className="w-full h-full drop-shadow-[0_12px_24px_rgba(0,0,0,0.6)]">
-                      <path d="M12 22C12 22 12 17 14 15C16 13 19 14 20 12C21 10 20 7 18 7C16 7 15 9 14 10C14 8 15 5 13 4C11 3 9 4 8 6C7 8 8 10 9 11C8 10 5 9 4 10C3 11 2 13 4 15C6 17 9 16 12 22Z" fill="#3D9A48" />
-                    </svg>
-                  </div>
-                  <div className="absolute bottom-16 left-[14%] w-11 h-11 pointer-events-none opacity-60 z-20" style={{ animation: 'sway-slow 8s ease-in-out infinite' }}>
-                    <svg viewBox="0 0 24 24" fill="none" className="w-full h-full drop-shadow-[0_8px_16px_rgba(0,0,0,0.5)] rotate-[45deg]">
-                      <path d="M12 22C12 22 12 17 14 15C16 13 19 14 20 12C21 10 20 7 18 7C16 7 15 9 14 10C14 8 15 5 13 4C11 3 9 4 8 6C7 8 8 10 9 11C8 10 5 9 4 10C3 11 2 13 4 15C6 17 9 16 12 22Z" fill="#22662B" />
-                    </svg>
-                  </div>
-                  <div className="absolute top-28 right-[10%] w-14 h-14 pointer-events-none opacity-85 z-20" style={{ animation: 'sway-fast 5s ease-in-out infinite' }}>
-                    <svg viewBox="0 0 24 24" fill="none" className="w-full h-full drop-shadow-[0_14px_28px_rgba(0,0,0,0.6)] rotate-[-35deg]">
-                      <path d="M12 22C12 22 12 17 14 15C16 13 19 14 20 12C21 10 20 7 18 7C16 7 15 9 14 10C14 8 15 5 13 4C11 3 9 4 8 6C7 8 8 10 9 11C8 10 5 9 4 10C3 11 2 13 4 15C6 17 9 16 12 22Z" fill="#4CAF50" />
-                    </svg>
-                  </div>
-                  <div className="absolute bottom-8 right-[8%] w-18 h-18 pointer-events-none opacity-70 z-20" style={{ animation: 'sway-slow 10s ease-in-out infinite' }}>
-                    <svg viewBox="0 0 24 24" fill="none" className="w-full h-full drop-shadow-[0_16px_32px_rgba(0,0,0,0.6)] rotate-[110deg]">
-                      <path d="M12 22C12 22 12 17 14 15C16 13 19 14 20 12C21 10 20 7 18 7C16 7 15 9 14 10C14 8 15 5 13 4C11 3 9 4 8 6C7 8 8 10 9 11C8 10 5 9 4 10C3 11 2 13 4 15C6 17 9 16 12 22Z" fill="#1E5C25" />
-                    </svg>
-                  </div>
-
-                  <style>{`
-                    @keyframes sway-slow {
-                      0%, 100% { transform: translateY(0px) rotate(0deg) scale(0.95); }
-                      50% { transform: translateY(-16px) rotate(12deg) scale(1.05); }
-                    }
-                    @keyframes sway-fast {
-                      0%, 100% { transform: translateY(0px) rotate(-15deg) scale(1); }
-                      50% { transform: translateY(-10px) rotate(10deg) scale(1.04); }
-                    }
-                  `}</style>
-
-                  {/* FOOD SEARCH BAR */}
-                  <div className="max-w-md w-full mx-auto mb-6 px-1 relative z-10 font-sans">
+                {/* PREMIUM HIGH-FIDELITY CULINARY CONTAINER (Matches the light beige/cream design layout in the uploaded reference) */}
+                <div id="category-highlights-section" className="relative mt-8 p-6 sm:p-10 rounded-[3rem] bg-[#b21f1f] border border-[#8c1414] overflow-hidden shadow-2xl text-white space-y-6">
+                  
+                  {/* Clean Light-Themed FOOD SEARCH BAR */}
+                  <div className="max-w-md w-full mx-auto relative z-10 font-sans">
                     <div className="relative">
-                      <span className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-white/40">
+                      <span className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-stone-500">
                         <Search className="w-4 h-4" />
                       </span>
                       <input
@@ -5633,13 +5658,13 @@ export default function App() {
                         value={menuSearchQuery}
                         onChange={(e) => setMenuSearchQuery(e.target.value)}
                         placeholder={appLang === 'am' ? 'ምግብ፣ መጠጥ ወይም መክሰስ ይፈልጉ...' : 'Search delicious food, drinks, or snacks...'}
-                        className="w-full pl-10 pr-10 py-3.5 bg-black/40 hover:bg-black/60 focus:bg-black/60 border-2 border-white/10 hover:border-[#C1FF00]/50 focus:border-[#C1FF00] text-white rounded-2xl text-xs font-bold outline-none transition-all placeholder-white/30"
+                        className="w-full pl-10 pr-10 py-3.5 bg-white border-2 border-transparent hover:border-yellow-400 focus:border-[#f4c22b] text-black rounded-2xl text-xs font-bold outline-none transition-all placeholder-stone-400 shadow-md"
                       />
                       {menuSearchQuery && (
                         <button
                           type="button"
                           onClick={() => setMenuSearchQuery('')}
-                          className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-white/40 hover:text-white font-bold"
+                          className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-stone-400 hover:text-black font-bold"
                         >
                           ✕
                         </button>
@@ -5647,454 +5672,467 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* Horizontal navigation category chips with colorful button layouts */}
-                  <div className="flex border-b border-white/5 pb-4 gap-3 overflow-x-auto no-scrollbar scroll-smooth relative z-10 font-sans">
-                    {categories.map(cat => {
-                      const transLabel = (categoryTranslations[cat.id] && categoryTranslations[cat.id][appLang]) 
-                        ? categoryTranslations[cat.id][appLang] 
-                        : cat.label;
-                      const isActive = selectedCategory === cat.id && !menuSearchQuery;
-                      return (
-                        <button
-                          key={cat.id}
-                          id={`btn-cat-selector-${cat.id}`}
-                          onClick={() => {
-                            setSelectedCategory(cat.id);
-                            // Clear search when category is explicitly clicked to prevent confusion
-                            setMenuSearchQuery('');
-                          }}
-                          className={`px-5 py-3 rounded-full text-xs font-black uppercase tracking-widest transition-all duration-300 flex items-center gap-2.5 shrink-0 cursor-pointer border ${
-                            isActive
-                              ? 'bg-[#C1FF00] text-black border-[#C1FF00] shadow-lg shadow-[#C1FF00]/15 scale-105'
-                              : 'bg-black/35 text-white/85 border-white/5 hover:border-white/20 hover:bg-black/50'
-                          }`}
-                        >
-                          <span className="clay-emoji text-lg">{cat.icon}</span>
-                          <span>{transLabel}</span>
-                        </button>
-                      );
-                    })}
+                  {/* Horizontal navigation category chips with clean scrolling layout */}
+                  <div className="relative z-10 font-sans flex items-center">
+                    <div 
+                      ref={categoryScrollRef}
+                      className="flex-1 flex flex-row flex-nowrap border-b border-white/20 pb-4 gap-3 overflow-x-auto no-scrollbar scroll-smooth px-1"
+                    >
+                      {categories.map(cat => {
+                        const transLabel = (categoryTranslations[cat.id] && categoryTranslations[cat.id][appLang]) 
+                          ? categoryTranslations[cat.id][appLang] 
+                          : cat.label;
+                        const isActive = selectedCategory === cat.id && !menuSearchQuery;
+                        return (
+                          <button
+                            key={cat.id}
+                            id={`btn-cat-selector-${cat.id}`}
+                            onClick={() => {
+                              setSelectedCategory(cat.id);
+                              setMenuSearchQuery('');
+                            }}
+                            className={`px-5 py-3 rounded-full text-xs font-black uppercase tracking-widest transition-all duration-300 flex items-center gap-2.5 shrink-0 cursor-pointer border ${
+                              isActive
+                                ? 'bg-[#f4c22b] text-black border-yellow-500 shadow-lg shadow-yellow-500/20 scale-105 font-black'
+                                : 'bg-white/10 text-white border-white/25 hover:bg-white/25 hover:border-white/40'
+                            }`}
+                          >
+                            <span className="text-lg">{cat.icon}</span>
+                            <span>{transLabel}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
 
                   {/* Active search results label */}
                   {menuSearchQuery.trim() !== '' && (
-                    <div className="text-center mt-6 relative z-10 font-sans">
-                      <span className="text-[10px] text-[#00f5ff] font-mono uppercase tracking-widest block mb-1">🔍 የፍለጋ ውጤቶች / Search Results</span>
+                    <div className="text-center relative z-10 font-sans">
+                      <span className="text-[10px] text-yellow-400 font-mono uppercase tracking-widest block mb-1 font-black">🔍 የፍለጋ ውጤቶች / Search Results</span>
                       <h3 className="text-sm font-black text-white">
                         "{menuSearchQuery}" {appLang === 'am' ? 'የሚሉ ተዛማጅ ምግቦች' : 'matching items'}
                       </h3>
                     </div>
                   )}
 
-                  <div className="relative group/scroll px-1 mt-6 z-10">
-                    {/* Left Scroll Arrow */}
-                    <button
+                  {/* Horizontal scrolling row for menu cards with side-by-side peek view */}
+                  <div className="relative px-1 mt-6 z-10 flex items-center">
+                    {/* Floating Left Menu Item Scroll Button */}
+                    <button 
                       type="button"
                       onClick={() => scrollMenu('left')}
-                      className="absolute -left-3 sm:-left-5 top-[52%] -translate-y-1/2 z-30 w-11 h-11 rounded-full bg-black/90 hover:bg-[#C1FF00] hover:text-black border border-white/10 flex items-center justify-center text-white cursor-pointer shadow-lg transition-all duration-200 active:scale-95"
-                      style={{ touchAction: 'manipulation' }}
+                      className="absolute left-1 z-20 w-9 h-9 rounded-full bg-[#f4c22b] hover:bg-white text-black flex items-center justify-center shadow-xl cursor-pointer border border-yellow-600 font-black text-xs active:scale-95 transition-transform"
+                      title="Scroll menu left"
                     >
-                      <svg className="w-5 h-5 stroke-current font-bold" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="4">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
-                      </svg>
+                      ◀
                     </button>
 
-                    {/* Right Scroll Arrow */}
-                    <button
-                      type="button"
-                      onClick={() => scrollMenu('right')}
-                      className="absolute -right-3 sm:-right-5 top-[52%] -translate-y-1/2 z-30 w-11 h-11 rounded-full bg-black/90 hover:bg-[#C1FF00] hover:text-black border border-white/10 flex items-center justify-center text-white cursor-pointer shadow-lg transition-all duration-200 active:scale-95"
-                      style={{ touchAction: 'manipulation' }}
+                    <div 
+                      ref={menuScrollRef}
+                      className="flex-1 flex flex-row flex-nowrap gap-x-8 gap-y-4 pt-16 pb-12 px-10 overflow-x-auto no-scrollbar scroll-smooth"
                     >
-                      <svg className="w-5 h-5 stroke-current font-bold" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="4">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-                      </svg>
-                    </button>
+                      {(() => {
+                        const filtered = menuItems.filter(item => {
+                          const matchesCategory = item.cat === selectedCategory;
+                          const matchesSearch = menuSearchQuery.trim() === '' || 
+                            item.nameAm.toLowerCase().includes(menuSearchQuery.toLowerCase()) ||
+                            (item.nameEn && item.nameEn.toLowerCase().includes(menuSearchQuery.toLowerCase())) ||
+                            (item.desc && item.desc.toLowerCase().includes(menuSearchQuery.toLowerCase()));
+                          
+                          return (menuSearchQuery.trim() !== '' ? matchesSearch : (matchesCategory && matchesSearch)) && item.available;
+                        });
 
-                  <div 
-                    ref={menuScrollRef} 
-                    className="flex overflow-x-auto gap-8 pb-8 pt-16 px-2.5 scrollbar-thin scrollbar-thumb-white/15 scrollbar-track-transparent snap-x snap-mandatory default-scrollbar scroll-smooth flex-row flex-nowrap"
-                  >
-                    {(() => {
-                      const filtered = menuItems.filter(item => {
-                        const matchesCategory = item.cat === selectedCategory;
-                        const matchesSearch = menuSearchQuery.trim() === '' || 
-                          item.nameAm.toLowerCase().includes(menuSearchQuery.toLowerCase()) ||
-                          (item.nameEn && item.nameEn.toLowerCase().includes(menuSearchQuery.toLowerCase())) ||
-                          (item.desc && item.desc.toLowerCase().includes(menuSearchQuery.toLowerCase()));
-                        
-                        return (menuSearchQuery.trim() !== '' ? matchesSearch : (matchesCategory && matchesSearch)) && item.available;
-                      });
+                        if (filtered.length === 0) {
+                          return (
+                            <div className="text-center py-16 col-span-full w-full font-sans">
+                              <span className="text-4xl block mb-3">🍽️</span>
+                              <p className="text-stone-500 font-bold text-sm">
+                                {appLang === 'am' ? 'ምንም ተዛማጅ ምግብ አልተገኘም!' : 'No matching delicious items found!'}
+                              </p>
+                              <button 
+                                onClick={() => setMenuSearchQuery('')}
+                                className="mt-3 px-4 py-1.5 bg-[#f4c22b] text-black hover:bg-black hover:text-white rounded-lg text-xs font-bold transition-colors border border-stone-200"
+                              >
+                                {appLang === 'am' ? 'ሁሉንም አሳይ' : 'Show All'}
+                              </button>
+                            </div>
+                          );
+                        }
 
-                      if (filtered.length === 0) {
-                        return (
-                          <div className="text-center py-16 col-span-full w-full">
-                            <span className="text-4xl block mb-3">🍽️</span>
-                            <p className="text-white/60 font-bold text-sm">
-                              {appLang === 'am' ? 'ምንም ተዛማጅ ምግብ አልተገኘም!' : 'No matching delicious items found!'}
-                            </p>
-                            <button 
-                              onClick={() => setMenuSearchQuery('')}
-                              className="mt-3 px-4 py-1.5 bg-white/5 hover:bg-white/10 text-[#C1FF00] rounded-lg text-xs font-bold border border-white/10"
+                        return filtered.map(item => {
+                          const mod = customModifiers[item.id] || { 
+                            qaria: modifierOptions.qariaChoices[0] || 'አለ', 
+                            injera: modifierOptions.injeraChoices[2] || modifierOptions.injeraChoices[0] || 'ሙሉ', 
+                            dabo: 0, 
+                            qty: 1,
+                            customInstructions: ''
+                          };
+                          
+                          // Fallback to first available card's ID if selected is null
+                          const firstId = filtered[0]?.id || '';
+                          const isSelected = item.id === (selectedMenuCardId || firstId);
+
+                          // Check if the item name/desc is still original to apply translations
+                          const originalItem = INITIAL_MENU_ITEMS.find(m => m.id === item.id);
+                          const isUnedited = originalItem && 
+                            originalItem.nameAm === item.nameAm && 
+                            originalItem.nameEn === item.nameEn && 
+                            originalItem.desc === item.desc;
+
+                          // Dynamic translated properties
+                          const nameToShow = (isUnedited && itemTranslations[item.id] && itemTranslations[item.id][appLang])
+                            ? itemTranslations[item.id][appLang].name
+                            : (['en', 'fr', 'de', 'it'].includes(appLang) ? (item.nameEn || item.nameAm) : item.nameAm);
+
+                          const descToShow = (isUnedited && itemTranslations[item.id] && itemTranslations[item.id][appLang])
+                            ? itemTranslations[item.id][appLang].desc
+                            : item.desc;
+
+                          const subToShow = (isUnedited && itemTranslations[item.id] && itemTranslations[item.id][appLang])
+                            ? (['en', 'fr', 'de', 'it'].includes(appLang) ? itemTranslations[item.id].am.name : itemTranslations[item.id].en.name)
+                            : (['en', 'fr', 'de', 'it'].includes(appLang) ? item.nameAm : (item.nameEn || ''));
+
+                          // Soft beige background card design matching the requested look perfectly
+                          const cardBg = isSelected
+                            ? 'bg-[#fffdf0] border-4 border-[#f4c22b] shadow-2xl scale-[1.01]'
+                            : 'bg-white border border-stone-200 hover:border-[#f4c22b]/60 hover:shadow-xl transition-all duration-300';
+
+                          const textColor = 'text-stone-900 font-extrabold';
+                          const descColor = 'text-stone-600';
+                          const subColor = 'text-[#b21f1f] font-mono text-[9px] font-black uppercase tracking-wider';
+                          const inputBg = 'bg-white border-stone-200 text-black focus:border-[#b21f1f]';
+                          const btnActive = 'bg-[#f4c22b] text-black font-extrabold shadow-sm';
+                          const btnInactive = 'bg-stone-100 hover:bg-stone-200 text-stone-700';
+
+                          return (
+                            <div 
+                              key={item.id} 
+                              id={`menu-card-item-${item.id}`}
+                              onClick={() => setSelectedMenuCardId(item.id)}
+                              className={`rounded-[2rem] flex flex-col justify-between overflow-visible relative pt-20 pb-6 px-5 cursor-pointer w-[290px] sm:w-[320px] shrink-0 ${cardBg}`}
                             >
-                              {appLang === 'am' ? 'ፍለጋውን ሰርዝ' : 'Clear Search'}
-                            </button>
-                          </div>
-                        );
-                      }
-
-                      return filtered.map(item => {
-                        const mod = customModifiers[item.id] || { 
-                          qaria: modifierOptions.qariaChoices[0] || 'አለ', 
-                          injera: modifierOptions.injeraChoices[2] || modifierOptions.injeraChoices[0] || 'ሙሉ', 
-                          dabo: 0, 
-                          qty: 1,
-                          customInstructions: ''
-                        };
-                        
-                        // Fallback to first available card's ID if selected is null
-                        const firstId = filtered[0]?.id || '';
-                        const isSelected = item.id === (selectedMenuCardId || firstId);
-
-                        // Check if the item name/desc is still original to apply translations
-                        const originalItem = INITIAL_MENU_ITEMS.find(m => m.id === item.id);
-                        const isUnedited = originalItem && 
-                          originalItem.nameAm === item.nameAm && 
-                          originalItem.nameEn === item.nameEn && 
-                          originalItem.desc === item.desc;
-
-                        // Dynamic translated properties
-                        const nameToShow = (isUnedited && itemTranslations[item.id] && itemTranslations[item.id][appLang])
-                          ? itemTranslations[item.id][appLang].name
-                          : (['en', 'fr', 'de', 'it'].includes(appLang) ? (item.nameEn || item.nameAm) : item.nameAm);
-
-                        const descToShow = (isUnedited && itemTranslations[item.id] && itemTranslations[item.id][appLang])
-                          ? itemTranslations[item.id][appLang].desc
-                          : item.desc;
-
-                        const subToShow = (isUnedited && itemTranslations[item.id] && itemTranslations[item.id][appLang])
-                          ? (['en', 'fr', 'de', 'it'].includes(appLang) ? itemTranslations[item.id].am.name : itemTranslations[item.id].en.name)
-                          : (['en', 'fr', 'de', 'it'].includes(appLang) ? item.nameAm : (item.nameEn || ''));
-
-                        // High-fidelity coloring and typographic pairing style based on selected vs unselected card state
-                        const cardBg = isSelected 
-                          ? 'bg-[#C11F1F]/45 backdrop-blur-md text-white ring-4 ring-white/15 shadow-[0_16px_36px_rgba(193,31,31,0.3)] transform scale-[1.01] border border-white/25' 
-                          : 'bg-[#0B1220]/40 hover:bg-[#0B1220]/60 backdrop-blur-md text-white border border-white/5 shadow-[4px_4px_16px_0px_rgba(0,0,0,0.15)] hover:scale-[0.99]';
-
-                        const textColor = 'text-white font-bold';
-                        const descColor = 'text-stone-300';
-                        const subColor = isSelected ? 'text-[#C1FF00] font-black' : 'text-[#00f5ff]';
-                        const inputBg = 'bg-black/40 border-white/10 text-white focus:border-[#C1FF00]';
-                        const btnActive = 'bg-[#C1FF00] text-black font-extrabold shadow-sm';
-                        const btnInactive = 'bg-white/5 hover:bg-white/10 text-white';
-
-                        return (
-                          <div 
-                            key={item.id} 
-                            id={`menu-card-item-${item.id}`}
-                            onClick={() => setSelectedMenuCardId(item.id)}
-                            className={`rounded-[2.4rem] flex flex-col justify-between overflow-visible relative shrink-0 w-[295px] sm:w-[335px] snap-start transition-all duration-300 pt-20 pb-6 px-6 cursor-pointer ${cardBg}`}
-                          >
-                            {/* Circular Plate, overlapping the top edge precisely like in the user's photo */}
-                            <div className="absolute -top-14 left-1/2 -translate-x-1/2 z-20 select-none">
-                              <div className={`w-[136px] h-[136px] rounded-full overflow-hidden border-[6px] shadow-lg shadow-black/40 transition-all duration-300 ${
-                                isSelected ? 'border-white bg-[#900e14]/60 backdrop-blur-sm' : 'border-[#141F32] bg-[#0E1726]/60 backdrop-blur-sm'
-                              }`}>
-                                <img 
-                                  src={item.image} 
-                                  onError={(e) => {
-                                    (e.currentTarget as HTMLImageElement).src = 'https://images.unsplash.com/photo-1544025162-d76694265947?w=400';
-                                  }}
-                                  className="w-full h-full object-cover transition-all duration-300 hover:scale-110" 
-                                  alt={item.nameAm} 
-                                  referrerPolicy="no-referrer"
-                                />
-                              </div>
-                            </div>
-
-                            {/* Top Status Label on card */}
-                            <div className="absolute top-5 right-5 z-10 font-mono text-[8px] bg-black/60 backdrop-blur-sm text-[#C1FF00] px-2.5 py-1 rounded-md border border-white/10 tracking-wider font-extrabold uppercase">
-                              {item.cat}__00{item.id.replace(/\D/g,'')}
-                            </div>
-
-                            {/* Food details description */}
-                            <div className="flex-1 flex flex-col justify-between pt-2 font-sans">
-                              <div className="text-center">
-                                <h4 className={`text-xl font-black tracking-tight mb-0.5 ${textColor}`}>
-                                  {nameToShow}
-                                </h4>
-                                <p className={`text-[10px] font-mono uppercase tracking-widest mb-3 font-extrabold ${subColor}`}>
-                                  {subToShow}
-                                </p>
-                                
-                                <p className={`text-[11.5px] leading-relaxed h-12 overflow-hidden mx-auto px-1 ${descColor}`}>
-                                  {descToShow}
-                                </p>
+                              {/* Overlapping circular plate image exactly matching the visual reference */}
+                              <div className="absolute -top-12 left-1/2 -translate-x-1/2 z-20 select-none">
+                                <div className={`w-32 h-32 rounded-full overflow-hidden border-4 shadow-md transition-all duration-300 ${
+                                  isSelected ? 'border-[#b21f1f] bg-white' : 'border-white bg-white/95'
+                                }`}>
+                                  <img 
+                                    src={item.image} 
+                                    onError={(e) => {
+                                      (e.currentTarget as HTMLImageElement).src = 'https://images.unsplash.com/photo-1544025162-d76694265947?w=400';
+                                    }}
+                                    className="w-full h-full object-cover transition-all duration-300 hover:scale-110" 
+                                    alt={item.nameAm} 
+                                    referrerPolicy="no-referrer"
+                                  />
+                                </div>
                               </div>
 
-                              {/* Price removed from menu card view per user's request: "ዋጋዎችን አጥፋ" */}
+                              {/* Overlaid index status badge on card top right */}
+                              <div className="absolute top-4 right-4 z-10 font-mono text-[7.5px] bg-white border border-stone-200 text-stone-500 px-2 py-0.5 rounded-full uppercase tracking-wider font-extrabold">
+                                {item.cat}__00{item.id.replace(/\D/g,'')}
+                              </div>
 
-                              {/* Customizable modifier configurations */}
-                              {(() => {
-                                const isCustomOnly = isCustomOnlyItem(item);
-                                const hasStandardModifiers = !isCustomOnly && (item.customizable || item.cat === 'food' || item.cat === 'traditional');
-                                const isDrink = item.cat === 'drinks' || item.cat.toLowerCase().includes('drink') || item.cat.toLowerCase().includes('beverage');
-                                const showModifiersArea = (hasStandardModifiers || isCustomOnly) && !isDrink;
-                                
-                                if (!showModifiersArea) return null;
-
-                                const catIdLower = item.cat.toLowerCase();
-                                const catObj = categories.find(c => c.id === item.cat);
-                                const catLabelLower = catObj ? catObj.label.toLowerCase() : '';
-                                const itemAmLower = item.nameAm.toLowerCase();
-                                const itemEnLower = (item.nameEn || '').toLowerCase();
-
-                                const isBurger = catIdLower.includes('burger') || catLabelLower.includes('burger') || catLabelLower.includes('በርገር') || itemAmLower.includes('በርገር') || itemEnLower.includes('burger');
-                                const isTraditional = catIdLower.includes('traditional') || catLabelLower.includes('traditional') || catIdLower.includes('ባህል') || catLabelLower.includes('ባህል') || itemAmLower.includes('ባህል') || itemEnLower.includes('traditional') || itemEnLower.includes('cultural');
-                                const isFood = !isBurger && (item.customizable || item.cat === 'food' || item.cat === 'traditional');
-
-                                return (
-                                  <div className={`p-4 rounded-3xl space-y-3 text-[11px] font-black mt-4 transition-all ${
-                                    isSelected ? 'bg-black/25 text-white border border-white/10' : 'bg-[#070D18]/50 backdrop-blur-sm text-white'
-                                  }`}>
-                                    {isFood && (
-                                      <>
-                                        <div className="flex justify-between items-center">
-                                          <span className="flex items-center gap-1 font-bold">🌶️ {(menuUiTranslation.green_pepper[appLang] || 'ቃሪያ').replace('🌶️', '').trim()}:</span>
-                                          <div className="flex gap-1 font-mono">
-                                            {modifierOptions.qariaChoices.map((val) => (
-                                              <button 
-                                                key={val}
-                                                id={`modifier-${item.id}-qaria-${val}`}
-                                                type="button"
-                                                onClick={(e) => { e.stopPropagation(); handleModifyQaria(item.id, val); }}
-                                                className={`px-3 py-1 rounded-md font-bold text-[10px] transition-all cursor-pointer ${
-                                                  mod.qaria === val ? btnActive : btnInactive
-                                                }`}
-                                              >
-                                                {getTranslatedModifierValue(val)}
-                                              </button>
-                                            ))}
-                                          </div>
-                                        </div>
-
-                                        <div className="flex justify-between items-center">
-                                          <span className="flex items-center gap-1 font-bold">🫓 {(menuUiTranslation.injera[appLang] || 'እንጀራ').replace('🫓', '').trim()}:</span>
-                                          <div className="flex gap-1 font-mono">
-                                            {modifierOptions.injeraChoices.map((val) => {
-                                              const priceAdd = Number(modifierOptions.injeraPrices?.[val] || 0);
-                                              return (
-                                                <button 
-                                                  key={val}
-                                                  id={`modifier-${item.id}-injera-${val}`}
-                                                  type="button"
-                                                  onClick={(e) => { e.stopPropagation(); handleModifyInjera(item.id, val); }}
-                                                  className={`px-2.5 py-1 rounded-md font-bold text-[9px] transition-all cursor-pointer ${
-                                                    mod.injera === val ? btnActive : btnInactive
-                                                  }`}
-                                                >
-                                                  {getTranslatedModifierValue(val)} {priceAdd > 0 ? `(+${priceAdd})` : ''}
-                                                </button>
-                                              );
-                                            })}
-                                          </div>
-                                        </div>
-
-                                        <div className="flex justify-between items-center">
-                                          <span className="flex items-center gap-1 font-bold">🥖 {(menuUiTranslation.bread[appLang] || 'ዳቦ').replace('🥖', '').trim()}:</span>
-                                          <div className="flex items-center gap-2 font-mono">
-                                            <button 
-                                              id={`modifier-${item.id}-bread-dec`}
-                                              type="button"
-                                              onClick={(e) => { e.stopPropagation(); handleModifyDabo(item.id, -1); }}
-                                              className="w-6 h-6 rounded bg-white/5 hover:bg-white/10 text-white flex items-center justify-center font-bold text-sm cursor-pointer"
-                                            >
-                                              -
-                                            </button>
-                                            <span className="text-white text-xs font-bold w-4 text-center">{mod.dabo}</span>
-                                            <button 
-                                              id={`modifier-${item.id}-bread-inc`}
-                                              type="button"
-                                              onClick={(e) => { e.stopPropagation(); handleModifyDabo(item.id, 1); }}
-                                              className="w-6 h-6 rounded bg-white/5 hover:bg-white/10 text-white flex items-center justify-center font-bold text-sm cursor-pointer"
-                                            >
-                                              +
-                                            </button>
-                                            <span className="text-[9px] opacity-65">(+{Number(modifierOptions.daboPrice || 0)} ብር)</span>
-                                          </div>
-                                        </div>
-                                      </>
-                                    )}
-
-                                    {isTraditional && (
-                                      <div className="flex justify-between items-center border-t border-black/5 dark:border-white/5 pt-2">
-                                        <span className="flex items-center gap-1 font-bold">🫓 {appLang === 'am' ? 'የቆጮ ጭማሪ' : 'Extra Kocho'}:</span>
-                                        <button
-                                          type="button"
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            setCustomModifiers(prev => ({
-                                              ...prev,
-                                              [item.id]: { ...prev[item.id], kocho: !prev[item.id]?.kocho }
-                                            }));
-                                          }}
-                                          className={`px-3 py-1.5 rounded-lg text-xs font-bold font-mono transition-all border cursor-pointer ${
-                                            mod.kocho
-                                              ? 'bg-[#C1FF00] text-black border-[#C1FF00] font-black'
-                                              : 'bg-white/5 border-white/10 text-white/70 hover:border-white/20'
-                                          }`}
-                                        >
-                                          {mod.kocho ? '✓ ' : ''}{appLang === 'am' ? 'ቆጮ' : 'Kocho'} (+{modifierOptions.kochoPrice || 45} ብር)
-                                        </button>
-                                      </div>
-                                    )}
-
-                                    {isBurger && (
-                                      <div className="flex justify-between items-center border-t border-black/5 dark:border-white/5 pt-2">
-                                        <span className="flex items-center gap-1 font-bold">🧴 {appLang === 'am' ? 'የማዮኔዝ ጭማሪ' : 'Extra Mayonnaise'}:</span>
-                                        <button
-                                          type="button"
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            setCustomModifiers(prev => ({
-                                              ...prev,
-                                              [item.id]: { ...prev[item.id], mayo: !prev[item.id]?.mayo }
-                                            }));
-                                          }}
-                                          className={`px-3 py-1.5 rounded-lg text-xs font-bold font-mono transition-all border cursor-pointer ${
-                                            mod.mayo
-                                              ? 'bg-[#C1FF00] text-black border-[#C1FF00] font-black'
-                                              : 'bg-white/5 border-white/10 text-white/70 hover:border-white/20'
-                                          }`}
-                                        >
-                                          {mod.mayo ? '✓ ' : ''}{appLang === 'am' ? 'ማዮኔዝ' : 'Mayo'} (+{modifierOptions.mayoPrice || 20} ብር)
-                                        </button>
-                                      </div>
-                                    )}
-
-                                    <div className="flex flex-col gap-1 border-t border-black/5 dark:border-white/5 pt-2">
-                                      <span className="text-[10px] uppercase font-bold tracking-wide">
-                                        {appLang === 'am' ? `➕ ተጨማሪዎች (Custom Additions - +${modifierOptions.customAdditionsPrice || 35} ብር) :` : `➕ Custom Additions (+${modifierOptions.customAdditionsPrice || 35} Birr) :`}
-                                      </span>
-                                      <input
-                                        type="text"
-                                        placeholder={appLang === 'am' ? 'ለምሳሌ፦ ቺዝ፣ ስጋ፣ ማዮኔዝ...' : 'e.g. extra cheese, beef, mayo...'}
-                                        value={mod.customInstructions || ''}
-                                        onChange={(e) => {
-                                          e.stopPropagation();
-                                          setCustomModifiers(prev => ({
-                                            ...prev,
-                                            [item.id]: { ...prev[item.id], customInstructions: e.target.value }
-                                          }));
-                                        }}
-                                        onClick={(e) => e.stopPropagation()}
-                                        className={`w-full px-3 py-2.5 rounded-xl text-xs font-bold outline-none border transition-all ${inputBg}`}
-                                      />
-                                    </div>
-                                  </div>
-                                );
-                              })()}
-
-                              {/* Quantity control & add to basket trigger button */}
-                              <div className="mt-4 flex gap-3 select-none">
-                                {/* Quantity selection buttons */}
-                                <div className="flex items-center border border-white/10 rounded-xl bg-black/15 px-1.5 py-1">
-                                  <button 
-                                    id={`btn-qty-dec-${item.id}`}
-                                    type="button"
-                                    onClick={(e) => { e.stopPropagation(); handleModifyQty(item.id, -1); }}
-                                    className="w-7 h-7 rounded-lg hover:bg-white/5 text-white flex items-center justify-center font-bold cursor-pointer"
-                                  >
-                                    -
-                                  </button>
-                                  <span className="text-white font-mono text-sm font-black w-7 text-center">{mod.qty}</span>
-                                  <button 
-                                    id={`btn-qty-inc-${item.id}`}
-                                    type="button"
-                                    onClick={(e) => { e.stopPropagation(); handleModifyQty(item.id, 1); }}
-                                    className="w-7 h-7 rounded-lg hover:bg-white/5 text-white flex items-center justify-center font-bold cursor-pointer"
-                                  >
-                                    +
-                                  </button>
+                              {/* Food details description */}
+                              <div className="flex-1 flex flex-col justify-between pt-2 font-sans">
+                                <div className="text-center">
+                                  <h4 className={`text-base tracking-tight mb-0.5 leading-tight ${textColor}`}>
+                                    {nameToShow}
+                                  </h4>
+                                  <p className={`mb-3 ${subColor}`}>
+                                    {subToShow}
+                                  </p>
+                                  
+                                  <p className={`text-[11px] leading-relaxed h-12 overflow-hidden mx-auto px-1 line-clamp-2 ${descColor}`}>
+                                    {descToShow}
+                                  </p>
                                 </div>
 
-                                {/* Trigger Add to Basket */}
-                                <button
-                                  id={`btn-add-to-basket-${item.id}`}
-                                  type="button"
-                                  onClick={(e) => { e.stopPropagation(); handleAddToBasket(item.id); }}
-                                  className="flex-1 bg-[#C1FF00] hover:bg-white text-black font-mono font-black text-xs py-3.5 rounded-xl uppercase tracking-wider transition-all duration-200 active:scale-95 flex items-center justify-center gap-1.5 cursor-pointer"
-                                >
-                                  <span>🛒 {(menuUiTranslation.add_to_order_btn[appLang] || 'እዘዝ').replace('🛒', '').trim()}</span>
-                                </button>
+                                {/* Custom modifiers configurations shown inline when card is selected */}
+                                {(() => {
+                                  const isCustomOnly = isCustomOnlyItem(item);
+                                  const hasStandardModifiers = !isCustomOnly && (item.customizable || item.cat === 'food' || item.cat === 'traditional');
+                                  const isDrink = item.cat === 'drinks' || item.cat.toLowerCase().includes('drink') || item.cat.toLowerCase().includes('beverage');
+                                  const showModifiersArea = (hasStandardModifiers || isCustomOnly) && !isDrink;
+                                  
+                                  if (!showModifiersArea || !isSelected) return null;
 
-                                {/* Favorite/Wishlist Heart Toggle Button */}
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setMenuFavorites(prev => 
-                                      prev.includes(item.id) ? prev.filter(id => id !== item.id) : [...prev, item.id]
-                                    );
-                                  }}
-                                  className={`p-3 rounded-xl border border-white/10 hover:border-white/20 hover:bg-white/5 transition-all duration-200 cursor-pointer flex items-center justify-center ${
-                                    menuFavorites.includes(item.id) 
-                                      ? 'bg-rose-500/20 border-rose-500 text-rose-500 shadow-md shadow-rose-500/20' 
-                                      : 'text-white/40 hover:text-rose-500'
-                                  }`}
-                                >
-                                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill={menuFavorites.includes(item.id) ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2.5"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg>
-                                </button>
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      });
-                    })()}
-                  </div>
-                </div>
-              </div>
+                                  const catIdLower = item.cat.toLowerCase();
+                                  const catObj = categories.find(c => c.id === item.cat);
+                                  const catLabelLower = catObj ? catObj.label.toLowerCase() : '';
+                                  const itemAmLower = item.nameAm.toLowerCase();
+                                  const itemEnLower = (item.nameEn || '').toLowerCase();
 
+                                  const isBurger = catIdLower.includes('burger') || catLabelLower.includes('burger') || catLabelLower.includes('በርገር') || itemAmLower.includes('በርገር') || itemEnLower.includes('burger');
+                                  const isTraditional = catIdLower.includes('traditional') || catLabelLower.includes('traditional') || catIdLower.includes('ባህል') || catLabelLower.includes('ባህል') || itemAmLower.includes('ባህል') || itemEnLower.includes('traditional') || itemEnLower.includes('cultural');
+                                  const isFood = !isBurger && (item.customizable || item.cat === 'food' || item.cat === 'traditional');
 
-              {/* Removed Chef advertisement from here - moving to Chef Portal */}
+                                  return (
+                                    <div className={`p-4 rounded-2xl space-y-3 text-[11px] font-black mt-4 transition-all bg-[#fffbf2] border border-[#f3e1b9] text-stone-800`}>
+                                      {isFood && (
+                                        <>
+                                          <div className="flex justify-between items-center">
+                                            <span className="flex items-center gap-1 font-bold text-stone-700">🌶️ {(menuUiTranslation.green_pepper[appLang] || 'ቃሪያ').replace('🌶️', '').trim()}:</span>
+                                            <div className="flex gap-1 font-mono">
+                                              {modifierOptions.qariaChoices.map((val) => (
+                                                <button 
+                                                  key={val}
+                                                  id={`modifier-${item.id}-qaria-${val}`}
+                                                  type="button"
+                                                  onClick={(e) => { e.stopPropagation(); handleModifyQaria(item.id, val); }}
+                                                  className={`px-3 py-1 rounded-md font-bold text-[10px] transition-all cursor-pointer ${
+                                                    mod.qaria === val ? btnActive : btnInactive
+                                                  }`}
+                                                >
+                                                  {getTranslatedModifierValue(val)}
+                                                </button>
+                                              ))}
+                                            </div>
+                                          </div>
 
-                {/* HIGH-FIDELITY LUXURY DELIVERY ADVERTISEMENT SECTION - ULTRA COMPACT & ELEGANT */}
-                <motion.div
-                  initial={{ opacity: 0, y: 15 }}
-                  whileInView={{ opacity: 1, y: 0 }}
-                  viewport={{ once: true }}
-                  transition={{ duration: 0.5, ease: "easeOut" }}
-                  className="rounded-2xl overflow-hidden relative border border-white/10 dark:border-stone-800/80 flex flex-col md:flex-row justify-between items-center p-6 sm:p-8 md:p-10 lg:p-12 shadow-xl gap-6 md:gap-8 min-h-[220px] text-stone-800 dark:text-stone-100 bg-gradient-to-tr from-[#ffe6d9]/30 via-[#e2f9f8]/45 to-white dark:from-[#3a2013]/15 dark:via-[#132c3a]/10 dark:to-stone-900 backdrop-blur-md mt-6 max-w-5xl mx-auto w-full animate-fade-in"
-                >
-                  {/* Organic Warm Background Mesh Blurs - Enlarged */}
-                  <div className="absolute top-[-30%] right-[-10%] w-[250px] h-[250px] rounded-full bg-[#ff7b54]/8 blur-[60px] pointer-events-none" />
-                  <div className="absolute bottom-[-30%] left-[-10%] w-[250px] h-[250px] rounded-full bg-[#00bcd4]/6 blur-[60px] pointer-events-none" />
+                                          <div className="flex justify-between items-center">
+                                            <span className="flex items-center gap-1 font-bold text-stone-700">🫓 {(menuUiTranslation.injera[appLang] || 'እንጀራ').replace('🫓', '').trim()}:</span>
+                                            <div className="flex gap-1 font-mono">
+                                              {modifierOptions.injeraChoices.map((val) => {
+                                                const priceAdd = Number(modifierOptions.injeraPrices?.[val] || 0);
+                                                return (
+                                                  <button 
+                                                    key={val}
+                                                    id={`modifier-${item.id}-injera-${val}`}
+                                                    type="button"
+                                                    onClick={(e) => { e.stopPropagation(); handleModifyInjera(item.id, val); }}
+                                                    className={`px-2.5 py-1 rounded-md font-bold text-[9px] transition-all cursor-pointer ${
+                                                      mod.injera === val ? btnActive : btnInactive
+                                                    }`}
+                                                  >
+                                                    {getTranslatedModifierValue(val)} {priceAdd > 0 ? `(+${priceAdd})` : ''}
+                                                  </button>
+                                                );
+                                              })}
+                                            </div>
+                                          </div>
 
-                  {/* LEFT COLUMN: Premium Typography, Location Inputs & Badges */}
-                  <div className="flex-1 space-y-4 relative z-10 text-left w-full">
-                    {/* Organic Deliver Service Pill Badge */}
-                    <div className="inline-flex items-center gap-2 px-3.5 py-1 bg-[#ff5722]/10 border border-[#ff5722]/20 text-[#ff5722] rounded-full font-mono font-black text-[9px] sm:text-[10px] uppercase tracking-wider shadow-sm">
-                      <span>🍎</span>
-                      <span>
-                        {appLang === 'am' ? 'ፈጣን ክፍል መስተንግዶ' : 'Express Room Delivery'}
-                      </span>
-                    </div>
+                                          <div className="flex justify-between items-center">
+                                            <span className="flex items-center gap-1 font-bold text-stone-700">🥖 {(menuUiTranslation.bread[appLang] || 'ዳቦ').replace('🥖', '').trim()}:</span>
+                                            <div className="flex items-center gap-2 font-mono">
+                                              <button 
+                                                id={`modifier-${item.id}-bread-dec`}
+                                                type="button"
+                                                onClick={(e) => { e.stopPropagation(); handleModifyDabo(item.id, -1); }}
+                                                className="w-6 h-6 rounded bg-stone-100 hover:bg-stone-200 text-stone-850 flex items-center justify-center font-bold text-sm cursor-pointer border border-stone-200"
+                                              >
+                                                -
+                                              </button>
+                                              <span className="text-stone-850 text-xs font-bold w-4 text-center">{mod.dabo}</span>
+                                              <button 
+                                                id={`modifier-${item.id}-bread-inc`}
+                                                type="button"
+                                                onClick={(e) => { e.stopPropagation(); handleModifyDabo(item.id, 1); }}
+                                                className="w-6 h-6 rounded bg-stone-100 hover:bg-stone-200 text-stone-850 flex items-center justify-center font-bold text-sm cursor-pointer border border-stone-200"
+                                              >
+                                                +
+                                              </button>
+                                              <span className="text-[9px] opacity-65">(+{Number(modifierOptions.daboPrice || 0)} ብር)</span>
+                                            </div>
+                                          </div>
+                                        </>
+                                      )}
 
-                    {/* Highly Engaging Dual-Language Main Heading with dynamic typography */}
-                    <h2 className="text-xl sm:text-2xl md:text-3xl lg:text-4xl font-black tracking-tight leading-tight text-stone-900 dark:text-white font-sans uppercase">
+                                      {isTraditional && (
+                                        <div className="flex justify-between items-center border-t border-stone-200 pt-2">
+                                          <span className="flex items-center gap-1 font-bold text-stone-700">🫓 {appLang === 'am' ? 'የቆጮ ጭማሪ' : 'Extra Kocho'}:</span>
+                                          <button
+                                            type="button"
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              setCustomModifiers(prev => ({
+                                                ...prev,
+                                                [item.id]: { ...prev[item.id], kocho: !prev[item.id]?.kocho }
+                                              }));
+                                            }}
+                                            className={`px-3 py-1.5 rounded-lg text-xs font-bold font-mono transition-all border cursor-pointer ${
+                                              mod.kocho
+                                                ? 'bg-[#f4c22b] text-black border-[#cf9d12] font-black'
+                                                : 'bg-white border-stone-200 text-stone-700 hover:bg-stone-50'
+                                            }`}
+                                          >
+                                            {mod.kocho ? '✓ ' : ''}{appLang === 'am' ? 'ቆጮ' : 'Kocho'} (+{modifierOptions.kochoPrice || 45} ብር)
+                                          </button>
+                                        </div>
+                                      )}
+
+                                      {isBurger && (
+                                        <div className="flex justify-between items-center border-t border-stone-200 pt-2">
+                                          <span className="flex items-center gap-1 font-bold text-stone-700">🧴 {appLang === 'am' ? 'የማዮኔዝ ጭማሪ' : 'Extra Mayonnaise'}:</span>
+                                          <button
+                                            type="button"
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              setCustomModifiers(prev => ({
+                                                ...prev,
+                                                [item.id]: { ...prev[item.id], mayo: !prev[item.id]?.mayo }
+                                              }));
+                                            }}
+                                            className={`px-3 py-1.5 rounded-lg text-xs font-bold font-mono transition-all border cursor-pointer ${
+                                              mod.mayo
+                                                ? 'bg-[#f4c22b] text-black border-[#cf9d12] font-black'
+                                                : 'bg-white border-stone-200 text-stone-700 hover:bg-stone-50'
+                                            }`}
+                                          >
+                                            {mod.mayo ? '✓ ' : ''}{appLang === 'am' ? 'ማዮኔዝ' : 'Mayo'} (+{modifierOptions.mayoPrice || 20} ብር)
+                                          </button>
+                                        </div>
+                                      )}
+
+                                      <div className="flex flex-col gap-1 border-t border-stone-200 pt-2 text-stone-700">
+                                        <span className="text-[10px] uppercase font-bold tracking-wide">
+                                          {appLang === 'am' ? `➕ ተጨማሪዎች (Custom Additions - +${modifierOptions.customAdditionsPrice || 35} ብር) :` : `➕ Custom Additions (+${modifierOptions.customAdditionsPrice || 35} Birr) :`}
+                                        </span>
+                                        <input
+                                          type="text"
+                                          placeholder={appLang === 'am' ? 'ለምሳሌ፦ ቺዝ፣ ስጋ፣ ማዮኔዝ...' : 'e.g. extra cheese, beef, mayo...'}
+                                          value={mod.customInstructions || ''}
+                                          onChange={(e) => {
+                                            e.stopPropagation();
+                                            setCustomModifiers(prev => ({
+                                              ...prev,
+                                              [item.id]: { ...prev[item.id], customInstructions: e.target.value }
+                                            }));
+                                          }}
+                                          onClick={(e) => e.stopPropagation()}
+                                          className={`w-full px-3 py-2.5 rounded-xl text-xs font-bold outline-none border transition-all ${inputBg}`}
+                                        />
+                                      </div>
+                                    </div>
+                                  );
+                                })()}
+
+                                {/* Bottom action row: Price and Order button replicating the reference layout */}
+                                <div className="mt-4 flex justify-between items-center select-none gap-2">
+                                  {/* Price nicely displayed */}
+                                  <div className="text-left">
+                                    <span className="text-[8px] uppercase tracking-wider font-mono font-black text-stone-400 block">PRICE</span>
+                                    <span className="text-base font-mono font-black text-[#b21f1f]">{item.price} ብር</span>
+                                  </div>
+
+                                  {/* Yellow button for order / customize */}
+                                  <div className="flex items-center gap-1">
+                                    <button
+                                      id={`btn-add-to-basket-${item.id}`}
+                                      type="button"
+                                      onClick={(e) => { 
+                                        e.stopPropagation(); 
+                                        if (isSelected) {
+                                          handleAddToBasket(item.id); 
+                                        } else {
+                                          setSelectedMenuCardId(item.id);
+                                        }
+                                      }}
+                                      className="bg-[#f4c22b] hover:bg-[#cf9d12] text-black font-sans font-black text-xs px-4 py-2.5 rounded-full uppercase tracking-wider transition-all shadow-md active:scale-95 cursor-pointer border-b-2 border-[#cf9d12]"
+                                    >
+                                      <span>🛒 {isSelected ? (menuUiTranslation.add_to_order_btn[appLang] || 'እዘዝ').replace('🛒', '').trim() : (appLang === 'am' ? 'ምረጥ' : 'Order')}</span>
+                                    </button>
+
+                                    {/* Favorite/Wishlist Heart Toggle Button */}
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setMenuFavorites(prev => 
+                                          prev.includes(item.id) ? prev.filter(id => id !== item.id) : [...prev, item.id]
+                                        );
+                                      }}
+                                      className={`p-2 rounded-full border transition-all duration-200 cursor-pointer flex items-center justify-center ${
+                                        menuFavorites.includes(item.id) 
+                                          ? 'bg-rose-50 border-rose-500 text-rose-500 shadow-sm' 
+                                          : 'border-stone-200 text-stone-400 hover:text-rose-500 hover:border-rose-200'
+                                      }`}
+                                    >
+                                      <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill={menuFavorites.includes(item.id) ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2.5"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg>
+                                    </button>
+                                  </div>
+                                </div>
+
+                                {/* Active quantity selection overlay shown only when selected */}
+                                {isSelected && (
+                                  <div className="mt-3.5 flex justify-between items-center border-t border-stone-200 pt-3">
+                                    <span className="text-[10px] text-stone-500 font-bold uppercase tracking-wider">QUANTITY</span>
+                                    <div className="flex items-center border border-stone-200 rounded-xl bg-stone-50 px-1 py-0.5">
+                                      <button 
+                                        id={`btn-qty-dec-${item.id}`}
+                                        type="button"
+                                        onClick={(e) => { e.stopPropagation(); handleModifyQty(item.id, -1); }}
+                                        className="w-6 h-6 rounded-lg hover:bg-stone-100 text-stone-850 flex items-center justify-center font-bold cursor-pointer"
+                                      >
+                                        -
+                                      </button>
+                                      <span className="text-stone-900 font-mono text-xs font-black w-6 text-center">{mod?.qty || 1}</span>
+                                       <button 
+                                         id={`btn-qty-inc-${item.id}`}
+                                         type="button"
+                                         onClick={(e) => { e.stopPropagation(); handleModifyQty(item.id, 1); }}
+                                         className="w-6 h-6 rounded-lg hover:bg-stone-100 text-[#b21f1f] flex items-center justify-center font-bold cursor-pointer"
+                                       >
+                                         +
+                                       </button>
+                                     </div>
+                                   </div>
+                                 )}
+                               </div>
+                             </div>
+                           );
+                         });
+                       })()}
+                     </div>
+                     {/* Floating Right Menu Item Scroll Button */}
+                     <button 
+                       type="button"
+                       onClick={() => scrollMenu('right')}
+                       className="absolute right-1 z-20 w-9 h-9 rounded-full bg-[#f4c22b] hover:bg-white text-black flex items-center justify-center shadow-xl cursor-pointer border border-yellow-600 font-black text-xs active:scale-95 transition-transform"
+                       title="Scroll menu right"
+                     >
+                       ▶
+                     </button>
+                   </div>
+                 </div>
+
+                 {/* HIGH-FIDELITY LUXURY DELIVERY ADVERTISEMENT SECTION - ULTRA COMPACT & ELEGANT */}
+                 <motion.div
+                   initial={{ opacity: 0, y: 15 }}
+                   whileInView={{ opacity: 1, y: 0 }}
+                   viewport={{ once: true }}
+                   transition={{ duration: 0.5, ease: "easeOut" }}
+                   className="rounded-2xl overflow-hidden relative border border-[#b21f1f]/40 flex flex-col md:flex-row justify-between items-center p-6 sm:p-8 md:p-10 lg:p-12 shadow-xl gap-6 md:gap-8 min-h-[220px] text-white bg-gradient-to-tr from-[#8c1414] via-[#b21f1f] to-[#5c0b0b] backdrop-blur-md mt-6 max-w-5xl mx-auto w-full animate-fade-in"
+                 >
+                   {/* Organic Warm Background Mesh Blurs - Enlarged */}
+                   <div className="absolute top-[-30%] right-[-10%] w-[250px] h-[250px] rounded-full bg-white/5 blur-[60px] pointer-events-none" />
+                   <div className="absolute bottom-[-30%] left-[-10%] w-[250px] h-[250px] rounded-full bg-[#f4c22b]/10 blur-[60px] pointer-events-none" />
+
+                   {/* LEFT COLUMN: Premium Typography, Location Inputs & Badges */}
+                   <div className="flex-1 space-y-4 relative z-10 text-left w-full">
+                     {/* Organic Deliver Service Pill Badge */}
+                     <div className="inline-flex items-center gap-2 px-3.5 py-1 bg-white/20 border border-white/30 text-white rounded-full font-mono font-black text-[9px] sm:text-[10px] uppercase tracking-wider shadow-sm">
+                       <span>🍎</span>
+                       <span>
+                         {appLang === 'am' ? 'ፈጣን ክፍል መስተንግዶ' : 'Express Room Delivery'}
+                       </span>
+                     </div>
+
+                     {/* Highly Engaging Dual-Language Main Heading with dynamic typography */}
+                     <h2 className="text-xl sm:text-2xl md:text-3xl lg:text-4xl font-black tracking-tight leading-tight text-white font-sans uppercase">
                       {appLang === 'am' ? (
                         <>
-                          በፍጥነት እና <span className="text-[#ff5722]">ትኩስ</span> ሆኖ እርስዎ ያሉበት ክፍል ድረስ!
+                          በፍጥነት እና <span className="text-[#f4c22b]">ትኩስ</span> ሆኖ እርስዎ ያሉበት ክፍል ድረስ!
                         </>
                       ) : (
                         <>
-                          Make your life <span className="text-[#00acd4]">healthy</span> with <span className="text-[#ff5722]">fresh</span> lodge dining
+                          Make your life <span className="text-[#f4c22b]">healthy</span> with <span className="text-[#f4c22b]">fresh</span> lodge dining
                         </>
                       )}
                     </h2>
 
                     {/* Sub-text description */}
-                    <p className="text-stone-600 dark:text-stone-300 text-xs sm:text-sm md:text-base leading-relaxed max-w-2xl font-semibold">
+                    <p className="text-white/90 text-xs sm:text-sm md:text-base leading-relaxed max-w-2xl font-semibold">
                       {appLang === 'am' ? (
                         'የሃዋሳ ፓፒረስ ሎጅ ምርጥ ምግቦች በጥንቃቄ ተዘጋጅተው በፍጥነት ባሉበት ሆነው ይዘዙ።'
                       ) : (
@@ -6113,16 +6151,16 @@ export default function App() {
                             element.scrollIntoView({ behavior: 'smooth' });
                           }
                         }}
-                        className="px-6 py-3 bg-[#ff5722] hover:bg-[#e64a19] text-white font-mono text-xs font-black uppercase tracking-wider rounded-lg shadow-md cursor-pointer text-center"
+                        className="px-6 py-3 bg-[#f4c22b] hover:bg-white text-black font-mono text-xs font-black uppercase tracking-wider rounded-lg shadow-md cursor-pointer text-center border border-white/10"
                       >
                         {appLang === 'am' ? 'አሁን ይዘዙ ➔' : 'Order Now ➔'}
                       </motion.button>
 
                       {/* Glassmorphic Live Stats Badge: Fast Delivery */}
-                      <div className="bg-white/75 dark:bg-stone-800/80 backdrop-blur-md px-3.5 py-2.5 rounded-lg border border-white/50 dark:border-stone-700/50 shadow-sm flex items-center gap-2">
+                      <div className="bg-white/10 backdrop-blur-md px-3.5 py-2.5 rounded-lg border border-white/20 shadow-sm flex items-center gap-2">
                         <span className="text-sm sm:text-base animate-bounce">🛵</span>
                         <div>
-                          <span className="text-stone-900 dark:text-white font-extrabold text-[10px] sm:text-xs block leading-none">
+                          <span className="text-white font-extrabold text-[10px] sm:text-xs block leading-none">
                             {appLang === 'am' ? 'ፈጣን መስተንግዶ' : 'Fast Delivery'}
                           </span>
                         </div>
@@ -6172,10 +6210,10 @@ export default function App() {
 
                 {/* Photo Gallery Showcase */}
                 {galleryItems && galleryItems.length > 0 && (
-                  <div className="relative bg-stone-950/60 backdrop-blur-xl border border-white/10 p-6 space-y-5 rounded-2xl mt-6 overflow-hidden shadow-2xl">
+                  <div className="relative bg-gradient-to-b from-[#8c1414] to-[#5c0b0b] border border-[#b21f1f]/30 p-6 space-y-5 rounded-2xl mt-6 overflow-hidden shadow-2xl">
                     {/* Elegant Ambient Glowing Layers behind the container content */}
-                    <div className="absolute -top-16 -left-16 w-56 h-56 bg-[#C1FF00]/10 rounded-full filter blur-[60px] pointer-events-none animate-pulse" style={{ animationDuration: '8s' }} />
-                    <div className="absolute -bottom-16 -right-16 w-56 h-56 bg-amber-500/10 rounded-full filter blur-[60px] pointer-events-none animate-pulse" style={{ animationDuration: '10s' }} />
+                    <div className="absolute -top-16 -left-16 w-56 h-56 bg-white/10 rounded-full filter blur-[60px] pointer-events-none animate-pulse" style={{ animationDuration: '8s' }} />
+                    <div className="absolute -bottom-16 -right-16 w-56 h-56 bg-[#f4c22b]/10 rounded-full filter blur-[60px] pointer-events-none animate-pulse" style={{ animationDuration: '10s' }} />
                     
                     <div className="relative z-10 flex items-center justify-between border-b border-white/5 pb-3">
                       <div className="flex items-center gap-2">
@@ -6184,7 +6222,7 @@ export default function App() {
                           {appLang === 'am' ? 'የፓፒረስ ማዕከለ-ስዕላት' : 'Papyrus Gallery Showcase'}
                         </h4>
                       </div>
-                      <span className="text-[10px] text-[#C1FF00] font-mono uppercase font-bold bg-[#C1FF00]/10 border border-[#C1FF00]/20 px-2.5 py-1 rounded-full">
+                      <span className="text-[10px] text-[#f4c22b] font-mono uppercase font-bold bg-[#f4c22b]/10 border border-[#f4c22b]/20 px-2.5 py-1 rounded-full">
                         {galleryItems.length} {appLang === 'am' ? 'ምስሎች' : 'Photos'}
                       </span>
                     </div>
@@ -6197,11 +6235,11 @@ export default function App() {
                         background: transparent;
                       }
                       .gallery-scroll::-webkit-scrollbar-thumb {
-                        background: rgba(193, 255, 0, 0.2);
+                        background: rgba(244, 194, 43, 0.2);
                         border-radius: 9999px;
                       }
                       .gallery-scroll::-webkit-scrollbar-thumb:hover {
-                        background: rgba(193, 255, 0, 0.6);
+                        background: rgba(244, 194, 43, 0.6);
                       }
                     `}</style>
 
@@ -6211,7 +6249,7 @@ export default function App() {
                           <div 
                             key={item.id || idx} 
                             onClick={() => setSelectedGalleryIdx(idx)}
-                            className="group relative aspect-square bg-stone-900 border border-white/5 overflow-hidden rounded-lg cursor-pointer hover:border-[#C1FF00]/40 transition-all duration-300 shadow-lg"
+                            className="group relative aspect-square bg-stone-900 border border-white/5 overflow-hidden rounded-lg cursor-pointer hover:border-[#f4c22b]/60 transition-all duration-300 shadow-lg"
                           >
                             {/* STRETCHED BLURRED BACKGROUND LAYER matching image colors */}
                             <div 
@@ -6231,12 +6269,12 @@ export default function App() {
 
                             {/* CORNER SEARCH/EXPAND BADGE */}
                             <div className="absolute top-2 right-2 bg-black/60 backdrop-blur-md rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity duration-300 z-20 shadow">
-                              <svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="#C1FF00" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+                              <svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="#f4c22b" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
                             </div>
 
                             {/* OVERLAY LABEL WITH BACKDROP BLUR */}
                             <div className="absolute inset-x-1 bottom-1 bg-gradient-to-t from-black/95 via-black/80 to-transparent p-1.5 pt-3 z-20 flex flex-col justify-end rounded-b-md">
-                              <span className="text-[6.5px] text-[#C1FF00] font-mono font-black uppercase tracking-widest block mb-0.5 leading-none">
+                              <span className="text-[6.5px] text-[#f4c22b] font-mono font-black uppercase tracking-widest block mb-0.5 leading-none">
                                 {item.category || 'General'}
                               </span>
                               <span className="text-[8.5px] text-white font-bold leading-tight line-clamp-1 drop-shadow">
@@ -6252,25 +6290,25 @@ export default function App() {
 
                 {/* About the resort and feedback */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-6">
-                  <div className="bg-[#141414] border border-white/10 p-5 space-y-3">
-                    <div className="flex items-center gap-2 border-b border-white/5 pb-2">
+                  <div className="bg-gradient-to-b from-[#8c1414] to-[#5c0b0b] border border-[#b21f1f]/30 p-5 space-y-3 rounded-2xl shadow-xl text-white">
+                    <div className="flex items-center gap-2 border-b border-white/10 pb-2">
                       <span className="text-xl">🌲</span>
                       <h4 className="text-xs font-black text-white uppercase tracking-widest">
                         {menuUiTranslation.about_lodge_heading[appLang]}
                       </h4>
                     </div>
-                    <p className="text-[11px] text-white/60 leading-relaxed font-bold whitespace-pre-wrap">
+                    <p className="text-[11px] text-white/90 leading-relaxed font-bold whitespace-pre-wrap">
                       {getTranslatedAboutLodge(aboutLodgeText)}
                     </p>
                     <div className="flex gap-2 pt-2">
-                      <a href="tel:+251919629347" className="flex-1 bg-[#C1FF00] hover:bg-white text-black text-center py-2 text-[10px] uppercase font-black font-mono">
+                      <a href="tel:+251919629347" className="flex-1 bg-[#f4c22b] hover:bg-white text-black text-center py-2 text-[10px] uppercase font-black font-mono rounded-lg transition-colors">
                         {appLang === 'am' ? 'ያግኙን' : 'CONTACT US'}
                       </a>
                       {!isFromQr && (
                         <button 
                           id="btn-nav-home-back-react"
                           onClick={() => setActiveRole('entry')} 
-                          className="flex-1 bg-white/5 hover:bg-white/10 text-white py-2 text-[10px] uppercase font-mono font-bold"
+                          className="flex-1 bg-white/10 hover:bg-white/20 text-white py-2 text-[10px] uppercase font-mono font-bold rounded-lg transition-colors"
                         >
                           {appLang === 'am' ? 'ዋና ፖርታሎች' : 'MAIN PORTALS'}
                         </button>
@@ -6278,8 +6316,8 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="bg-[#141414] border border-white/10 p-5">
-                    <div className="flex items-center gap-2 border-b border-white/5 pb-2 mb-3">
+                  <div className="bg-gradient-to-b from-[#8c1414] to-[#5c0b0b] border border-[#b21f1f]/30 p-5 rounded-2xl shadow-xl text-white">
+                    <div className="flex items-center gap-2 border-b border-white/10 pb-2 mb-3">
                       <span className="text-xl">💬</span>
                       <h4 className="text-xs font-black text-white uppercase tracking-widest">
                         {menuUiTranslation.feedbacks_heading[appLang]}
@@ -6292,11 +6330,11 @@ export default function App() {
                         onChange={(e) => setFeedbackText(e.target.value)}
                         placeholder={menuUiTranslation.feedback_placeholder[appLang]}
                         required
-                        className="w-full bg-[#181818] border border-white/10 text-white text-xs p-3 outline-none focus:border-[#C1FF00] resize-none h-20"
+                        className="w-full bg-black/40 border border-white/10 text-white text-xs p-3 outline-none focus:border-[#f4c22b] rounded-lg resize-none h-20"
                       />
                       <button 
                         type="submit"
-                        className="w-full bg-[#C1FF00] hover:bg-white text-black py-2.5 text-[10px] font-black uppercase font-mono"
+                        className="w-full bg-[#f4c22b] hover:bg-white text-black py-2.5 text-[10px] font-black uppercase font-mono rounded-lg transition-colors"
                         id="btn-feedback-submit"
                       >
                         {menuUiTranslation.submit_btn[appLang].toUpperCase()}
@@ -6306,7 +6344,7 @@ export default function App() {
                     {/* Customer Feedbacks Logs & Admin Responses */}
                     {feedback.length > 0 && (
                       <div className="mt-5 pt-4 border-t border-white/5 space-y-3">
-                        <p className="text-[9px] font-mono font-black uppercase text-[#C1FF00] tracking-widest">
+                        <p className="text-[9px] font-mono font-black uppercase text-[#f4c22b] tracking-widest">
                           {menuUiTranslation.past_feedbacks[appLang]}
                         </p>
                         <div className="space-y-2 max-h-56 overflow-y-auto pr-1 no-scrollbar text-left">
@@ -6320,8 +6358,8 @@ export default function App() {
                                 {f.text}
                               </p>
                               {f.reply && (
-                                <div className="mt-2 pl-2.5 border-l border-[#C1FF00] bg-[#C1FF00]/5 p-2">
-                                  <div className="flex justify-between items-center text-[8px] font-mono text-[#C1FF00] mb-0.5">
+                                <div className="mt-2 pl-2.5 border-l border-[#f4c22b] bg-[#f4c22b]/5 p-2">
+                                  <div className="flex justify-between items-center text-[8px] font-mono text-[#f4c22b] mb-0.5">
                                     <span className="font-black">{menuUiTranslation.response_from_lodge[appLang].toUpperCase()}:</span>
                                     <span className="text-white/40">{f.replyTime}</span>
                                   </div>
@@ -6345,50 +6383,50 @@ export default function App() {
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     
                     {/* WiFi Access Card */}
-                    <div className="bg-slate-900/40 border border-white/5 rounded-2xl p-4 flex items-start gap-3">
-                      <div className="w-8 h-8 rounded-lg bg-[#00f5ff]/10 flex items-center justify-center text-[#00f5ff]">
+                    <div className="bg-gradient-to-tr from-[#8c1414] to-[#b21f1f] border border-[#b21f1f]/30 rounded-2xl p-4 flex items-start gap-3 shadow-lg">
+                      <div className="w-8 h-8 rounded-lg bg-white/20 flex items-center justify-center text-[#f4c22b]">
                         📶
                       </div>
                       <div className="flex-1 space-y-1">
-                        <span className="text-[10px] font-mono text-white/40 uppercase block">WiFi ACCESS / ዋይፋይ</span>
-                        <p className="text-xs text-white font-bold">SSID: <span className="text-[#00f5ff]">{wifiGuestSsid}</span></p>
-                        <p className="text-[10px] text-white/70">PASS: <code className="bg-white/5 px-1 py-0.5 rounded text-[#C1FF00]">{wifiGuestPassword}</code></p>
+                        <span className="text-[10px] font-mono text-white/60 uppercase block">WiFi ACCESS / ዋይፋይ</span>
+                        <p className="text-xs text-white font-bold">SSID: <span className="text-[#f4c22b]">{wifiGuestSsid}</span></p>
+                        <p className="text-[10px] text-white/90">PASS: <code className="bg-black/30 px-1 py-0.5 rounded text-[#f4c22b]">{wifiGuestPassword}</code></p>
                       </div>
                     </div>
 
                     {/* Dining & Breakfast Hours */}
-                    <div className="bg-slate-900/40 border border-white/5 rounded-2xl p-4 flex items-start gap-3">
-                      <div className="w-8 h-8 rounded-lg bg-orange-500/10 flex items-center justify-center text-orange-400">
+                    <div className="bg-gradient-to-tr from-[#8c1414] to-[#b21f1f] border border-[#b21f1f]/30 rounded-2xl p-4 flex items-start gap-3 shadow-lg">
+                      <div className="w-8 h-8 rounded-lg bg-white/20 flex items-center justify-center text-[#f4c22b]">
                         🍳
                       </div>
                       <div className="flex-1 space-y-1">
-                        <span className="text-[10px] font-mono text-white/40 uppercase block">DINING HOURS / የምግብ ሰዓት</span>
+                        <span className="text-[10px] font-mono text-white/60 uppercase block">DINING HOURS / የምግብ ሰዓት</span>
                         <p className="text-xs text-white font-bold">{appLang === 'am' ? diningBreakfastTitleAm : diningBreakfastTitleEn}</p>
-                        <p className="text-[10px] text-white/70">{appLang === 'am' ? diningBreakfastHoursAm : diningBreakfastHoursEn}</p>
+                        <p className="text-[10px] text-white/90">{appLang === 'am' ? diningBreakfastHoursAm : diningBreakfastHoursEn}</p>
                       </div>
                     </div>
 
                     {/* Room Assistance & Security */}
-                    <div className="bg-slate-900/40 border border-white/5 rounded-2xl p-4 flex items-start gap-3">
-                      <div className="w-8 h-8 rounded-lg bg-red-500/10 flex items-center justify-center text-red-400">
+                    <div className="bg-gradient-to-tr from-[#8c1414] to-[#b21f1f] border border-[#b21f1f]/30 rounded-2xl p-4 flex items-start gap-3 shadow-lg">
+                      <div className="w-8 h-8 rounded-lg bg-white/20 flex items-center justify-center text-[#f4c22b]">
                         🛎️
                       </div>
                       <div className="flex-1 space-y-1">
-                        <span className="text-[10px] font-mono text-white/40 uppercase block">RECEPTION / ሪሴብሽን</span>
+                        <span className="text-[10px] font-mono text-white/60 uppercase block">RECEPTION / ሪሴብሽን</span>
                         <p className="text-xs text-white font-bold">{appLang === 'am' ? receptionAssistanceAm : receptionAssistanceEn}</p>
-                        <p className="text-[10px] text-white/70">Emergency Hotline: {receptionEmergency}</p>
+                        <p className="text-[10px] text-white/90">Emergency Hotline: <span className="text-[#f4c22b] font-bold">{receptionEmergency}</span></p>
                       </div>
                     </div>
 
                   </div>
 
                   {/* Customer Portal Footer Social links */}
-                  <div className="bg-black/40 border border-white/10 rounded-2xl p-5 text-center space-y-4">
+                  <div className="bg-gradient-to-b from-[#8c1414] to-[#5c0b0b] border border-[#b21f1f]/30 rounded-2xl p-5 text-center space-y-4 shadow-xl">
                     <div className="space-y-1">
-                      <h4 className="text-xs uppercase font-mono font-black text-[#C1FF00] tracking-wider">
+                      <h4 className="text-xs uppercase font-mono font-black text-[#f4c22b] tracking-wider">
                         {appLang === 'am' ? 'የሃዋሳ ፓፒረስ ሎጅ ሶሻል ሚዲያ ሊንኮች' : 'Hawassa Papyrus Lodge Official Channels'}
                       </h4>
-                      <p className="text-[10px] text-white/50">
+                      <p className="text-[10px] text-white/90">
                         {appLang === 'am' ? 'በሁሉም የሶሻል ሚዲያ ገጾቻችን ይከተሉን! አዳዲስ ዝግጅቶችን ይከታተሉ' : 'Follow us across all major networks to witness premium visual stories and weekly events.'}
                       </p>
                     </div>
@@ -6437,6 +6475,31 @@ export default function App() {
                   <span className="bg-black/80 text-white font-sans text-[8px] font-black uppercase px-2 py-1 rounded border border-white/10 tracking-widest leading-none select-none shadow">
                     አስተናጋጅ ጥራ (CALL)
                   </span>
+                </div>
+
+                {/* FLOATING ACTION ORDER BASKET BUTTON */}
+                <div className="fixed bottom-6 left-6 z-50">
+                  <button
+                    id="btn-floating-cart-basket"
+                    type="button"
+                    onClick={() => setIsCartOpen(true)}
+                    className="bg-gradient-to-r from-yellow-400 via-white to-red-600 hover:from-yellow-300 hover:via-amber-50 hover:to-red-500 text-red-950 border-2 border-red-600 shadow-[0_8px_25px_rgba(220,38,38,0.5)] font-black text-xs uppercase tracking-wider px-4 py-3 rounded-2xl flex items-center gap-2.5 cursor-pointer active:scale-95 transition-all animate-bounce"
+                  >
+                    <div className="w-7 h-7 rounded-full bg-red-600 text-yellow-300 flex items-center justify-center border border-white shadow">
+                      <ShoppingCart className="w-4 h-4 text-yellow-300 fill-yellow-300" />
+                    </div>
+                    <span className="hidden sm:inline">
+                      {appLang === 'am' ? 'የትእዛዝ ማስቀመጫ ዘንቢል' : 'Order Basket'}
+                    </span>
+                    <span className="sm:hidden">
+                      {appLang === 'am' ? 'ዘንቢል' : 'Basket'}
+                    </span>
+                    {cart.length > 0 && (
+                      <span className="bg-red-600 text-white px-2 py-0.5 text-[10px] font-mono font-black rounded-full border-2 border-white shadow">
+                        {cart.reduce((sum, i) => sum + i.qty, 0)}
+                      </span>
+                    )}
+                  </button>
                 </div>
               </motion.div>
             )}
@@ -9608,6 +9671,14 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                             setHeroSubtitleEn(heroSubtitleEnInput);
                             setHeroIntroAm(heroIntroAmInput);
                             setHeroIntroEn(heroIntroEnInput);
+
+                            syncKeyToCloud('hero_title_am', { text: heroTitleAmInput });
+                            syncKeyToCloud('hero_title_en', { text: heroTitleEnInput });
+                            syncKeyToCloud('hero_subtitle_am', { text: heroSubtitleAmInput });
+                            syncKeyToCloud('hero_subtitle_en', { text: heroSubtitleEnInput });
+                            syncKeyToCloud('hero_intro_am', { text: heroIntroAmInput });
+                            syncKeyToCloud('hero_intro_en', { text: heroIntroEnInput });
+
                             alert('🍀 የፊት ገጽ ርዕስ በተሳካ ሁኔታ ተቀይሯል! / Hero text updated successfully.');
                           }} 
                           className="space-y-4 text-left"
@@ -9695,6 +9766,12 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                             setContactHotline2(contactHotline2Input);
                             setContactLocation(contactLocationInput);
                             setContactAddress(contactAddressInput);
+
+                            syncKeyToCloud('contact_hotline1', { text: contactHotline1Input });
+                            syncKeyToCloud('contact_hotline2', { text: contactHotline2Input });
+                            syncKeyToCloud('contact_location', { text: contactLocationInput });
+                            syncKeyToCloud('contact_address', { text: contactAddressInput });
+
                             alert('🍀 የHOTLINE የስልክ ቁጥር እና የLOCATION አድራሻ መረጃ በተሳካ ሁኔታ ተቀይሯል! / Contacts & Location updated successfully.');
                           }} 
                           className="space-y-4 text-left"
@@ -9762,6 +9839,10 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                             e.preventDefault();
                             setWifiGuestSsid(wifiGuestSsidInput);
                             setWifiGuestPassword(wifiGuestPasswordInput);
+
+                            syncKeyToCloud('wifi_guest_ssid', { text: wifiGuestSsidInput });
+                            syncKeyToCloud('wifi_guest_password', { text: wifiGuestPasswordInput });
+
                             alert('📶 የእንግዳ ዋይፋይ መረጃ በተሳካ ሁኔታ ተቀይሯል! / WiFi settings updated successfully.');
                           }} 
                           className="space-y-4 text-left"
@@ -9813,6 +9894,12 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                             setDiningBreakfastTitleEn(diningBreakfastTitleEnInput);
                             setDiningBreakfastHoursAm(diningBreakfastHoursAmInput);
                             setDiningBreakfastHoursEn(diningBreakfastHoursEnInput);
+
+                            syncKeyToCloud('dining_breakfast_title_am', { text: diningBreakfastTitleAmInput });
+                            syncKeyToCloud('dining_breakfast_title_en', { text: diningBreakfastTitleEnInput });
+                            syncKeyToCloud('dining_breakfast_hours_am', { text: diningBreakfastHoursAmInput });
+                            syncKeyToCloud('dining_breakfast_hours_en', { text: diningBreakfastHoursEnInput });
+
                             alert('🍳 የምግብ ሰዓት መረጃ በተሳካ ሁኔታ ተቀይሯል! / Dining hours updated successfully.');
                           }} 
                           className="space-y-4 text-left"
@@ -9881,6 +9968,11 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                             setReceptionAssistanceAm(receptionAssistanceAmInput);
                             setReceptionAssistanceEn(receptionAssistanceEnInput);
                             setReceptionEmergency(receptionEmergencyInput);
+
+                            syncKeyToCloud('reception_assistance_am', { text: receptionAssistanceAmInput });
+                            syncKeyToCloud('reception_assistance_en', { text: receptionAssistanceEnInput });
+                            syncKeyToCloud('reception_emergency', { text: receptionEmergencyInput });
+
                             alert('🛎️ የሪሴብሽን መረጃ በተሳካ ሁኔታ ተቀይሯል! / Reception details updated successfully.');
                           }} 
                           className="space-y-4 text-left"
@@ -10500,33 +10592,12 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                         </p>
                       </div>
 
-                      {/* 2. Custom Logo URL Form */}
-                      <div className="space-y-3">
-                        <label className="text-[10px] font-mono font-bold uppercase text-white/70 block">ወይም የድርጅት ሎጎ የኢንተርኔት አድራሻ (Company Logo Image URL)</label>
-                        <div className="flex flex-col sm:flex-row gap-2">
-                          <input 
-                            type="url"
-                            id="manager-logo-input-field"
-                            defaultValue={logoUrl.startsWith('data:') ? '' : logoUrl}
-                            placeholder="የምስል አድራሻ (e.g. https://images.unsplash.com/photo-xxx)"
-                            className="flex-1 bg-[#181818] border border-white/10 text-white text-xs font-mono p-3 outline-none focus:border-[#C1FF00] rounded"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const inputEl = document.getElementById('manager-logo-input-field') as HTMLInputElement;
-                              if (inputEl && inputEl.value.trim()) {
-                                handleUpdateLogoAndSync(inputEl.value.trim());
-                                alert('🎨 የድርጅቱ ሎጎ በተሳካ ሁኔታ ተቀይሯል! / Logo URL applied.');
-                              } else {
-                                alert('እባክዎ ትክክለኛ የሎጎ የኢንተርኔት አድራሻ ያስገቡ!');
-                              }
-                            }}
-                            className="bg-[#C1FF00] hover:bg-white text-black px-5 py-3 font-bold text-xs uppercase tracking-wider shrink-0 transition-colors cursor-pointer flex items-center justify-center gap-1 rounded"
-                          >
-                            <span>አስቀምጥ (SAVE)</span>
-                          </button>
-                        </div>
+                      {/* 2. Custom Logo URL Info (Disabled for reliability) */}
+                      <div className="space-y-2 bg-yellow-400/5 border border-yellow-500/20 p-4 rounded-lg">
+                        <span className="text-[10px] font-mono font-bold uppercase text-yellow-400 block">⚠️ የኢንተርኔት ሊንክ (URL) ሎጎዎች ተዘግተዋል / Web URL Logos Disabled</span>
+                        <p className="text-[11px] text-stone-300 leading-relaxed">
+                          የኢንተርኔት ሊንክ (HTTP/HTTPS URL) በመጠቀም ሎጎዎችን መመደብ በደህንነት ምክንያት እና ምስሎቹ በኔትወርክ መቋረጥ ሲችሉ እንዳይጠፉ ተዘግቷል። እባክዎ ሎጎዎችን ከኮምፒውተርዎ ወይም ስልክዎ ላይ ፋይሉን በቀጥታ በመጫን (Upload) ይጠቀሙ።
+                        </p>
                       </div>
 
 
@@ -10545,7 +10616,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                         {logoUrl ? (
                           <div className="space-y-4 relative z-10 flex flex-col items-center">
                             <div className="w-28 h-28 rounded-3xl overflow-hidden relative">
-                              <img src={logoUrl} alt="Live Logo Preview" referrerPolicy="no-referrer" className="w-full h-full object-cover" />
+                              <img src={sanitizeLogoUrl(logoUrl)} alt="Live Logo Preview" referrerPolicy="no-referrer" className="w-full h-full object-cover" />
                             </div>
                             <div>
                               <h4 className="text-base font-extrabold text-white tracking-widest uppercase">HAWASSA PAPYRUS</h4>
@@ -10566,8 +10637,6 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                         type="button"
                         onClick={() => {
                           handleUpdateLogoAndSync(DEFAULT_LOGO);
-                          const inputEl = document.getElementById('manager-logo-input-field') as HTMLInputElement;
-                          if (inputEl) inputEl.value = '';
                           alert('🔄 ሎጎው ወደ ቀድሞው የፓፒረስ ሎጅ አርማ ተመልሷል!');
                         }}
                         className="w-full py-2 border border-white/10 hover:border-white/25 hover:bg-white/5 text-white/60 hover:text-white transition-all rounded text-[10px] font-mono font-bold uppercase cursor-pointer"
@@ -10962,7 +11031,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                     </p>
                   </div>
 
-                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+                  <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3">
                     {[
                       {
                         id: 'bono',
@@ -11017,6 +11086,24 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                         desc: 'ለአስተናጋጅ ጠረጴዛ መደብ',
                         badge: `${tableAssignments.length} የተመደበ`,
                         badgeClass: 'bg-purple-400/10 text-purple-400 border border-purple-500/20'
+                      },
+                      {
+                        id: 'cleaner',
+                        titleAm: 'ስፓምና መረጃ ማጽጃ',
+                        titleEn: 'Spam & Log Cleaner',
+                        icon: '🛡️',
+                        desc: 'ስፓምና የቆዩ ሎጎችን ማጽጃ',
+                        badge: 'ጽዳት ረዳት',
+                        badgeClass: 'bg-red-500/10 text-red-400 border border-red-500/20'
+                      },
+                      {
+                        id: 'cache',
+                        titleAm: 'ፈጣን መሸጎጫ',
+                        titleEn: 'Cache Engine',
+                        icon: '⚡',
+                        desc: 'የፈጣን መጫኛ መሸጎጫ አስተዳደር',
+                        badge: isCacheEnabled ? 'በርቷል (ON)' : 'ጠፍቷል (OFF)',
+                        badgeClass: isCacheEnabled ? 'bg-emerald-400/15 text-emerald-400 border border-emerald-500/20 animate-pulse' : 'bg-stone-500/10 text-stone-400 border border-stone-500/20'
                       }
                     ].map((tab) => (
                       <button
@@ -12395,8 +12482,326 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                   </div>
                 )}
 
+                {/* TAB CONTENT: SPAM & LOG CLEANER */}
+                {managerTab === 'cleaner' && (
+                  <div className="bg-[#121212] border border-white/10 p-6 rounded-3xl space-y-6 text-left">
+                    <div className="border-b border-white/5 pb-3">
+                      <span className="text-[10px] text-red-400 font-mono font-bold tracking-wider block uppercase">SECURITY & ARCHIVE UTILITY</span>
+                      <h3 className="text-md font-black text-white uppercase mt-0.5">🛡️ ስፓምና የቆዩ መረጃዎች ማጽጃ (Spam & Log Cleanup Console)</h3>
+                      <p className="text-[11px] text-stone-400 font-sans mt-1">
+                        ማህደረ ትውስታን ለማጽዳት፣ አላስፈላጊ ማስታወቂያዎችን (Spam Feedbacks) ለማስወገድ እንዲሁም የቆዩ ክፍሎችን/ጠረጴዛዎችን (Used Sites & Logs) እዚህ ያጽዱ።
+                      </p>
+                    </div>
 
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      {/* Left: Spam Feedback Detection Card */}
+                      <div className="bg-black/40 border border-white/5 p-5 rounded-xl space-y-4">
+                        <div className="flex justify-between items-start">
+                          <div>
+                            <h4 className="text-xs font-black text-white uppercase">💬 የደንበኞች ስፓም አስተያየት መቆጣጠሪያ</h4>
+                            <p className="text-[10px] text-stone-500">ማስታወቂያዎችን፣ የዌብሳይት ሊንኮችን ወይም ስፓም ቃላትን የያዙ አስተያየቶችን ፈልጎ ማጥፊያ።</p>
+                          </div>
+                          <span className="bg-red-500/10 text-red-400 px-2 py-0.5 rounded font-mono text-[9px] uppercase font-bold">SPAM FILTER</span>
+                        </div>
 
+                        {/* Scanner Box */}
+                        <div className="bg-[#181818] border border-white/5 p-4 rounded-lg space-y-3">
+                          {(() => {
+                            const spamKeywords = ['http://', 'https://', '.com', '.net', '.xyz', '.org', 'crypto', 'viagra', 'seo', 'marketing', 'advertisement', 'promo', 'discount', 'porn', 'www.'];
+                            const spamFeedbacks = feedback.filter(f => {
+                              const textLower = f.text.toLowerCase();
+                              return spamKeywords.some(kw => textLower.includes(kw)) || f.text.length > 500;
+                            });
+
+                            return (
+                              <>
+                                <div className="flex justify-between items-center text-xs">
+                                  <span className="text-stone-400">ጠቅላላ የተገኘ ስፓም (Found Spam):</span>
+                                  <span className={`font-mono font-black ${spamFeedbacks.length > 0 ? 'text-red-400 animate-pulse' : 'text-emerald-400'}`}>
+                                    {spamFeedbacks.length} አስተያየት (Comments)
+                                  </span>
+                                </div>
+
+                                {spamFeedbacks.length > 0 ? (
+                                  <div className="space-y-2 max-h-32 overflow-y-auto pr-1">
+                                    {spamFeedbacks.map(f => (
+                                      <div key={f.id} className="bg-red-950/20 border border-red-500/10 p-2 rounded text-[10px] space-y-1">
+                                        <p className="text-stone-300 italic">"{f.text}"</p>
+                                        <p className="text-[8px] text-stone-500 font-mono text-right">{f.time}</p>
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <div className="py-4 text-center text-[10px] text-emerald-400 font-mono bg-emerald-950/10 border border-emerald-500/10 rounded">
+                                    ✓ ንጹህ ነው! ምንም ስፓም አልተገኘም። (Clean! No spam feedback found)
+                                  </div>
+                                )}
+
+                                <button
+                                  disabled={spamFeedbacks.length === 0}
+                                  onClick={() => {
+                                    if (confirm('የተገኙትን ስፓም አስተያየቶች በሙሉ ለማጥፋት እርግጠኛ ነዎት? (Delete all detected spam?)')) {
+                                      const idsToKeep = feedback.filter(f => {
+                                        const textLower = f.text.toLowerCase();
+                                        const isSpam = spamKeywords.some(kw => textLower.includes(kw)) || f.text.length > 500;
+                                        return !isSpam;
+                                      });
+                                      setFeedback(idsToKeep);
+                                      alert(`✓ ${spamFeedbacks.length} ስፓም አስተያየቶች ተሰርዘዋል!`);
+                                    }
+                                  }}
+                                  className={`w-full py-2 font-mono text-[10px] uppercase font-black tracking-wider transition-colors border ${
+                                    spamFeedbacks.length > 0
+                                      ? 'bg-red-600 hover:bg-red-500 text-white border-red-600 cursor-pointer'
+                                      : 'bg-stone-900 text-stone-600 border-stone-800 cursor-not-allowed'
+                                  }`}
+                                >
+                                  DELETE ALL SPAM FEEDBACK | ስፓሞችን አጥፋ 🗑️
+                                </button>
+                              </>
+                            );
+                          })()}
+                        </div>
+                      </div>
+
+                      {/* Right: Used Sites & Logs (Room checkout/visitor logs cleaner) */}
+                      <div className="bg-black/40 border border-white/5 p-5 rounded-xl space-y-4">
+                        <div className="flex justify-between items-start">
+                          <div>
+                            <h4 className="text-xs font-black text-white uppercase">🛌 የቆዩ ቼክ-አውት የሆኑ ክፍሎችና መግቢያዎች ማጽጃ</h4>
+                            <p className="text-[10px] text-stone-500">ቼክ-አውት የተደረጉ የክፍል መያዣዎችንና የጎብኚ መዝገቦችን (Used Sites/Suites) ማጽጃ።</p>
+                          </div>
+                          <span className="bg-amber-500/10 text-amber-400 px-2 py-0.5 rounded font-mono text-[9px] uppercase font-bold">LOG ARCHIVE</span>
+                        </div>
+
+                        {/* Rooms Cleanup Box */}
+                        <div className="bg-[#181818] border border-white/5 p-4 rounded-lg space-y-4">
+                          {(() => {
+                            const checkedOutRooms = roomBookings.filter(b => b.status === 'Checked Out');
+                            const checkedOutVisitors = visitorLog.filter(v => v.status === 'Checked Out' || v.status === 'Left');
+                            const totalLogs = checkedOutRooms.length + checkedOutVisitors.length;
+
+                            return (
+                              <>
+                                <div className="space-y-2 text-xs">
+                                  <div className="flex justify-between">
+                                    <span className="text-stone-400">የቆዩ ክፍሎች (Checked-out Rooms):</span>
+                                    <span className="font-mono font-bold text-amber-400">{checkedOutRooms.length} ክፍሎች</span>
+                                  </div>
+                                  <div className="flex justify-between">
+                                    <span className="text-stone-400">የለቀቁ ጎብኚዎች (Left Visitors):</span>
+                                    <span className="font-mono font-bold text-amber-400">{checkedOutVisitors.length} መዝገቦች</span>
+                                  </div>
+                                </div>
+
+                                {totalLogs > 0 ? (
+                                  <div className="p-3 bg-amber-950/10 border border-amber-500/10 rounded text-[9px] text-stone-300">
+                                    💡 እነዚህን የቆዩ መዝገቦች ማጥፋት የሲስተሙን የውሂብ መጠን (database size) በመቀነስ ፍጥነቱን ይጨምራል።
+                                  </div>
+                                ) : (
+                                  <div className="py-3 text-center text-[10px] text-emerald-400 font-mono bg-emerald-950/10 border border-emerald-500/10 rounded">
+                                    ✓ ሁሉም መዝገቦች ንጹህ ናቸው! ምንም የቆየ መረጃ የለም።
+                                  </div>
+                                )}
+
+                                <button
+                                  disabled={totalLogs === 0}
+                                  onClick={() => {
+                                    if (confirm('ቼክ-አውት የሆኑ ክፍሎችንና የለቀቁ ጎብኚዎችን መዝገብ በዘላቂነት ለማጥፋት እርግጠኛ ነዎት? (Delete checked-out records?)')) {
+                                      setRoomBookings(prev => prev.filter(b => b.status !== 'Checked Out'));
+                                      setVisitorLog(prev => prev.filter(v => v.status !== 'Checked Out' && v.status !== 'Left'));
+                                      alert('✓ የቆዩ መዝገቦች በሙሉ በተሳካ ሁኔታ ተደምስሰዋል!');
+                                    }
+                                  }}
+                                  className={`w-full py-2 font-mono text-[10px] uppercase font-black tracking-wider transition-colors border ${
+                                    totalLogs > 0
+                                      ? 'bg-amber-600 hover:bg-amber-500 text-white border-amber-600 cursor-pointer'
+                                      : 'bg-stone-900 text-stone-600 border-stone-800 cursor-not-allowed'
+                                  }`}
+                                >
+                                  PURGE USED SUITES & LOGS | የቆዩትን አጽዳ 🧹
+                                </button>
+                              </>
+                            );
+                          })()}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Secondary Cleanup Tools */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2">
+                      {/* Active Assignments & Orders Reset */}
+                      <div className="bg-black/40 border border-white/5 p-5 rounded-xl space-y-4 col-span-1 md:col-span-2">
+                        <h4 className="text-xs font-black text-white uppercase">📋 የዛሬ የጠረጴዛ ምደባዎችና የተጠናቀቁ ትዕዛዞች ማጽጃ (Rosters & Completed Orders Purge)</h4>
+                        
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                          <div className="bg-[#181818] border border-white/5 p-4 rounded-lg space-y-3 flex flex-col justify-between">
+                            <div>
+                              <span className="text-[9px] font-mono text-stone-400 uppercase">TABLE ROSTERS</span>
+                              <h5 className="text-xs font-bold text-white mt-1">የዛሬው የጠረጴዛ ምደባዎች</h5>
+                              <p className="text-[10px] text-stone-500 mt-1">
+                                በአሁኑ ሰዓት በአጠቃላይ <span className="text-yellow-400 font-mono font-bold">{tableAssignments.length}</span> ጠረጴዛዎች ለአስተናጋጆች ተመድበዋል። የስራ ሰዓት ሲያበቃ ይህንን ማጽዳት ይቻላል።
+                              </p>
+                            </div>
+                            <button
+                              disabled={tableAssignments.length === 0}
+                              onClick={() => {
+                                if (confirm('ሁሉንም የጠረጴዛ ምደባዎች ለማጥፋት እርግጠኛ ነዎት? (Reset all waiter table assignments?)')) {
+                                  setTableAssignments([]);
+                                  alert('✓ ሁሉም የጠረጴዛ ምደባዎች ተሰርዘዋል!');
+                                }
+                              }}
+                              className={`w-full py-2 font-mono text-[9px] uppercase font-black tracking-wider transition-colors border ${
+                                tableAssignments.length > 0
+                                  ? 'bg-red-600/10 hover:bg-red-600 text-red-400 hover:text-white border-red-500/20 hover:border-red-600 cursor-pointer'
+                                  : 'bg-stone-900 text-stone-600 border-stone-800 cursor-not-allowed'
+                              }`}
+                            >
+                              CLEAR ALL ASSIGNMENTS | ምደባዎችን ሰርዝ 📋
+                            </button>
+                          </div>
+
+                          <div className="bg-[#181818] border border-white/5 p-4 rounded-lg space-y-3 flex flex-col justify-between">
+                            <div>
+                              <span className="text-[9px] font-mono text-stone-400 uppercase">COMPLETED ORDERS</span>
+                              <h5 className="text-xs font-bold text-white mt-1">የተጠናቀቁና የተሰረዙ ትዕዛዞች</h5>
+                              <p className="text-[10px] text-stone-500 mt-1">
+                                የደረሱ (Delivered) ወይም የተሰረዙ (Cancelled) ትዕዛዞችን በማጥፋት የትዕዛዝ መዝገቡን ማደስ። በአሁኑ ሰዓት <span className="text-yellow-400 font-mono font-bold">{orders.filter(o => o.status === 'Delivered' || o.status === 'Cancelled').length}</span> የደረሱ/የተሰረዙ ትዕዛዞች አሉ።
+                              </p>
+                            </div>
+                            <button
+                              disabled={orders.filter(o => o.status === 'Delivered' || o.status === 'Cancelled').length === 0}
+                              onClick={() => {
+                                if (confirm('የተጠናቀቁ እና የተሰረዙ ትዕዛዞችን በሙሉ ከሲስተሙ ለማጥፋት እርግጠኛ ነዎት? (Purge inactive orders?)')) {
+                                  setOrders(prev => prev.filter(o => o.status !== 'Delivered' && o.status !== 'Cancelled'));
+                                  alert('✓ የተጠናቀቁና የተሰረዙ ትዕዛዞች በሙሉ ተሰርዘዋል!');
+                                }
+                              }}
+                              className={`w-full py-2 font-mono text-[9px] uppercase font-black tracking-wider transition-colors border ${
+                                orders.filter(o => o.status === 'Delivered' || o.status === 'Cancelled').length > 0
+                                  ? 'bg-red-600/10 hover:bg-red-600 text-red-400 hover:text-white border-red-500/20 hover:border-red-600 cursor-pointer'
+                                  : 'bg-stone-900 text-stone-600 border-stone-800 cursor-not-allowed'
+                              }`}
+                            >
+                              PURGE INACTIVE ORDERS | የደረሱትን አጽዳ 📦
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* TAB CONTENT: CACHE SYSTEM ENGINE */}
+                {managerTab === 'cache' && (
+                  <div className="bg-[#121212] border border-white/10 p-6 rounded-3xl space-y-6 text-left">
+                    <div className="border-b border-white/5 pb-3">
+                      <span className="text-[10px] text-emerald-400 font-mono font-bold tracking-wider block uppercase">HIGH PERFORMANCE ENGINE</span>
+                      <h3 className="text-md font-black text-white uppercase mt-0.5">⚡ ፈጣን መሸጎጫ ሲስተም (High-Speed Local Storage Cache)</h3>
+                      <p className="text-[11px] text-stone-400 font-sans mt-1">
+                        የሎጁን ውሂቦች በስልክዎ/በኮምፒውተርዎ ላይ በመሸጎጥ (Caching) ሲስተሙ በአይን ጥቅሻ ውስጥ እንዲከፈት የሚያደርግ ዘመናዊ የፍጥነት ማሻሻያ።
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      {/* Cache Status Tile */}
+                      <div className="bg-black/40 border border-white/5 p-4 rounded-xl flex flex-col justify-between gap-3">
+                        <div>
+                          <span className="text-[8px] font-mono text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded uppercase font-bold tracking-wider">ENGINE CONFIG</span>
+                          <h4 className="text-xs font-black text-white uppercase mt-1">የመሸጎጫ ሲስተም ሁኔታ</h4>
+                          <p className="text-[10px] text-stone-500 mt-1">መሸጎጫው ሲበራ ሲስተሙ ምንም ሳይዘገይ በቅጽበት ይከፈታል፤ መረጃዎችም በጀርባ ይሳለታሉ።</p>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <button
+                            onClick={() => {
+                              const nextVal = !isCacheEnabled;
+                              setIsCacheEnabled(nextVal);
+                              localStorage.setItem('papyrus_cache_enabled', nextVal ? 'true' : 'false');
+                              alert(nextVal ? '⚡ የፈጣን መሸጎጫ ሲስተም በርቷል!' : '⚠️ የመሸጎጫ ሲስተሙ ጠፍቷል! አፕሊኬሽኑ በቀጥታ ከዳታቤዝ መጫን ይጀምራል።');
+                            }}
+                            className={`px-4 py-2 text-xs font-black font-mono uppercase tracking-wider rounded border cursor-pointer w-full transition-colors ${
+                              isCacheEnabled 
+                                ? 'bg-emerald-500 text-black border-emerald-500 hover:bg-emerald-400' 
+                                : 'bg-red-500/10 text-red-400 border-red-500/20 hover:bg-red-600 hover:text-white'
+                            }`}
+                          >
+                            {isCacheEnabled ? '⚡ CACHE STATUS: ACTIVE (በርቷል)' : '⚠️ CACHE STATUS: DISABLED (ጠፍቷል)'}
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Cache Size Tile */}
+                      <div className="bg-black/40 border border-white/5 p-4 rounded-xl flex flex-col justify-between gap-3">
+                        <div>
+                          <span className="text-[8px] font-mono text-[#00f5ff] bg-[#00f5ff]/10 px-1.5 py-0.5 rounded uppercase font-bold tracking-wider">CACHE SIZE</span>
+                          <h4 className="text-xs font-black text-white uppercase mt-1">የመሸጎጫ መጠን እና ሁኔታ</h4>
+                          <p className="text-[10px] text-stone-500 mt-1">በአሁኑ ሰዓት በአካባቢው ኮምፒውተር/ስልክ ላይ የተቀመጠ የሲስተም ውሂብ መጠን።</p>
+                        </div>
+                        <div className="space-y-1 text-xs">
+                          <div className="flex justify-between">
+                            <span className="text-stone-400">ጠቅላላ መሸጎጫ ፋይል (Stored Size):</span>
+                            <span className="font-mono font-bold text-emerald-400">
+                              {(() => {
+                                const cache = localStorage.getItem('papyrus_settings_cache');
+                                return cache ? `${(cache.length / 1024).toFixed(2)} KB` : '0 KB';
+                              })()}
+                            </span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-stone-400">የመጨረሻ ማመሳሰል (Last Synced):</span>
+                            <span className="font-mono text-[9px] text-[#00f5ff]">
+                              {localStorage.getItem('papyrus_cache_last_sync') 
+                                ? new Date(localStorage.getItem('papyrus_cache_last_sync')!).toLocaleTimeString() 
+                                : 'በጭራሽ አልተመሳሰለም'}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Cache Actions Tile */}
+                      <div className="bg-black/40 border border-white/5 p-4 rounded-xl flex flex-col justify-between gap-3">
+                        <div>
+                          <span className="text-[8px] font-mono text-yellow-400 bg-yellow-500/10 px-1.5 py-0.5 rounded uppercase font-bold tracking-wider">MANUAL CONTROL</span>
+                          <h4 className="text-xs font-black text-white uppercase mt-1">የመሸጎጫ ማጽጃና ማመሳሰያ</h4>
+                          <p className="text-[10px] text-stone-500 mt-1">መሸጎጫውን በእጅ ማጽዳት ወይም ከደመናው ዳታቤዝ ጋር በቅጽበት ማመሳሰል ይችላሉ።</p>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2 font-mono text-[9px] font-bold">
+                          <button
+                            onClick={() => {
+                              localStorage.removeItem('papyrus_settings_cache');
+                              localStorage.removeItem('papyrus_cache_last_sync');
+                              alert('🧹 መሸጎጫው በተሳካ ሁኔታ ተጠርጓል! በሚቀጥለው አፕሊኬሽኑ ሲከፈት መረጃውን ከዳታቤዝ ያወርዳል።');
+                              window.location.reload();
+                            }}
+                            className="bg-red-600/10 hover:bg-red-600 border border-red-500/20 text-red-400 hover:text-white py-2 rounded uppercase tracking-widest cursor-pointer transition-colors w-full"
+                          >
+                            🧹 CLEAR CACHE
+                          </button>
+                          <button
+                            onClick={async () => {
+                              alert('🔄 የመሸጎጫ ማመሳሰል ተጀምሯል፤ እባክዎ ጥቂት ሰከንዶችን ይጠብቁ...');
+                              window.location.reload();
+                            }}
+                            className="bg-emerald-600/10 hover:bg-emerald-600 border border-emerald-500/20 text-emerald-400 hover:text-white py-2 rounded uppercase tracking-widest cursor-pointer transition-colors w-full"
+                          >
+                            🔄 FORCE SYNC
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* How Cache Works Info block */}
+                    <div className="bg-[#181818] border border-white/5 p-5 rounded-2xl space-y-2">
+                      <h4 className="text-xs font-black text-white uppercase">💡 ይህ ፈጣን መሸጎጫ (Cache System) ሲስተም እንዴት ነው የሚሰራው?</h4>
+                      <p className="text-[10px] text-stone-400 leading-relaxed font-sans">
+                        1. **ፈጣን መከፈት (Instant Load)**: የመሸጎጫ ሲስተሙ በሚበራበት ጊዜ፣ አፕሊኬሽኑ ሲከፈት በደመናው ዳታቤዝ ላይ ያሉ ከ25 በላይ ቁልፍ መረጃዎችን (የምግብ ዋጋዎችን፣ ሎጎን፣ የስልክ ቁጥሮችን፣ ወዘተ) ለመጫን ሳይዘገይ በስልክዎ/በኮምፒውተርዎ ላይ ከተቀመጠው መሸጎጫ በ 0 ሚሊሰከንድ ውስጥ ወዲያውኑ ይከፍታል።
+                      </p>
+                      <p className="text-[10px] text-stone-400 leading-relaxed font-sans">
+                        2. **የጀርባ ማመሳሰል (Background Sync)**: ሲስተሙን ከመሸጎጫው ላይ በፍጥነት ከከከፈቱ በኋላ፣ በጀርባ ከደመናው ዳታቤዝ (Supabase) ጋር በመገናኘት አዳዲስ የተለወጡ መረጃዎች ካሉ በራሱ ያመሳስላል፤ መሸጎጫውንም ያሻሽላል። ይህ በአውታረ መረብ (internet connection) መቆራረጥ ምክንያት የሚፈጠሩ ችግሮችን 100% ያስወግዳል።
+                      </p>
+                    </div>
+                  </div>
+                )}
 
 
               </motion.div>
