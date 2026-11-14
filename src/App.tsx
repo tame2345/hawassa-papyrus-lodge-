@@ -13,7 +13,7 @@ import {
   Search
 } from 'lucide-react';
 
-import { MenuItem, StaffMember, BankAccount, Order, OrderStatus, OrderType, OrderItem, AssistanceCall, Feedback, PromoBanner, AttendanceRecord, BonusRecord, RoomBooking, Expense, VisitorLog } from './types';
+import { MenuItem, StaffMember, BankAccount, Order, OrderStatus, OrderType, PaymentMethod, OrderItem, AssistanceCall, Feedback, PromoBanner, AttendanceRecord, BonusRecord, RoomBooking, Expense, VisitorLog } from './types';
 import { INITIAL_MENU_ITEMS, INITIAL_STAFF, INITIAL_BANKS, PROMO_BANNERS } from './data';
 
 import SidebarRail from './components/SidebarRail';
@@ -23,9 +23,11 @@ import LoginModal from './components/LoginModal';
 import CartModal from './components/CartModal';
 import PrintableCertificateModal from './components/PrintableCertificateModal';
 import OrderAdjustmentModal from './components/OrderAdjustmentModal';
+import LiveOrderTracker from './components/LiveOrderTracker';
 import HeroDemo from './components/ui/demo';
 import AdminRevenueReports from './components/AdminRevenueReports';
 import { SupabaseLogin } from './components/SupabaseLogin';
+import { getEffectiveCookingStatus } from './utils/orderQueue';
 
 // Gourmet Restaurant Paradise Background Assets
 // @ts-ignore
@@ -195,9 +197,9 @@ export default function App() {
   ]);
 
   const [visitorLog, setVisitorLog] = useState<VisitorLog[]>([
-    { id: 'v-1', name: 'ዶ/ር ተስፋዬ ብርሃኑ', phone: '0911223344', carPlate: 'AA-3-B4567A', purpose: 'እንግዳ ለመጠየቅ', timeIn: '09:30 AM', status: 'In Lodge' },
-    { id: 'v-2', name: 'ወ/ሮ ማርታ ግርማ', phone: '0912345678', carPlate: 'OR-2-A12903', purpose: 'ማረፊያ ክፍል ለመያዝ', timeIn: '10:15 AM', status: 'In Lodge' },
-    { id: 'v-3', name: 'አቶ ካሊድ መሐመድ', phone: '0922445566', carPlate: 'AA-2-C23412', purpose: 'ባህል ምግብ ለመመገብ', timeIn: '08:00 AM', timeOut: '09:45 AM', status: 'Checked Out' }
+    { id: 'v-1', name: 'ዶ/ር ተስፋዬ ብርሃኑ', phone: '0911223344', carPlate: 'AA-3-B4567A', purpose: 'ለፓርኪንግ መግቢያ (Parking Entry)', timeIn: '09:30 AM', status: 'In Lodge', vehicleType: 'car', ticketTagNumber: 'TAG-#101' },
+    { id: 'v-2', name: 'ወ/ሮ ማርታ ግርማ', phone: '0912345678', carPlate: 'OR-2-A12903', purpose: 'ለፓርኪንግ መግቢያ (Parking Entry)', timeIn: '10:15 AM', status: 'In Lodge', vehicleType: 'motorcycle', ticketTagNumber: 'TAG-#102' },
+    { id: 'v-3', name: 'አቶ ካሊድ መሐመድ', phone: '0922445566', carPlate: 'AA-2-C23412', purpose: 'ባህል ምግብ ለመመገብ', timeIn: '08:00 AM', timeOut: '09:45 AM', status: 'Checked Out', vehicleType: 'car', ticketTagNumber: 'TAG-#100' }
   ]);
 
   const [orders, setOrders] = useState<Order[]>([
@@ -283,6 +285,7 @@ export default function App() {
 
   const [galleryItems, setGalleryItems] = useState<any[]>(FALLBACK_GALLERY_ITEMS);
   const [selectedGalleryIdx, setSelectedGalleryIdx] = useState<number | null>(null);
+  const [activeCoverFlowIdx, setActiveCoverFlowIdx] = useState<number>(0);
 
   const [expenses, setExpenses] = useState<Expense[]>([
     { id: 'exp-1', title: 'ለኩሽና እንቁላል እና ስጋ ግዢ (Kitchen purchase)', category: 'ማቴሪያል ግዢ (Kitchen Supply)', amount: 1500, date: '2026-06-07', time: '09:00', notes: 'የጠዋት ግብዓቶች' },
@@ -384,7 +387,23 @@ export default function App() {
   const [gName, setGName] = useState('');
   const [gPhone, setGPhone] = useState('');
   const [gPlate, setGPlate] = useState('');
-  const [gPurpose, setGPurpose] = useState('ምግብና መጠጥ (Dine & Drink)');
+  const [gPurpose, setGPurpose] = useState('ለፓርኪንግ መግቢያ (Parking Entry)');
+  const [gVehicleType, setGVehicleType] = useState<'car' | 'motorcycle' | 'walk'>('car');
+  const [gTicketTag, setGTicketTag] = useState('');
+  const [selectedTicketPassVisitor, setSelectedTicketPassVisitor] = useState<VisitorLog | null>(null);
+  const [checkoutConfirmVisitor, setCheckoutConfirmVisitor] = useState<VisitorLog | null>(null);
+  const [exitToastMessage, setExitToastMessage] = useState('');
+  const [parkingFilterCategory, setParkingFilterCategory] = useState<'all' | 'in_parking' | 'cars' | 'motorcycles' | 'checked_out'>('all');
+  const [parkingInquiryQuery, setParkingInquiryQuery] = useState('');
+
+  // STAFF SHIFT SEPARATION & FILTER STATE (GUARD, WAITER, CHEF, RECEPTIONIST, CASHIER)
+  const [selectedGuardShiftStaff, setSelectedGuardShiftStaff] = useState<string>('my_shift'); // 'my_shift', 'all', or specific staff name
+  const [selectedWaiterShiftStaff, setSelectedWaiterShiftStaff] = useState<string>('my_shift');
+  const [selectedChefShiftStaff, setSelectedChefShiftStaff] = useState<string>('my_shift');
+  const [selectedReceptionistShiftStaff, setSelectedReceptionistShiftStaff] = useState<string>('my_shift');
+  const [selectedCashierShiftStaff, setSelectedCashierShiftStaff] = useState<string>('my_shift');
+  const [selectedManagerAuditStaff, setSelectedManagerAuditStaff] = useState<string>('all');
+  const [selectedManagerAuditRole, setSelectedManagerAuditRole] = useState<string>('all');
 
   // UNIFIED PORTAL LOGIN STATE
   const [unifiedRole, setUnifiedRole] = useState<'waiter' | 'chef' | 'admin' | 'manager' | 'receptionist' | 'cashier' | 'guard'>('waiter');
@@ -412,11 +431,12 @@ export default function App() {
   const [logoUrl, setLogoUrl] = useState<string>(DEFAULT_LOGO);
   const [tempLogoFile, setTempLogoFile] = useState<string | null>(null);
 
-  const [bgVideoUrl, setBgVideoUrl] = useState<string>('https://pixabay.com/videos/ai-generated-restaurant-cafe-jazz-202004/');
+  const [bgVideoUrl, setBgVideoUrl] = useState<string>('https://www.youtube.com/watch?v=EvwYOmxaxdA');
 
-  const [bgVideoType, setBgVideoType] = useState<'youtube' | 'direct' | 'local' | 'mango-paradise' | 'gourmet-paradise'>('gourmet-paradise');
+  const [bgVideoType, setBgVideoType] = useState<'youtube' | 'direct' | 'local' | 'mango-paradise' | 'gourmet-paradise'>('youtube');
 
-  const [isBgVideoEnabled, setIsBgVideoEnabled] = useState<boolean>(false);
+  const [isBgVideoEnabled, setIsBgVideoEnabled] = useState<boolean>(true);
+  const [showQuickVideoModal, setShowQuickVideoModal] = useState<boolean>(false);
 
   const [mediaPreviewPaused, setMediaPreviewPaused] = useState(false);
   const [mediaPreviewMuted, setMediaPreviewMuted] = useState(true);
@@ -1423,6 +1443,39 @@ export default function App() {
   const [guestLocation, setGuestLocation] = useState('Room 101');
   const [customModifiers, setCustomModifiers] = useState<{ [key: string]: { qaria: string; injera: string; dabo: number; qty: number; customInstructions: string; mayo?: boolean; kocho?: boolean } }>({});
   const [expandedOrders, setExpandedOrders] = useState<{[key: string]: boolean}>({});
+  const [isLiveTrackerOpen, setIsLiveTrackerOpen] = useState(false);
+  const [lastPlacedOrderId, setLastPlacedOrderId] = useState<string | null>(null);
+  const [trackedOrderIds, setTrackedOrderIds] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('papyrus_my_order_ids');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('papyrus_my_order_ids', JSON.stringify(trackedOrderIds.slice(0, 30)));
+    } catch {
+      // ignore storage errors
+    }
+  }, [trackedOrderIds]);
+
+  const handleRefreshLiveOrders = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('system_settings')
+        .select('value')
+        .eq('key', 'orders')
+        .maybeSingle();
+      if (!error && data?.value && Array.isArray(data.value.list)) {
+        setOrders(data.value.list);
+      }
+    } catch (err) {
+      console.warn('Live orders refresh failed:', err);
+    }
+  };
   
   // ITEM EDITING CONTROLS FOR ADMIN
   const [editingStaff, setEditingStaff] = useState<StaffMember | null>(null);
@@ -1442,13 +1495,16 @@ export default function App() {
   const [addPromoVideo, setAddPromoVideo] = useState('');
   const [galleryNewImgUrl, setGalleryNewImgUrl] = useState('');
 
-  const processFileWithCompression = (file: File, callback: (base64: string) => void) => {
-    // Check if video is too large
+  const processFileWithCompression = (file: File, callback: (url: string) => void) => {
+    // Check if video file
     if (file.type.startsWith('video/')) {
-      if (file.size > 2 * 1024 * 1024) { // 2MB Limit
-        alert('⚠️ ቪዲዮው በጣም ትልቅ ነው! እባክዎ ከ 2MB በታች የሆነ ቪዲዮ ይምረጡ ወይም የዩቲዩብ ቪዲዮ አድራሻ (YouTube URL) ይጠቀሙ።\nVideo file is too large! Please choose a video under 2MB, or use a YouTube URL instead.');
+      if (file.size > 100 * 1024 * 1024) { // 100MB Limit
+        alert('⚠️ ቪዲዮው ከ 100MB በላይ ነው! እባክዎ አነስተኛ ቪዲዮ ይምረጡ።');
         return;
       }
+      const blobUrl = URL.createObjectURL(file);
+      callback(blobUrl);
+      return;
     }
 
     if (file.type.startsWith('image/')) {
@@ -1767,15 +1823,27 @@ export default function App() {
 
         // 12. Fetch bgVideoUrl
         const bgUrlVal = await fetchKeyAndCache('bgVideoUrl');
-        if (bgUrlVal && bgUrlVal.url !== undefined) setBgVideoUrl(bgUrlVal.url);
+        if (bgUrlVal && bgUrlVal.url !== undefined && bgUrlVal.url && !bgUrlVal.url.includes('pixabay.com') && !bgUrlVal.url.includes('202004')) {
+          setBgVideoUrl(bgUrlVal.url);
+        } else {
+          setBgVideoUrl('https://www.youtube.com/watch?v=EvwYOmxaxdA');
+        }
 
         // 13. Fetch bgVideoType
         const bgTypeVal = await fetchKeyAndCache('bgVideoType');
-        if (bgTypeVal && bgTypeVal.type !== undefined) setBgVideoType(bgTypeVal.type);
+        if (bgTypeVal && bgTypeVal.type !== undefined && bgTypeVal.type !== 'gourmet-paradise' && bgTypeVal.type !== 'mango-paradise') {
+          setBgVideoType(bgTypeVal.type);
+        } else {
+          setBgVideoType('youtube');
+        }
 
         // 14. Fetch isBgVideoEnabled
         const bgEnabledVal = await fetchKeyAndCache('isBgVideoEnabled');
-        if (bgEnabledVal && bgEnabledVal.enabled !== undefined) setIsBgVideoEnabled(bgEnabledVal.enabled);
+        if (bgEnabledVal && bgEnabledVal.enabled !== undefined) {
+          setIsBgVideoEnabled(bgEnabledVal.enabled);
+        } else {
+          setIsBgVideoEnabled(true);
+        }
 
         // 15. Fetch assistanceCalls
         const callsVal = await fetchKeyAndCache('assistanceCalls');
@@ -2216,13 +2284,15 @@ export default function App() {
     syncKeyToCloud('chapa', { key: chapaKey, active: chapaActive, mode: chapaMode });
   }, [chapaKey, chapaActive, chapaMode, hasLoadedCloudSettings]);
 
-  // One-time migration to force-default background type to Gourmet Paradise
+  // One-time migration to force-default background video to Chef Cooking Loop
   useEffect(() => {
     try {
-      const migrated = sessionStorage.getItem('papyrus_lodge_gourmet_migrated_v6');
+      const migrated = sessionStorage.getItem('papyrus_lodge_chef_video_migrated_v8');
       if (!migrated) {
-        setBgVideoType('gourmet-paradise');
-        sessionStorage.setItem('papyrus_lodge_gourmet_migrated_v6', 'true');
+        setBgVideoType('youtube');
+        setBgVideoUrl('https://www.youtube.com/watch?v=EvwYOmxaxdA');
+        setIsBgVideoEnabled(true);
+        sessionStorage.setItem('papyrus_lodge_chef_video_migrated_v8', 'true');
       }
     } catch {}
   }, []);
@@ -2611,29 +2681,54 @@ export default function App() {
       alert("እባክዎ የእንግዳውን ስም ያስገቡ!");
       return;
     }
+    const autoTag = gTicketTag.trim() || `TAG-#${100 + visitorLog.length + 1}`;
     const newVisitor: VisitorLog = {
       id: 'v-' + Date.now(),
       name: gName.trim(),
       phone: gPhone.trim() || 'ያልተገለጸ',
       carPlate: gPlate.trim() || 'ያልተገለጸ',
       purpose: gPurpose,
+      vehicleType: gVehicleType,
+      ticketTagNumber: autoTag,
       timeIn: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' ' + new Date().toLocaleDateString(),
-      status: 'In Lodge'
+      status: 'In Lodge',
+      registeredByGuard: currentUser?.name || 'አቶ ዳዊት (ጥበቃ)',
+      registeredByRole: currentUser?.role || 'guard'
     };
     setVisitorLog([newVisitor, ...visitorLog]);
     setGName('');
     setGPhone('');
     setGPlate('');
-    alert('👮 እንግዳው በተሳካ ሁኔታ ተመዝግቧል! / Visitor entry registered.');
+    setGTicketTag('');
+    setSelectedTicketPassVisitor(newVisitor);
+    alert(`👮 የፓርኪንግና የእንግዳ መግቢያ ተመዝግቧል!\n\n🎫 የፓርኪንግ ካርድ ቁጥር፡ ${autoTag}\n1️⃣ ተሽከርካሪው/ሞተሩ ላይ የሚቀመጥ ሎጎ ያለው ካርድ\n2️⃣ ለእንግዳው/ባለቤቱ የሚሰጥ ተመሳስይ ካርድ ተዘጋጅቷል!`);
   };
 
-  const handleCheckoutVisitor = (id: string) => {
-    setVisitorLog(visitorLog.map(v => v.id === id ? {
-      ...v,
+  const handleCheckoutVisitor = (v: VisitorLog) => {
+    setCheckoutConfirmVisitor(v);
+  };
+
+  const confirmExitCheckout = (v: VisitorLog) => {
+    setVisitorLog(prevLog => prevLog.map(item => item.id === v.id ? {
+      ...item,
       status: 'Checked Out',
+      verifiedByGuard: currentUser?.name || 'Guard Gate',
       timeOut: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' ' + new Date().toLocaleDateString()
-    } : v));
-    alert('🚪 እንግዳው ውጭ እንዲሆን ተደርጓል! / Visitor checked out.');
+    } : item));
+    setCheckoutConfirmVisitor(null);
+    setExitToastMessage(`🚪 ተረክቦ ወጥቷል! የመውጫ ማረጋገጫ ተጠናቋል። የፓርኪንግ ካርድ ${v.ticketTagNumber || 'TAG-#101'} ተመልሷል።`);
+    setTimeout(() => setExitToastMessage(''), 6000);
+  };
+
+  const directInstantCheckout = (v: VisitorLog) => {
+    setVisitorLog(prevLog => prevLog.map(item => item.id === v.id ? {
+      ...item,
+      status: 'Checked Out',
+      verifiedByGuard: currentUser?.name || 'Guard Gate',
+      timeOut: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' ' + new Date().toLocaleDateString()
+    } : item));
+    setExitToastMessage(`🚪 ተረክቦ ወጥቷል! የመውጫ ማረጋገጫ ተጠናቋል። የፓርኪንግ ካርድ ${v.ticketTagNumber || 'TAG-#101'} ተመልሷል።`);
+    setTimeout(() => setExitToastMessage(''), 6000);
   };
 
   const handleDeleteVisitor = (id: string) => {
@@ -3327,7 +3422,7 @@ export default function App() {
     phone?: string;
     address?: string;
     tip: number;
-    payment: 'cash' | 'bank';
+    payment: PaymentMethod;
     bankId?: string;
     bankRef?: string;
     receiptScreenshot?: string;
@@ -3336,8 +3431,9 @@ export default function App() {
     const subtotal = cart.reduce((sum, item) => sum + (item.price * item.qty), 0);
     const sc = Math.round((subtotal * serviceChargeRate) / 100);
     const vt = Math.round(((subtotal + sc) * vatRate) / 100);
-    const timeNow = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
-    const dateTodayStr = new Date().toISOString().split('T')[0]; // Format: YYYY-MM-DD
+    const nowMs = Date.now();
+    const timeNow = new Date(nowMs).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
+    const dateTodayStr = new Date(nowMs).toISOString().split('T')[0]; // Format: YYYY-MM-DD
 
     const newOrder: Order = {
       id: '#O-' + Math.floor(100 + Math.random() * 900),
@@ -3356,19 +3452,24 @@ export default function App() {
       receiptScreenshot: details.receiptScreenshot,
       receiptComment: details.receiptComment,
       confirmed: true,
+      waiter: currentUser?.name || 'የጠረጴዛ አስተናጋጅ',
+      createdByRole: currentUser?.role || 'waiter',
       orderType: details.orderType,
       deliveryPhone: details.phone,
       deliveryAddress: details.address,
       time: timeNow,
-      date: dateTodayStr
+      date: dateTodayStr,
+      createdAt: nowMs
     };
 
     setOrders(prev => [newOrder, ...prev]);
+    setTrackedOrderIds(prev => [newOrder.id, ...prev.filter(id => id !== newOrder.id)]);
+    setLastPlacedOrderId(newOrder.id);
     setCart([]);
     
     // Trigger real-time buzzer/assistance call on waiter dashboard when ordering
     const orderBuzzerCall: AssistanceCall = {
-      id: 'order-' + newOrder.id.replace('#', '') + '-' + Date.now(),
+      id: 'order-' + newOrder.id.replace('#', '') + '-' + nowMs,
       location: details.location,
       time: timeNow,
       active: true,
@@ -3377,7 +3478,8 @@ export default function App() {
     };
     addAssistanceCall(orderBuzzerCall);
 
-    alert('🎉 ትዕዛዝዎ አስተማማኝ በሆነ ሁኔታ ተቀብለናል! በቅርብ ሰአት ይደርሳል። / Order placed successfully!');
+    // Open Live Order Tracker modal immediately so guest sees queue position & orders ahead
+    setIsLiveTrackerOpen(true);
   };
 
   // ADMIN OPERATIONS
@@ -3542,7 +3644,8 @@ export default function App() {
       pricePerNight,
       checkInDate,
       status: 'Active',
-      notes
+      notes,
+      receptionistName: currentUser?.name || 'ማርታ (Reception Staff)'
     };
 
     setRoomBookings(prev => [...prev, newBooking]);
@@ -3554,7 +3657,7 @@ export default function App() {
   };
 
   const handleCheckoutBooking = (id: string) => {
-    setRoomBookings(prev => prev.map(b => b.id === id ? { ...b, status: 'Checked Out' } : b));
+    setRoomBookings(prev => prev.map(b => b.id === id ? { ...b, status: 'Checked Out', checkedOutByStaff: currentUser?.name || 'Reception Staff' } : b));
     alert('🔑 እንግዳው በተገቢው ሁኔታ ወጥቷል! / Checked out successfully.');
   };
 
@@ -3574,7 +3677,9 @@ export default function App() {
       amount: Number(amount) || 0,
       date: date || new Date().toISOString().split('T')[0],
       time: timeNow,
-      notes: notes.trim()
+      notes: notes.trim(),
+      recordedByStaff: currentUser?.name || 'Manager Staff',
+      recordedByRole: currentUser?.role || 'manager'
     };
     setExpenses(prev => [newExp, ...prev]);
     alert('💸 አዲስ ወጪ በተሳካ ሁኔታ ተመዝግቧል! / Expense recorded successfully.');
@@ -4068,11 +4173,10 @@ export default function App() {
   };
 
   const getYouTubeEmbedUrl = (url: string, isMuted: boolean = true, isAutoplay: boolean = true) => {
-    let videoId = 'AHuU7i--EUc'; // fall back default
+    let videoId = 'EvwYOmxaxdA'; // Chef Cooking Sizzle video loop matching gourmet food preparation
     if (url) {
       if (url.includes('pixabay.com') || url.includes('202004')) {
-        // High quality Cozy Restaurant/Cafe Jazz loop inspired by the Pixabay video
-        videoId = '1GrEP_j9A4c';
+        videoId = 'EvwYOmxaxdA';
       } else if (url.includes('youtu.be/')) {
         videoId = url.split('youtu.be/')[1]?.split('?')[0] || videoId;
       } else if (url.includes('v=')) {
@@ -4083,7 +4187,7 @@ export default function App() {
         videoId = url.trim();
       }
     }
-    return `https://www.youtube.com/embed/${videoId}?autoplay=${isAutoplay ? '1' : '0'}&mute=${isMuted ? '1' : '0'}&loop=1&playlist=${videoId}&controls=0&showinfo=0&rel=0&iv_load_policy=3&playsinline=1&modestbranding=1&disablekb=1&fs=0&wmode=transparent&enablejsapi=1`;
+    return `https://www.youtube-nocookie.com/embed/${videoId}?autoplay=${isAutoplay ? '1' : '0'}&mute=${isMuted ? '1' : '0'}&loop=1&playlist=${videoId}&controls=0&showinfo=0&rel=0&iv_load_policy=3&playsinline=1&modestbranding=1&disablekb=1&fs=0&wmode=transparent&enablejsapi=1`;
   };
 
   if (currentPath === '/login') {
@@ -4139,7 +4243,7 @@ export default function App() {
         <div 
           id="video-bg-container" 
           className={`fixed inset-0 w-screen h-screen overflow-hidden pointer-events-none z-[1] bg-black transition-opacity duration-1000 ${
-            activeRole === 'customer' ? 'opacity-35' : 'opacity-100'
+            activeRole === 'customer' ? 'opacity-55' : 'opacity-100'
           }`}
         >
           {!isBgVideoEnabled || bgVideoType === 'gourmet-paradise' || bgVideoType === 'mango-paradise' ? (
@@ -4426,7 +4530,7 @@ export default function App() {
             >
               {appLang === 'am' ? 'ስለ እኛ' : 'About'}
             </button>
-            
+
             {/* Need Help Button */}
             <button 
               onClick={handleTriggerBuzzer} 
@@ -4434,6 +4538,34 @@ export default function App() {
             >
               {appLang === 'am' ? 'እርዳታ ይጥሩ 🛎️' : 'Need Help? 🛎️'}
             </button>
+
+            {/* Live Order Check & Queue Button */}
+            {(() => {
+              const myActiveCount = orders.filter((o) => {
+                const st = getEffectiveCookingStatus(o);
+                if (st === 'Inactive' || (o.status === 'Paid' && o.servedByWaiter)) return false;
+                return (
+                  trackedOrderIds.includes(o.id) ||
+                  o.location.trim().toLowerCase() === guestLocation.trim().toLowerCase()
+                );
+              }).length;
+              return (
+                <button
+                  type="button"
+                  id="btn-open-live-order-tracker"
+                  onClick={() => setIsLiveTrackerOpen(true)}
+                  className="bg-stone-900 hover:bg-black text-white px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all shadow-md active:scale-95 cursor-pointer border border-stone-700 flex items-center gap-1.5 shrink-0 whitespace-nowrap"
+                >
+                  <span className="w-2 h-2 rounded-full bg-red-500 animate-ping inline-block" />
+                  <span>{appLang === 'am' ? 'ላይቭ ኦርደር' : 'Live Orders'}</span>
+                  {myActiveCount > 0 && (
+                    <span className="bg-[#f4c22b] text-black font-mono text-[9px] font-black px-1.5 py-0.5 rounded-full tabular-nums">
+                      {myActiveCount}
+                    </span>
+                  )}
+                </button>
+              );
+            })()}
 
             {/* Room Location Selector */}
             <div className="flex items-center gap-1.5 bg-white border border-stone-200 px-2.5 py-1 rounded-xl shadow-md shrink-0">
@@ -4664,35 +4796,35 @@ export default function App() {
                   {/* LEFT SIDE: CUSTOMER GATEWAY (Symmetric 20*20 Ratio aspect-square card) */}
                   <div 
                     onMouseEnter={() => runVoiceOver(`${entryTranslation.guest_title[appLang]}. ${entryTranslation.guest_desc[appLang]}`)}
-                    className="aspect-square w-full max-w-[390px] mx-auto flex flex-col justify-between p-6 bg-black/40 hover:bg-black/50 backdrop-blur-xl border-2 border-white/10 hover:border-[#C1FF00] rounded-3xl shadow-2xl relative overflow-hidden group transition-all duration-300 transform hover:scale-[1.01]"
+                    className="aspect-square w-full max-w-[390px] mx-auto flex flex-col justify-between p-6 bg-stone-950/90 hover:bg-stone-900 backdrop-blur-xl border-2 border-amber-500/30 hover:border-amber-400 rounded-3xl shadow-2xl relative overflow-hidden group transition-all duration-300 transform hover:scale-[1.01]"
                   >
                     {/* Decorative subtle glass circle */}
-                    <div className="absolute -right-8 -bottom-8 w-32 h-32 bg-[#C1FF00]/5 rounded-full blur-2xl group-hover:bg-[#C1FF00]/10 transition-all duration-500"></div>
+                    <div className="absolute -right-8 -bottom-8 w-32 h-32 bg-amber-500/10 rounded-full blur-2xl group-hover:bg-amber-500/20 transition-all duration-500"></div>
                     
                     <div>
-                      <div className="flex justify-between items-center mb-2 border-b border-white/5 pb-2">
-                        <span className="text-3xl font-black font-mono text-[#C1FF00]/30 tracking-wider">01</span>
+                      <div className="flex justify-between items-center mb-2 border-b border-white/10 pb-2">
+                        <span className="text-3xl font-black font-mono text-amber-400/40 tracking-wider">01</span>
                         <span className="clay-emoji text-3xl animate-bounce">🍛</span>
                       </div>
                       
-                      <h3 className="text-xl font-black uppercase text-[#C1FF00] tracking-wide mb-1.5 font-sans">
+                      <h3 className="text-xl font-black uppercase text-amber-400 tracking-wide mb-1.5 font-sans">
                         {entryTranslation.guest_title[appLang]} <br/>
-                        <span className="text-[9px] text-white/40 block font-normal font-mono mt-0.5">GUEST ORDER GATEWAY</span>
+                        <span className="text-[9px] text-stone-300/60 block font-normal font-mono mt-0.5">GUEST ORDER GATEWAY</span>
                       </h3>
                       
-                      <p className="text-[11px] text-white/80 leading-relaxed font-sans mb-3 line-clamp-4">
+                      <p className="text-[11px] text-stone-200 leading-relaxed font-sans mb-3 line-clamp-4">
                         {entryTranslation.guest_desc[appLang]}
                       </p>
 
                       <div className="space-y-1.5 font-sans block text-left">
-                        <div className="flex items-center gap-1.5 text-[9px] text-white/60 font-mono">
-                          <span className="text-[#C1FF00] font-black">✔</span> DIGITAL QR MENU & ORDERING
+                        <div className="flex items-center gap-1.5 text-[9px] text-amber-200/80 font-mono">
+                          <span className="text-amber-400 font-black">✔</span> DIGITAL QR MENU & ORDERING
                         </div>
-                        <div className="flex items-center gap-1.5 text-[9px] text-white/60 font-mono">
-                          <span className="text-[#C1FF00] font-black">✔</span> ROOM SERVICES & TOURS
+                        <div className="flex items-center gap-1.5 text-[9px] text-amber-200/80 font-mono">
+                          <span className="text-amber-400 font-black">✔</span> ROOM SERVICES & TOURS
                         </div>
-                        <div className="flex items-center gap-1.5 text-[9px] text-white/60 font-mono">
-                          <span className="text-[#C1FF00] font-black">✔</span> MULTI-LANGUAGE VOICE ASSIST
+                        <div className="flex items-center gap-1.5 text-[9px] text-amber-200/80 font-mono">
+                          <span className="text-amber-400 font-black">✔</span> MULTI-LANGUAGE VOICE ASSIST
                         </div>
                       </div>
                     </div>
@@ -4703,7 +4835,7 @@ export default function App() {
                         setActiveRole('customer');
                         runVoiceOver(appLang === 'am' ? 'የእንግዳ ማዘዣ ገጽ ተከፍቷል' : 'Guest companion portal loaded.');
                       }}
-                      className="w-full h-11 bg-[#C1FF00] hover:bg-white text-black rounded-xl font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all duration-300 shadow-[0_4px_12px_rgba(193,255,0,0.3)] cursor-pointer"
+                      className="w-full h-11 bg-amber-400 hover:bg-amber-300 text-stone-950 rounded-xl font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all duration-300 shadow-[0_4px_12px_rgba(251,191,36,0.3)] cursor-pointer"
                     >
                       <span>{entryTranslation.guest_btn[appLang]}</span>
                     </button>
@@ -4712,10 +4844,10 @@ export default function App() {
                   {/* RIGHT SIDE: UNIFIED STAFF SECURE LOGGING PORTAL (Symmetric 20*20 Ratio customizable aspect card) */}
                   <div 
                     onMouseEnter={() => runVoiceOver(`${entryTranslation.staff_title[appLang]}. ${entryTranslation.staff_desc[appLang]}`)}
-                    className={`${staffPortalState === 'welcome' ? 'aspect-square' : 'min-h-[500px] md:min-h-[550px] overflow-y-auto'} w-full max-w-[390px] mx-auto flex flex-col bg-black/40 hover:bg-black/50 backdrop-blur-xl border-2 border-white/10 hover:border-[#00f5ff] rounded-3xl shadow-2xl relative transition-all duration-300 transform hover:scale-[1.01]`}
+                    className={`${staffPortalState === 'welcome' ? 'aspect-square' : 'min-h-[500px] md:min-h-[550px] overflow-y-auto'} w-full max-w-[390px] mx-auto flex flex-col bg-stone-950/90 hover:bg-stone-900 backdrop-blur-xl border-2 border-amber-500/30 hover:border-amber-400 rounded-3xl shadow-2xl relative transition-all duration-300 transform hover:scale-[1.01]`}
                   >
                     {/* Background glass decorative blur spots */}
-                    <div className="absolute -left-10 -top-10 w-28 h-28 bg-white/5 rounded-full blur-2xl pointer-events-none"></div>
+                    <div className="absolute -left-10 -top-10 w-28 h-28 bg-amber-500/10 rounded-full blur-2xl pointer-events-none"></div>
 
                     <div className="p-5 flex-1 flex flex-col justify-between relative z-10">
                       
@@ -4849,7 +4981,7 @@ export default function App() {
                                        unifiedRole === 'manager' ? '⚡' : '👑'}
                                     </span>
                                     <div>
-                                      <span className="text-[8px] font-mono tracking-widest text-[#00f5ff] uppercase block font-bold leading-none">
+                                      <span className="text-[8px] font-mono tracking-widest text-yellow-400 uppercase block font-bold leading-none">
                                         የስራ ዘርፍ (DIVISION)
                                       </span>
                                       <span className="text-xs font-black text-white leading-tight block mt-0.5">
@@ -4868,7 +5000,7 @@ export default function App() {
                                       setIsDivisionExpanded(!isDivisionExpanded);
                                       runVoiceOver(isDivisionExpanded ? 'Division hidden' : 'Please select your division');
                                     }}
-                                    className="px-2 py-0.5 rounded text-[8px] font-black uppercase transition-all bg-[#00f5ff]/10 text-[#00f5ff] border border-[#00f5ff]/20 active:scale-95 cursor-pointer hover:bg-white/5"
+                                    className="px-2 py-0.5 rounded text-[8px] font-black uppercase transition-all bg-red-950/80 text-yellow-300 border border-yellow-400/40 active:scale-95 cursor-pointer hover:bg-red-900"
                                   >
                                     {isDivisionExpanded ? '✖ Hide' : '⚙️ Select'}
                                   </button>
@@ -4900,7 +5032,7 @@ export default function App() {
                                           }}
                                           className={`py-1 px-1.5 font-sans tracking-tight transition-all rounded-lg flex items-center gap-1.5 cursor-pointer text-left border ${
                                             unifiedRole === item.val
-                                              ? 'bg-white text-[#7C3AED] border-white font-extrabold shadow-md transform scale-[1.01]'
+                                              ? 'bg-yellow-400 text-red-950 border-yellow-300 font-extrabold shadow-md transform scale-[1.01]'
                                               : 'bg-white/5 border-white/5 text-white/75 hover:text-white hover:bg-white/10'
                                           }`}
                                         >
@@ -5303,7 +5435,7 @@ export default function App() {
                                       onClick={() => setSignupRole(item.val as any)}
                                       className={`py-1 px-2.5 text-[10px] shrink-0 text-center font-sans tracking-tight rounded-lg transition-all cursor-pointer ${
                                         signupRole === item.val
-                                          ? 'bg-white text-[#7C3AED] font-extrabold'
+                                          ? 'bg-yellow-400 text-red-950 font-extrabold border border-red-600'
                                           : 'bg-transparent text-white/70 hover:text-white'
                                       }`}
                                     >
@@ -5410,9 +5542,17 @@ export default function App() {
                     </div>
                   </div>
 
-                  <p className="text-[8px] font-mono text-white/40 tracking-widest uppercase">
-                    © {new Date().getFullYear()} PAPYRUS LODGE HAWASSA • VIBRANT ULTIMATE v3
-                  </p>
+                  <div className="pt-2 border-t border-white/10 space-y-1 text-center">
+                    <p className="text-[11px] font-bold text-white/85">
+                      © 2026 ጉራቻ ቴክኖሎጂ (Guracha Technology) • ሐዋሳ እና አዲስ አበባ 🇪🇹
+                    </p>
+                    <p className="text-[10px] text-white/60">
+                      ዘመናዊ ዲጂታል ሜኑ እና የሆቴል አስተዳደር ሲስተም
+                    </p>
+                    <p className="text-[10px] font-mono font-black text-[#C1FF00] tracking-wider pt-0.5">
+                      Powered by Guracha Tech
+                    </p>
+                  </div>
                 </div>
               </motion.div>
             )}
@@ -5509,143 +5649,38 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* GUEST ACTIVE ORDERS TRACKER - Styled cleanly to fit the layout */}
-                {(() => {
-                  const guestOrdersList = orders.filter(o => o.location.trim().toLowerCase() === guestLocation.trim().toLowerCase() && !(o.status === 'Paid' && o.servedByWaiter));
-                  if (guestOrdersList.length === 0) return null;
-                  return (
-                    <div className="bg-[#fcfbf7] border border-[#f0e7d5] p-6 rounded-[2.5rem] space-y-4 shadow-xl max-w-5xl mx-auto w-full mb-8 text-black">
-                      <div className="flex justify-between items-center border-b border-stone-200 pb-3">
-                        <h4 className="text-[11.5px] font-black uppercase text-stone-900 flex items-center gap-2 align-middle">
-                          <span className="w-2.5 h-2.5 bg-[#b21f1f] rounded-full animate-ping inline-block"></span>
-                          <span>📦 የትዕዛዝዎ ሁኔታ መከታተያ (Active Order Tracking)</span>
-                        </h4>
-                        <span className="text-[10px] font-mono text-white font-black bg-[#b21f1f] px-3 py-1 rounded-full border border-[#8c1414]">
-                          {guestOrdersList.length} {guestOrdersList.length === 1 ? 'ORDER' : 'ORDERS'}
-                        </span>
-                      </div>
+                {/* LIVE GUEST ORDER TRACKER & QUEUE DISPLAY */}
+                <LiveOrderTracker
+                  mode="inline"
+                  orders={orders}
+                  guestLocation={guestLocation}
+                  trackedOrderIds={trackedOrderIds}
+                  highlightedOrderId={lastPlacedOrderId}
+                  appLang={appLang}
+                  expandedOrders={expandedOrders}
+                  onToggleExpand={(orderId) =>
+                    setExpandedOrders((prev) => ({
+                      ...prev,
+                      [orderId]: prev[orderId] !== undefined ? !prev[orderId] : false,
+                    }))
+                  }
+                  onEditOrder={(ord) => setAdjustingOrder(ord)}
+                  onCancelOrder={(orderId) => {
+                    askConfirmAndRun(
+                      'ይህንን ትዕዛዝ ሙሉ በሙሉ መሰረዝ ይፈልጋሉ? (Are you sure you want to cancel this order?)',
+                      () => {
+                        setOrders((prev) => prev.filter((o) => o.id !== orderId));
+                        setTrackedOrderIds((prev) => prev.filter((id) => id !== orderId));
+                        if (lastPlacedOrderId === orderId) setLastPlacedOrderId(null);
+                      }
+                    );
+                  }}
+                  onRefresh={handleRefreshLiveOrders}
+                  onOpenFullModal={() => setIsLiveTrackerOpen(true)}
+                />
 
-                      <div className="space-y-4 pt-1">
-                        {guestOrdersList.map(ord => {
-                          const currentCooking = ord.cookingStatus || (ord.status === 'Paid' ? 'Pending' : ord.status);
-                          const isReady = currentCooking === 'Completed' && ord.servedByWaiter;
-                          const isCompletedButNotServedYet = currentCooking === 'Completed' && !ord.servedByWaiter;
-                          
-                          const isExpanded = expandedOrders[ord.id] !== undefined 
-                            ? expandedOrders[ord.id] 
-                            : true;
-
-                          return (
-                            <div key={ord.id} className="bg-white border border-[#ebe5d8] p-4 rounded-3xl transition-all duration-300">
-                              {/* Order summary header */}
-                              <div 
-                                onClick={() => setExpandedOrders(prev => ({ ...prev, [ord.id]: !isExpanded }))}
-                                className="flex justify-between items-center cursor-pointer hover:bg-stone-50 p-2 rounded-xl transition-all"
-                              >
-                                <div className="space-y-1">
-                                  <div className="flex items-center gap-2">
-                                    <span className="text-xs font-mono font-black text-stone-850">#{ord.id.substring(0, 8).toUpperCase()}</span>
-                                    <span className={`text-[9.5px] px-2.5 py-1 rounded-full font-mono font-black uppercase tracking-wider border ${
-                                      ord.status === 'Paid' 
-                                        ? 'bg-emerald-50 border-emerald-500 text-emerald-600' 
-                                        : 'bg-amber-50 border-amber-500 text-amber-600'
-                                    }`}>
-                                      {ord.status === 'Paid' ? (appLang === 'am' ? 'የተከፈለ' : 'Paid') : (appLang === 'am' ? 'ያልተከፈለ' : 'Unpaid')}
-                                    </span>
-                                  </div>
-                                  <p className="text-[11px] text-stone-500 font-bold">
-                                    {ord.items.length} {appLang === 'am' ? 'ምግቦች' : 'items'} • {new Date(ord.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                                  </p>
-                                </div>
-
-                                <div className="flex items-center gap-3">
-                                  <div className="text-right space-y-0.5">
-                                    <span className="text-[10px] uppercase font-mono font-black text-stone-400 block tracking-wider">የዝግጅት ሁኔታ (STATUS)</span>
-                                    <div className="flex items-center gap-1.5 justify-end">
-                                      <span className={`w-2 h-2 rounded-full ${
-                                        currentCooking === 'Completed' 
-                                          ? 'bg-emerald-500 animate-pulse' 
-                                          : currentCooking === 'Preparing' 
-                                            ? 'bg-sky-500 animate-spin' 
-                                            : 'bg-amber-500 animate-pulse'
-                                      }`} />
-                                      <span className="text-xs font-black text-stone-800">
-                                        {currentCooking === 'Completed' ? (appLang === 'am' ? 'ተጠናቋል' : 'Completed') :
-                                         currentCooking === 'Preparing' ? (appLang === 'am' ? 'እየተዘጋጀ ነው' : 'Preparing') :
-                                         (appLang === 'am' ? 'ወረፋ ላይ' : 'Pending')}
-                                      </span>
-                                    </div>
-                                  </div>
-                                  <span className="text-stone-500 text-xs">{isExpanded ? '▲' : '▼'}</span>
-                                </div>
-                              </div>
-
-                              {/* Order detail list */}
-                              {isExpanded && (
-                                <motion.div 
-                                  initial={{ opacity: 0, height: 0 }}
-                                  animate={{ opacity: 1, height: 'auto' }}
-                                  className="pl-2 pr-2 pb-2 pt-3 border-t border-stone-200 mt-2 space-y-3 font-sans"
-                                >
-                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-1.5">
-                                    {ord.items.map((i, idx) => (
-                                      <div key={idx} className="bg-[#fcfbf7] p-3 rounded-xl border border-stone-200 flex justify-between items-center text-[11px]">
-                                        <div className="space-y-0.5">
-                                          <p className="font-extrabold text-stone-900">{appLang === 'am' ? i.nameAm : (i.nameEn || i.nameAm)}</p>
-                                          <p className="text-[10px] text-stone-500 font-mono">
-                                            Qty: {i.qty} • Modifiers: {i.modifiers ? Object.entries(i.modifiers).map(([k, v]) => `${k}:${v}`).join(', ') : 'none'}
-                                          </p>
-                                        </div>
-                                        <span className="font-mono font-black text-stone-750">{i.price * i.qty} ብር</span>
-                                      </div>
-                                    ))}
-                                  </div>
-
-                                  <div className="flex justify-between items-center bg-stone-50 p-3 rounded-xl border border-stone-200">
-                                    <span className="text-[10px] font-mono text-stone-500 font-black">TOTAL:</span>
-                                    <span className="text-xs font-black text-[#b21f1f] font-mono">{ord.total} ብር</span>
-                                  </div>
-
-                                  {/* Edit/Cancel actions only available if still in Pending state */}
-                                  {currentCooking === 'Pending' && (
-                                    <div className="flex gap-2.5 pt-1.5">
-                                      <button
-                                        type="button"
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          setAdjustingOrder(ord);
-                                        }}
-                                        className="bg-[#f4c22b] hover:bg-yellow-400 text-black font-extrabold text-[10px] py-2 rounded-lg uppercase tracking-wider transition-all flex-1 text-center cursor-pointer shadow-md border-b-2 border-[#cf9d12]"
-                                      >
-                                        ✏️ ማስተካከያ (Edit Order)
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          askConfirmAndRun('ይህንን ትዕዛዝ ሙሉ በሙሉ መሰረዝ ይፈልጋሉ? (Are you sure you want to cancel this order?)', () => {
-                                            setOrders(prev => prev.filter(o => o.id !== ord.id));
-                                            alert('❌ ትዕዛዝዎ በተሳካ ሁኔታ ተሰርዟል! (Order canceled successfully!)');
-                                          });
-                                        }}
-                                        className="bg-[#b21f1f] hover:bg-[#8c1414] text-white font-extrabold text-[10px] py-2 rounded-lg uppercase tracking-wider transition-all flex-1 text-center cursor-pointer shadow-md border-b-2 border-[#5a0c0c]"
-                                      >
-                                        ❌ ሰርዝ (Cancel Order)
-                                      </button>
-                                    </div>
-                                  )}
-                                </motion.div>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  );
-                })()}
-
-                {/* PREMIUM HIGH-FIDELITY CULINARY CONTAINER (Matches the light beige/cream design layout in the uploaded reference) */}
-                <div id="category-highlights-section" className="relative mt-8 p-6 sm:p-10 rounded-[3rem] bg-[#b21f1f] border border-[#8c1414] overflow-hidden shadow-2xl text-white space-y-6">
+                {/* PREMIUM HIGH-FIDELITY CULINARY CONTAINER (Clean White Background as requested) */}
+                <div id="category-highlights-section" className="relative mt-8 p-6 sm:p-10 rounded-[3rem] bg-white border-2 border-stone-200 overflow-hidden shadow-2xl text-stone-900 space-y-6">
                   
                   {/* Clean Light-Themed FOOD SEARCH BAR */}
                   <div className="max-w-md w-full mx-auto relative z-10 font-sans">
@@ -5658,7 +5693,7 @@ export default function App() {
                         value={menuSearchQuery}
                         onChange={(e) => setMenuSearchQuery(e.target.value)}
                         placeholder={appLang === 'am' ? 'ምግብ፣ መጠጥ ወይም መክሰስ ይፈልጉ...' : 'Search delicious food, drinks, or snacks...'}
-                        className="w-full pl-10 pr-10 py-3.5 bg-white border-2 border-transparent hover:border-yellow-400 focus:border-[#f4c22b] text-black rounded-2xl text-xs font-bold outline-none transition-all placeholder-stone-400 shadow-md"
+                        className="w-full pl-10 pr-10 py-3.5 bg-stone-50 border-2 border-stone-200 hover:border-yellow-400 focus:border-[#f4c22b] text-black rounded-2xl text-xs font-bold outline-none transition-all placeholder-stone-400 shadow-sm"
                       />
                       {menuSearchQuery && (
                         <button
@@ -5676,7 +5711,7 @@ export default function App() {
                   <div className="relative z-10 font-sans flex items-center">
                     <div 
                       ref={categoryScrollRef}
-                      className="flex-1 flex flex-row flex-nowrap border-b border-white/20 pb-4 gap-3 overflow-x-auto no-scrollbar scroll-smooth px-1"
+                      className="flex-1 flex flex-row flex-nowrap border-b border-stone-200 pb-4 gap-3 overflow-x-auto no-scrollbar scroll-smooth px-1"
                     >
                       {categories.map(cat => {
                         const transLabel = (categoryTranslations[cat.id] && categoryTranslations[cat.id][appLang]) 
@@ -5694,7 +5729,7 @@ export default function App() {
                             className={`px-5 py-3 rounded-full text-xs font-black uppercase tracking-widest transition-all duration-300 flex items-center gap-2.5 shrink-0 cursor-pointer border ${
                               isActive
                                 ? 'bg-[#f4c22b] text-black border-yellow-500 shadow-lg shadow-yellow-500/20 scale-105 font-black'
-                                : 'bg-white/10 text-white border-white/25 hover:bg-white/25 hover:border-white/40'
+                                : 'bg-stone-100 text-stone-800 border-stone-200 hover:bg-stone-200 hover:border-stone-300'
                             }`}
                           >
                             <span className="text-lg">{cat.icon}</span>
@@ -5708,8 +5743,8 @@ export default function App() {
                   {/* Active search results label */}
                   {menuSearchQuery.trim() !== '' && (
                     <div className="text-center relative z-10 font-sans">
-                      <span className="text-[10px] text-yellow-400 font-mono uppercase tracking-widest block mb-1 font-black">🔍 የፍለጋ ውጤቶች / Search Results</span>
-                      <h3 className="text-sm font-black text-white">
+                      <span className="text-[10px] text-amber-600 font-mono uppercase tracking-widest block mb-1 font-black">🔍 የፍለጋ ውጤቶች / Search Results</span>
+                      <h3 className="text-sm font-black text-stone-900">
                         "{menuSearchQuery}" {appLang === 'am' ? 'የሚሉ ተዛማጅ ምግቦች' : 'matching items'}
                       </h3>
                     </div>
@@ -5792,17 +5827,17 @@ export default function App() {
                             ? (['en', 'fr', 'de', 'it'].includes(appLang) ? itemTranslations[item.id].am.name : itemTranslations[item.id].en.name)
                             : (['en', 'fr', 'de', 'it'].includes(appLang) ? item.nameAm : (item.nameEn || ''));
 
-                          // Soft beige background card design matching the requested look perfectly
+                          // Red background by default with white text, turning Yellow with dark text when tapped/clicked
                           const cardBg = isSelected
-                            ? 'bg-[#fffdf0] border-4 border-[#f4c22b] shadow-2xl scale-[1.01]'
-                            : 'bg-white border border-stone-200 hover:border-[#f4c22b]/60 hover:shadow-xl transition-all duration-300';
+                            ? 'bg-[#f4c22b] text-black border-4 border-amber-600 shadow-2xl scale-[1.02]'
+                            : 'bg-[#b21f1f] text-white border-2 border-red-800 hover:border-yellow-400 hover:shadow-xl transition-all duration-300';
 
-                          const textColor = 'text-stone-900 font-extrabold';
-                          const descColor = 'text-stone-600';
-                          const subColor = 'text-[#b21f1f] font-mono text-[9px] font-black uppercase tracking-wider';
-                          const inputBg = 'bg-white border-stone-200 text-black focus:border-[#b21f1f]';
-                          const btnActive = 'bg-[#f4c22b] text-black font-extrabold shadow-sm';
-                          const btnInactive = 'bg-stone-100 hover:bg-stone-200 text-stone-700';
+                          const textColor = isSelected ? 'text-black font-black text-lg' : 'text-white font-black text-lg drop-shadow-md';
+                          const descColor = isSelected ? 'text-stone-900 font-bold text-xs leading-relaxed' : 'text-white font-bold text-xs leading-relaxed drop-shadow-sm';
+                          const subColor = isSelected ? 'text-[#8c1414] font-mono text-[10px] font-black uppercase tracking-wider' : 'text-[#f4c22b] font-mono text-[10px] font-black uppercase tracking-wider';
+                          const inputBg = isSelected ? 'bg-white border-amber-400 text-stone-900 placeholder-stone-500 focus:border-[#8c1414]' : 'bg-black/40 border-white/30 text-white placeholder-white/60 focus:border-[#f4c22b]';
+                          const btnActive = isSelected ? 'bg-[#8c1414] text-white font-black shadow-sm' : 'bg-[#f4c22b] text-black font-black shadow-sm';
+                          const btnInactive = isSelected ? 'bg-amber-100 hover:bg-amber-200 text-stone-800 border border-amber-300' : 'bg-black/40 hover:bg-black/60 text-white border border-white/20';
 
                           return (
                             <div 
@@ -5811,10 +5846,10 @@ export default function App() {
                               onClick={() => setSelectedMenuCardId(item.id)}
                               className={`rounded-[2rem] flex flex-col justify-between overflow-visible relative pt-20 pb-6 px-5 cursor-pointer w-[290px] sm:w-[320px] shrink-0 ${cardBg}`}
                             >
-                              {/* Overlapping circular plate image exactly matching the visual reference */}
+                              {/* Overlapping circular plate image */}
                               <div className="absolute -top-12 left-1/2 -translate-x-1/2 z-20 select-none">
                                 <div className={`w-32 h-32 rounded-full overflow-hidden border-4 shadow-md transition-all duration-300 ${
-                                  isSelected ? 'border-[#b21f1f] bg-white' : 'border-white bg-white/95'
+                                  isSelected ? 'border-red-700 bg-white ring-4 ring-yellow-300' : 'border-[#f4c22b] bg-white ring-2 ring-red-900/50'
                                 }`}>
                                   <img 
                                     src={item.image} 
@@ -5829,33 +5864,35 @@ export default function App() {
                               </div>
 
                               {/* Overlaid index status badge on card top right */}
-                              <div className="absolute top-4 right-4 z-10 font-mono text-[7.5px] bg-white border border-stone-200 text-stone-500 px-2 py-0.5 rounded-full uppercase tracking-wider font-extrabold">
+                              <div className={`absolute top-4 right-4 z-10 font-mono text-[8px] px-2.5 py-1 rounded-full uppercase tracking-wider font-extrabold shadow-sm ${
+                                isSelected ? 'bg-red-700 text-white border border-red-800' : 'bg-[#f4c22b] text-black border border-yellow-500'
+                              }`}>
                                 {item.cat}__00{item.id.replace(/\D/g,'')}
                               </div>
 
                               {/* Food details description */}
                               <div className="flex-1 flex flex-col justify-between pt-2 font-sans">
                                 <div className="text-center">
-                                  <h4 className={`text-base tracking-tight mb-0.5 leading-tight ${textColor}`}>
+                                  <h4 className={`mb-1 leading-tight ${textColor}`}>
                                     {nameToShow}
                                   </h4>
-                                  <p className={`mb-3 ${subColor}`}>
+                                  <p className={`mb-2 ${subColor}`}>
                                     {subToShow}
                                   </p>
                                   
-                                  <p className={`text-[11px] leading-relaxed h-12 overflow-hidden mx-auto px-1 line-clamp-2 ${descColor}`}>
-                                    {descToShow}
+                                  <p className={`my-2 mx-auto px-1 min-h-[2.8rem] ${descColor}`}>
+                                    {descToShow || (appLang === 'am' ? 'በጥራት የተዘጋጀ ጣፋጭ ምግብ' : 'Freshly prepared delicious item')}
                                   </p>
                                 </div>
 
-                                {/* Custom modifiers configurations shown inline when card is selected */}
+                                {/* Custom modifiers configurations shown on all applicable food cards */}
                                 {(() => {
                                   const isCustomOnly = isCustomOnlyItem(item);
                                   const hasStandardModifiers = !isCustomOnly && (item.customizable || item.cat === 'food' || item.cat === 'traditional');
                                   const isDrink = item.cat === 'drinks' || item.cat.toLowerCase().includes('drink') || item.cat.toLowerCase().includes('beverage');
                                   const showModifiersArea = (hasStandardModifiers || isCustomOnly) && !isDrink;
                                   
-                                  if (!showModifiersArea || !isSelected) return null;
+                                  if (!showModifiersArea) return null;
 
                                   const catIdLower = item.cat.toLowerCase();
                                   const catObj = categories.find(c => c.id === item.cat);
@@ -5867,12 +5904,15 @@ export default function App() {
                                   const isTraditional = catIdLower.includes('traditional') || catLabelLower.includes('traditional') || catIdLower.includes('ባህል') || catLabelLower.includes('ባህል') || itemAmLower.includes('ባህል') || itemEnLower.includes('traditional') || itemEnLower.includes('cultural');
                                   const isFood = !isBurger && (item.customizable || item.cat === 'food' || item.cat === 'traditional');
 
+                                  const labelColor = isSelected ? 'text-[#8c1414] font-extrabold' : 'text-[#f4c22b] font-extrabold';
+                                  const modBoxBg = isSelected ? 'bg-white border-2 border-amber-500 text-stone-900 shadow-inner' : 'bg-black/40 border border-white/20 text-white';
+
                                   return (
-                                    <div className={`p-4 rounded-2xl space-y-3 text-[11px] font-black mt-4 transition-all bg-[#fffbf2] border border-[#f3e1b9] text-stone-800`}>
+                                    <div className={`p-3.5 rounded-2xl space-y-3 text-[11px] font-black mt-3 transition-all ${modBoxBg}`}>
                                       {isFood && (
                                         <>
                                           <div className="flex justify-between items-center">
-                                            <span className="flex items-center gap-1 font-bold text-stone-700">🌶️ {(menuUiTranslation.green_pepper[appLang] || 'ቃሪያ').replace('🌶️', '').trim()}:</span>
+                                            <span className={`flex items-center gap-1 font-bold ${labelColor}`}>🌶️ {(menuUiTranslation.green_pepper[appLang] || 'ቃሪያ').replace('🌶️', '').trim()}:</span>
                                             <div className="flex gap-1 font-mono">
                                               {modifierOptions.qariaChoices.map((val) => (
                                                 <button 
@@ -5880,7 +5920,7 @@ export default function App() {
                                                   id={`modifier-${item.id}-qaria-${val}`}
                                                   type="button"
                                                   onClick={(e) => { e.stopPropagation(); handleModifyQaria(item.id, val); }}
-                                                  className={`px-3 py-1 rounded-md font-bold text-[10px] transition-all cursor-pointer ${
+                                                  className={`px-2.5 py-1 rounded-md font-bold text-[10px] transition-all cursor-pointer ${
                                                     mod.qaria === val ? btnActive : btnInactive
                                                   }`}
                                                 >
@@ -5891,7 +5931,7 @@ export default function App() {
                                           </div>
 
                                           <div className="flex justify-between items-center">
-                                            <span className="flex items-center gap-1 font-bold text-stone-700">🫓 {(menuUiTranslation.injera[appLang] || 'እንጀራ').replace('🫓', '').trim()}:</span>
+                                            <span className={`flex items-center gap-1 font-bold ${labelColor}`}>🫓 {(menuUiTranslation.injera[appLang] || 'እንጀራ').replace('🫓', '').trim()}:</span>
                                             <div className="flex gap-1 font-mono">
                                               {modifierOptions.injeraChoices.map((val) => {
                                                 const priceAdd = Number(modifierOptions.injeraPrices?.[val] || 0);
@@ -5901,7 +5941,7 @@ export default function App() {
                                                     id={`modifier-${item.id}-injera-${val}`}
                                                     type="button"
                                                     onClick={(e) => { e.stopPropagation(); handleModifyInjera(item.id, val); }}
-                                                    className={`px-2.5 py-1 rounded-md font-bold text-[9px] transition-all cursor-pointer ${
+                                                    className={`px-2 py-1 rounded-md font-bold text-[9px] transition-all cursor-pointer ${
                                                       mod.injera === val ? btnActive : btnInactive
                                                     }`}
                                                   >
@@ -5913,34 +5953,38 @@ export default function App() {
                                           </div>
 
                                           <div className="flex justify-between items-center">
-                                            <span className="flex items-center gap-1 font-bold text-stone-700">🥖 {(menuUiTranslation.bread[appLang] || 'ዳቦ').replace('🥖', '').trim()}:</span>
+                                            <span className={`flex items-center gap-1 font-bold ${labelColor}`}>🥖 {(menuUiTranslation.bread[appLang] || 'ዳቦ').replace('🥖', '').trim()}:</span>
                                             <div className="flex items-center gap-2 font-mono">
                                               <button 
                                                 id={`modifier-${item.id}-bread-dec`}
                                                 type="button"
                                                 onClick={(e) => { e.stopPropagation(); handleModifyDabo(item.id, -1); }}
-                                                className="w-6 h-6 rounded bg-stone-100 hover:bg-stone-200 text-stone-850 flex items-center justify-center font-bold text-sm cursor-pointer border border-stone-200"
+                                                className={`w-6 h-6 rounded flex items-center justify-center font-bold text-sm cursor-pointer ${
+                                                  isSelected ? 'bg-amber-100 hover:bg-amber-200 text-stone-900 border border-amber-300' : 'bg-black/50 text-white border border-white/20'
+                                                }`}
                                               >
                                                 -
                                               </button>
-                                              <span className="text-stone-850 text-xs font-bold w-4 text-center">{mod.dabo}</span>
+                                              <span className={`text-xs font-bold w-4 text-center ${isSelected ? 'text-stone-900' : 'text-white'}`}>{mod.dabo}</span>
                                               <button 
                                                 id={`modifier-${item.id}-bread-inc`}
                                                 type="button"
                                                 onClick={(e) => { e.stopPropagation(); handleModifyDabo(item.id, 1); }}
-                                                className="w-6 h-6 rounded bg-stone-100 hover:bg-stone-200 text-stone-850 flex items-center justify-center font-bold text-sm cursor-pointer border border-stone-200"
+                                                className={`w-6 h-6 rounded flex items-center justify-center font-bold text-sm cursor-pointer ${
+                                                  isSelected ? 'bg-amber-100 hover:bg-amber-200 text-stone-900 border border-amber-300' : 'bg-black/50 text-white border border-white/20'
+                                                }`}
                                               >
                                                 +
                                               </button>
-                                              <span className="text-[9px] opacity-65">(+{Number(modifierOptions.daboPrice || 0)} ብር)</span>
+                                              <span className="text-[9px] opacity-80">(+{Number(modifierOptions.daboPrice || 0)} ብር)</span>
                                             </div>
                                           </div>
                                         </>
                                       )}
 
                                       {isTraditional && (
-                                        <div className="flex justify-between items-center border-t border-stone-200 pt-2">
-                                          <span className="flex items-center gap-1 font-bold text-stone-700">🫓 {appLang === 'am' ? 'የቆጮ ጭማሪ' : 'Extra Kocho'}:</span>
+                                        <div className={`flex justify-between items-center border-t pt-2 ${isSelected ? 'border-amber-200' : 'border-white/20'}`}>
+                                          <span className={`flex items-center gap-1 font-bold ${labelColor}`}>🫓 {appLang === 'am' ? 'የቆጮ ጭማሪ' : 'Extra Kocho'}:</span>
                                           <button
                                             type="button"
                                             onClick={(e) => {
@@ -5952,8 +5996,8 @@ export default function App() {
                                             }}
                                             className={`px-3 py-1.5 rounded-lg text-xs font-bold font-mono transition-all border cursor-pointer ${
                                               mod.kocho
-                                                ? 'bg-[#f4c22b] text-black border-[#cf9d12] font-black'
-                                                : 'bg-white border-stone-200 text-stone-700 hover:bg-stone-50'
+                                                ? (isSelected ? 'bg-[#8c1414] text-white border-red-900' : 'bg-[#f4c22b] text-black border-yellow-500')
+                                                : (isSelected ? 'bg-amber-50 border-stone-300 text-stone-800' : 'bg-black/40 border-white/20 text-white')
                                             }`}
                                           >
                                             {mod.kocho ? '✓ ' : ''}{appLang === 'am' ? 'ቆጮ' : 'Kocho'} (+{modifierOptions.kochoPrice || 45} ብር)
@@ -5962,8 +6006,8 @@ export default function App() {
                                       )}
 
                                       {isBurger && (
-                                        <div className="flex justify-between items-center border-t border-stone-200 pt-2">
-                                          <span className="flex items-center gap-1 font-bold text-stone-700">🧴 {appLang === 'am' ? 'የማዮኔዝ ጭማሪ' : 'Extra Mayonnaise'}:</span>
+                                        <div className={`flex justify-between items-center border-t pt-2 ${isSelected ? 'border-amber-200' : 'border-white/20'}`}>
+                                          <span className={`flex items-center gap-1 font-bold ${labelColor}`}>🧴 {appLang === 'am' ? 'የማዮኔዝ ጭማሪ' : 'Extra Mayonnaise'}:</span>
                                           <button
                                             type="button"
                                             onClick={(e) => {
@@ -5975,8 +6019,8 @@ export default function App() {
                                             }}
                                             className={`px-3 py-1.5 rounded-lg text-xs font-bold font-mono transition-all border cursor-pointer ${
                                               mod.mayo
-                                                ? 'bg-[#f4c22b] text-black border-[#cf9d12] font-black'
-                                                : 'bg-white border-stone-200 text-stone-700 hover:bg-stone-50'
+                                                ? (isSelected ? 'bg-[#8c1414] text-white border-red-900' : 'bg-[#f4c22b] text-black border-yellow-500')
+                                                : (isSelected ? 'bg-amber-50 border-stone-300 text-stone-800' : 'bg-black/40 border-white/20 text-white')
                                             }`}
                                           >
                                             {mod.mayo ? '✓ ' : ''}{appLang === 'am' ? 'ማዮኔዝ' : 'Mayo'} (+{modifierOptions.mayoPrice || 20} ብር)
@@ -5984,9 +6028,9 @@ export default function App() {
                                         </div>
                                       )}
 
-                                      <div className="flex flex-col gap-1 border-t border-stone-200 pt-2 text-stone-700">
-                                        <span className="text-[10px] uppercase font-bold tracking-wide">
-                                          {appLang === 'am' ? `➕ ተጨማሪዎች (Custom Additions - +${modifierOptions.customAdditionsPrice || 35} ብር) :` : `➕ Custom Additions (+${modifierOptions.customAdditionsPrice || 35} Birr) :`}
+                                      <div className={`flex flex-col gap-1 border-t pt-2 ${isSelected ? 'border-amber-200' : 'border-white/20'}`}>
+                                        <span className={`text-[10px] uppercase font-black tracking-wide ${labelColor}`}>
+                                          {appLang === 'am' ? `➕ ተጨማሪዎች (Custom - +${modifierOptions.customAdditionsPrice || 35} ብር) :` : `➕ Custom (+${modifierOptions.customAdditionsPrice || 35} Birr) :`}
                                         </span>
                                         <input
                                           type="text"
@@ -6000,22 +6044,22 @@ export default function App() {
                                             }));
                                           }}
                                           onClick={(e) => e.stopPropagation()}
-                                          className={`w-full px-3 py-2.5 rounded-xl text-xs font-bold outline-none border transition-all ${inputBg}`}
+                                          className={`w-full px-3 py-2 rounded-xl text-xs font-bold outline-none border transition-all ${inputBg}`}
                                         />
                                       </div>
                                     </div>
                                   );
                                 })()}
 
-                                {/* Bottom action row: Price and Order button replicating the reference layout */}
+                                {/* Bottom action row: Price and Order button */}
                                 <div className="mt-4 flex justify-between items-center select-none gap-2">
                                   {/* Price nicely displayed */}
                                   <div className="text-left">
-                                    <span className="text-[8px] uppercase tracking-wider font-mono font-black text-stone-400 block">PRICE</span>
-                                    <span className="text-base font-mono font-black text-[#b21f1f]">{item.price} ብር</span>
+                                    <span className={`text-[8px] uppercase tracking-wider font-mono font-black block ${isSelected ? 'text-stone-800' : 'text-white/70'}`}>PRICE</span>
+                                    <span className={`text-base font-mono font-black ${isSelected ? 'text-red-900' : 'text-yellow-300'}`}>{item.price} ብር</span>
                                   </div>
 
-                                  {/* Yellow button for order / customize */}
+                                  {/* Button for order / customize */}
                                   <div className="flex items-center gap-1">
                                     <button
                                       id={`btn-add-to-basket-${item.id}`}
@@ -6028,7 +6072,11 @@ export default function App() {
                                           setSelectedMenuCardId(item.id);
                                         }
                                       }}
-                                      className="bg-[#f4c22b] hover:bg-[#cf9d12] text-black font-sans font-black text-xs px-4 py-2.5 rounded-full uppercase tracking-wider transition-all shadow-md active:scale-95 cursor-pointer border-b-2 border-[#cf9d12]"
+                                      className={`font-sans font-black text-xs px-4 py-2.5 rounded-full uppercase tracking-wider transition-all shadow-md active:scale-95 cursor-pointer ${
+                                        isSelected 
+                                          ? 'bg-red-700 hover:bg-red-800 text-white border-b-2 border-red-900 shadow-red-900/40' 
+                                          : 'bg-[#f4c22b] hover:bg-yellow-300 text-black border-b-2 border-yellow-600'
+                                      }`}
                                     >
                                       <span>🛒 {isSelected ? (menuUiTranslation.add_to_order_btn[appLang] || 'እዘዝ').replace('🛒', '').trim() : (appLang === 'am' ? 'ምረጥ' : 'Order')}</span>
                                     </button>
@@ -6208,82 +6256,156 @@ export default function App() {
                   </div>
                 </motion.div>
 
-                {/* Photo Gallery Showcase */}
+                {/* Photo Gallery Showcase - Papyrus 3D Cover Flow Gallery */}
                 {galleryItems && galleryItems.length > 0 && (
-                  <div className="relative bg-gradient-to-b from-[#8c1414] to-[#5c0b0b] border border-[#b21f1f]/30 p-6 space-y-5 rounded-2xl mt-6 overflow-hidden shadow-2xl">
-                    {/* Elegant Ambient Glowing Layers behind the container content */}
-                    <div className="absolute -top-16 -left-16 w-56 h-56 bg-white/10 rounded-full filter blur-[60px] pointer-events-none animate-pulse" style={{ animationDuration: '8s' }} />
-                    <div className="absolute -bottom-16 -right-16 w-56 h-56 bg-[#f4c22b]/10 rounded-full filter blur-[60px] pointer-events-none animate-pulse" style={{ animationDuration: '10s' }} />
-                    
-                    <div className="relative z-10 flex items-center justify-between border-b border-white/5 pb-3">
+                  <div className="relative bg-gradient-to-b from-[#ca7012] via-[#a85208] to-[#602d02] border-2 border-amber-500/50 p-3.5 sm:p-4.5 rounded-[1.8rem] mt-5 overflow-hidden shadow-xl shadow-amber-950/80 text-white">
+                    {/* Glowing warm ambient spotlights matching reference image */}
+                    <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-80 h-80 bg-amber-400/20 rounded-full filter blur-[80px] pointer-events-none animate-pulse" style={{ animationDuration: '6s' }} />
+                    <div className="absolute -top-10 -right-10 w-60 h-60 bg-yellow-400/15 rounded-full filter blur-[60px] pointer-events-none" />
+                    <div className="absolute -bottom-10 -left-10 w-60 h-60 bg-orange-600/20 rounded-full filter blur-[60px] pointer-events-none" />
+
+                    {/* Header Bar */}
+                    <div className="relative z-20 flex items-center justify-between border-b border-amber-300/20 pb-2">
                       <div className="flex items-center gap-2">
-                        <span className="text-xl">🖼️</span>
-                        <h4 className="text-xs font-black text-white uppercase tracking-widest">
-                          {appLang === 'am' ? 'የፓፒረስ ማዕከለ-ስዕላት' : 'Papyrus Gallery Showcase'}
-                        </h4>
+                        <span className="text-lg sm:text-xl">🖼️</span>
+                        <div>
+                          <h4 className="text-xs font-black text-white uppercase tracking-widest drop-shadow-md">
+                            {appLang === 'am' ? 'የፓፒረስ ማዕከለ-ስዕላት' : 'Papyrus Gallery Showcase'}
+                          </h4>
+                          <span className="text-[9px] text-amber-200/80 font-mono font-bold block leading-none">
+                            3D Cover Flow Gallery
+                          </span>
+                        </div>
                       </div>
-                      <span className="text-[10px] text-[#f4c22b] font-mono uppercase font-bold bg-[#f4c22b]/10 border border-[#f4c22b]/20 px-2.5 py-1 rounded-full">
-                        {galleryItems.length} {appLang === 'am' ? 'ምስሎች' : 'Photos'}
-                      </span>
+
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[10px] sm:text-xs font-mono font-black text-stone-900 bg-[#f4c22b] border border-amber-300 px-2.5 py-0.5 rounded-full shadow-md">
+                          {activeCoverFlowIdx + 1} / {galleryItems.length}
+                        </span>
+                      </div>
                     </div>
 
-                    <style>{`
-                      .gallery-scroll::-webkit-scrollbar {
-                        width: 5px;
-                      }
-                      .gallery-scroll::-webkit-scrollbar-track {
-                        background: transparent;
-                      }
-                      .gallery-scroll::-webkit-scrollbar-thumb {
-                        background: rgba(244, 194, 43, 0.2);
-                        border-radius: 9999px;
-                      }
-                      .gallery-scroll::-webkit-scrollbar-thumb:hover {
-                        background: rgba(244, 194, 43, 0.6);
-                      }
-                    `}</style>
+                    {/* 3D Cover Flow Stage */}
+                    <div 
+                      className="relative w-full h-[180px] sm:h-[220px] flex items-center justify-center overflow-hidden my-1 select-none"
+                      style={{ perspective: '800px' }}
+                    >
+                      {/* Left Navigation Button */}
+                      <button
+                        type="button"
+                        onClick={() => setActiveCoverFlowIdx(prev => (prev > 0 ? prev - 1 : galleryItems.length - 1))}
+                        className="absolute left-1 sm:left-2 z-50 w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-gradient-to-br from-amber-300 to-[#f4c22b] hover:from-white hover:to-amber-200 text-black font-black text-xs flex items-center justify-center shadow-lg active:scale-90 transition-all border border-amber-600 cursor-pointer"
+                        title="Previous Image"
+                      >
+                        ◀
+                      </button>
 
-                    <div className="relative z-10 max-h-[350px] sm:max-h-[420px] overflow-y-auto pr-1 gallery-scroll">
-                      <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-7 xl:grid-cols-8 gap-2">
-                        {galleryItems.map((item, idx) => (
-                          <div 
-                            key={item.id || idx} 
-                            onClick={() => setSelectedGalleryIdx(idx)}
-                            className="group relative aspect-square bg-stone-900 border border-white/5 overflow-hidden rounded-lg cursor-pointer hover:border-[#f4c22b]/60 transition-all duration-300 shadow-lg"
+                      {/* Right Navigation Button */}
+                      <button
+                        type="button"
+                        onClick={() => setActiveCoverFlowIdx(prev => (prev < galleryItems.length - 1 ? prev + 1 : 0))}
+                        className="absolute right-1 sm:right-2 z-50 w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-gradient-to-br from-amber-300 to-[#f4c22b] hover:from-white hover:to-amber-200 text-black font-black text-xs flex items-center justify-center shadow-lg active:scale-90 transition-all border border-amber-600 cursor-pointer"
+                        title="Next Image"
+                      >
+                        ▶
+                      </button>
+
+                      {/* Stacked 3D Cards */}
+                      {galleryItems.map((item, idx) => {
+                        const diff = idx - activeCoverFlowIdx;
+                        const absDiff = Math.abs(diff);
+
+                        // Calculate 3D transformation values
+                        let translateX = diff * 72;
+                        if (typeof window !== 'undefined' && window.innerWidth < 640) {
+                          translateX = diff * 42;
+                        }
+
+                        let rotateY = 0;
+                        if (diff < 0) rotateY = Math.min(50, 28 + absDiff * 6);
+                        if (diff > 0) rotateY = -Math.min(50, 28 + absDiff * 6);
+
+                        const scale = diff === 0 ? 1.02 : Math.max(0.65, 0.85 - absDiff * 0.08);
+                        const translateZ = diff === 0 ? 50 : -absDiff * 35;
+                        const zIndex = 40 - absDiff;
+                        const opacity = diff === 0 ? 1 : Math.max(0.2, 0.9 - absDiff * 0.22);
+                        const isCentered = diff === 0;
+
+                        return (
+                          <div
+                            key={item.id || idx}
+                            onClick={() => {
+                              if (isCentered) {
+                                setSelectedGalleryIdx(idx);
+                              } else {
+                                setActiveCoverFlowIdx(idx);
+                              }
+                            }}
+                            style={{
+                              transform: `translateX(${translateX}px) rotateY(${rotateY}deg) translateZ(${translateZ}px) scale(${scale})`,
+                              zIndex,
+                              opacity,
+                              transition: 'all 0.45s cubic-bezier(0.25, 1, 0.5, 1)',
+                            }}
+                            className={`absolute w-[115px] sm:w-[145px] h-[155px] sm:h-[195px] rounded-[1.2rem] p-1.5 flex flex-col justify-between cursor-pointer border-2 transition-all duration-300 backdrop-blur-md ${
+                              isCentered 
+                                ? 'bg-gradient-to-b from-amber-100/95 via-amber-200/90 to-amber-300/85 text-stone-900 border-amber-300 ring-2 ring-amber-400/60 shadow-[0_10px_30px_rgba(0,0,0,0.75)]'
+                                : 'bg-gradient-to-b from-stone-900/90 via-amber-950/80 to-stone-950/90 text-white border-amber-400/30 hover:border-amber-400/70 shadow-lg'
+                            }`}
                           >
-                            {/* STRETCHED BLURRED BACKGROUND LAYER matching image colors */}
-                            <div 
-                              className="absolute inset-0 bg-cover bg-center filter blur-md scale-125 opacity-40 transition-opacity duration-300 group-hover:opacity-60" 
-                              style={{ backgroundImage: `url(${item.image_url})` }}
-                            />
-
-                            {/* CRISP FOREGROUND IMAGE */}
-                            <div className="absolute inset-1 overflow-hidden rounded-md z-10 bg-black/40 border border-white/5">
-                              <img 
-                                src={item.image_url} 
+                            {/* Card Top Image Container */}
+                            <div className="relative w-full h-[72%] rounded-[0.9rem] overflow-hidden bg-black/40 border border-white/20 shadow-inner group">
+                              <img
+                                src={item.image_url}
                                 alt={appLang === 'am' ? item.title_am : item.title_en}
-                                className="w-full h-full object-cover transition-transform duration-700 ease-out group-hover:scale-110"
+                                className="w-full h-full object-cover rounded-[0.9rem] transition-transform duration-500 group-hover:scale-105"
                                 referrerPolicy="no-referrer"
                               />
+
+                              {isCentered && (
+                                <div className="absolute top-1 right-1 bg-black/70 backdrop-blur-md text-[#f4c22b] px-1.5 py-0.5 rounded-full text-[7px] font-mono font-extrabold uppercase border border-amber-400/50 shadow-md">
+                                  🔍 {appLang === 'am' ? 'እይ' : 'Expand'}
+                                </div>
+                              )}
+
+                              {!isCentered && (
+                                <div className="absolute inset-0 bg-black/20 group-hover:bg-transparent transition-colors" />
+                              )}
                             </div>
 
-                            {/* CORNER SEARCH/EXPAND BADGE */}
-                            <div className="absolute top-2 right-2 bg-black/60 backdrop-blur-md rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity duration-300 z-20 shadow">
-                              <svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="#f4c22b" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
-                            </div>
-
-                            {/* OVERLAY LABEL WITH BACKDROP BLUR */}
-                            <div className="absolute inset-x-1 bottom-1 bg-gradient-to-t from-black/95 via-black/80 to-transparent p-1.5 pt-3 z-20 flex flex-col justify-end rounded-b-md">
-                              <span className="text-[6.5px] text-[#f4c22b] font-mono font-black uppercase tracking-widest block mb-0.5 leading-none">
-                                {item.category || 'General'}
-                              </span>
-                              <span className="text-[8.5px] text-white font-bold leading-tight line-clamp-1 drop-shadow">
+                            {/* Card Bottom Info Box */}
+                            <div className="flex-1 flex flex-col justify-center items-center text-center px-0.5 font-sans">
+                              <h4 className={`text-[10px] sm:text-[11px] font-black leading-tight line-clamp-1 ${
+                                isCentered ? 'text-stone-900' : 'text-amber-100'
+                              }`}>
                                 {appLang === 'am' ? item.title_am : item.title_en}
+                              </h4>
+                              <span className={`text-[8px] sm:text-[9px] font-bold leading-tight line-clamp-1 ${
+                                isCentered ? 'text-amber-900/90' : 'text-amber-300/90'
+                              }`}>
+                                {item.category || 'Papyrus Lodge'}
                               </span>
                             </div>
                           </div>
-                        ))}
-                      </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* Bottom Thumbnail Bar */}
+                    <div className="relative z-20 pt-2 flex items-center justify-center gap-1.5 overflow-x-auto py-1 max-w-full no-scrollbar">
+                      {galleryItems.map((item, idx) => (
+                        <button
+                          key={item.id || idx}
+                          type="button"
+                          onClick={() => setActiveCoverFlowIdx(idx)}
+                          className={`shrink-0 rounded-full transition-all duration-300 cursor-pointer ${
+                            activeCoverFlowIdx === idx
+                              ? 'w-7 h-2.5 bg-[#f4c22b] ring-2 ring-amber-300 shadow-lg'
+                              : 'w-2.5 h-2.5 bg-white/40 hover:bg-white/80'
+                          }`}
+                          title={`Go to image ${idx + 1}`}
+                        />
+                      ))}
                     </div>
                   </div>
                 )}
@@ -6453,8 +6575,16 @@ export default function App() {
                       ))}
                     </div>
 
-                    <div className="pt-2 text-[8px] font-mono text-white/30 uppercase tracking-widest">
-                      HAWASSA LAKEFRONT, ETHIOPIA • SMART GUEST COMPANION v3.2
+                    <div className="pt-3 border-t border-white/15 space-y-1 text-center">
+                      <p className="text-[11px] font-bold text-white/95">
+                        © 2026 ጉራቻ ቴክኖሎጂ (Guracha Technology) • ሐዋሳ እና አዲስ አበባ 🇪🇹
+                      </p>
+                      <p className="text-[10px] text-white/75">
+                        ዘመናዊ ዲጂታል ሜኑ እና የሆቴል አስተዳደር ሲስተም
+                      </p>
+                      <p className="text-[10px] font-mono font-black text-[#f4c22b] tracking-wider pt-0.5">
+                        Powered by Guracha Tech
+                      </p>
                     </div>
                   </div>
 
@@ -6515,20 +6645,25 @@ export default function App() {
                 {/* Header banner */}
                 <div className="bg-[#141414] border border-white/10 p-4 shrink-0 flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
                   <div>
-                    <h3 className="text-sm font-black uppercase text-[#C1FF00]">
+                    <h3 className="text-sm font-black uppercase text-yellow-400">
                       አስተናጋጅ ዳሽቦርድ (Waiter Monitor)
                     </h3>
-                    <p className="font-mono text-[9px] uppercase text-white/50">
-                      Serving Active Guests (Signed in as: <strong className="text-sky-400">{currentUser?.name || 'Waiter Staff'}</strong>)
+                    <p className="font-mono text-[9px] uppercase text-white/70">
+                      Serving Active Guests (Signed in as: <strong className="text-yellow-300 font-bold">{currentUser?.name || 'Waiter Staff'}</strong>)
                     </p>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <span className="font-mono text-[9px] bg-sky-950 text-sky-400 border border-sky-500/10 px-2 py-1 uppercase font-bold tracking-widest">
-                      ROLE: SERVICE_STAFF
-                    </span>
+
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <div className="flex items-center gap-1.5 bg-red-950/80 border border-yellow-400/50 px-3 py-1.5 rounded-lg shadow-sm">
+                      <span className="text-[10px] text-yellow-400 font-mono font-bold flex items-center gap-1">🔒 በስራ ላይ ያለ አስተናጋጅ:</span>
+                      <span className="text-[11px] font-black font-mono text-white bg-black/60 px-2 py-0.5 rounded border border-red-500/50">
+                        🏃 {currentUser?.name || 'አስተናጋጅ'}
+                      </span>
+                    </div>
+
                     <button 
                       onClick={handleLogout}
-                      className="px-2.5 py-1 bg-red-500/10 hover:bg-red-500/20 text-red-400 text-[9px] font-mono uppercase font-black tracking-wider border border-red-500/20"
+                      className="px-2.5 py-1 bg-red-500/10 hover:bg-red-500/20 text-red-400 text-[9px] font-mono uppercase font-black tracking-wider border border-red-500/20 cursor-pointer"
                     >
                       🚪 Logout
                     </button>
@@ -6539,26 +6674,44 @@ export default function App() {
 
                 {/* Assigned Tables Widget */}
                 {(() => {
-                  const assignedTables = tableAssignments
-                    .filter(ta => ta.waiterName === currentUser?.name)
-                    .map(ta => ta.tableNumber);
                   return (
-                    <div className="bg-[#141414] border border-yellow-400/20 p-4 rounded-xl flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
-                      <div className="text-left">
-                        <span className="text-[9px] text-yellow-400 font-mono font-bold tracking-widest block uppercase">YOUR ASSIGNED TABLES TODAY</span>
-                        <h4 className="text-sm font-black text-white uppercase mt-0.5">
-                          📋 የዛሬ የጠረጴዛ ምደባዎ (Your Tables)
-                        </h4>
+                    <div className="bg-[#141414] border border-yellow-400/20 p-4 rounded-xl flex flex-col justify-between items-start gap-3">
+                      <div className="w-full flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-white/5 pb-2">
+                        <div>
+                          <span className="text-[9px] text-yellow-400 font-mono font-bold tracking-widest block uppercase">TODAY'S TABLE ASSIGNMENTS WITH WAITER NAMES</span>
+                          <h4 className="text-sm font-black text-white uppercase mt-0.5">
+                            📋 የዛሬ የጠረጴዛ ምደባዎች እና የተመደቡ አስተናጋጆች
+                          </h4>
+                        </div>
+                        <span className="text-[10px] bg-yellow-400/10 text-yellow-400 border border-yellow-400/30 px-2 py-0.5 rounded font-mono font-bold">
+                          {tableAssignments.length} ጠረጴዛዎች ተመድበዋል
+                        </span>
                       </div>
-                      <div className="flex flex-wrap gap-2">
-                        {assignedTables.length === 0 ? (
-                          <span className="text-xs text-stone-500 font-mono italic">ምንም የተመደበ ጠረጴዛ የለም (No tables assigned yet today)</span>
+
+                      <div className="flex flex-wrap gap-2 w-full pt-1">
+                        {tableAssignments.length === 0 ? (
+                          <span className="text-xs text-stone-500 font-mono italic py-2">ምንም የተመደበ ጠረጴዛ የለም (No tables assigned yet today)</span>
                         ) : (
-                          assignedTables.map((t, idx) => (
-                            <span key={idx} className="bg-yellow-400 text-black px-3 py-1.5 text-xs font-black font-mono rounded-lg border border-black shadow-[1px_1px_0px_0px_rgba(0,0,0,1)]">
-                              🍽️ {t}
-                            </span>
-                          ))
+                          tableAssignments.map((ta) => {
+                            const isMine = (ta.waiterName || '').trim().toLowerCase() === (currentUser?.name || '').trim().toLowerCase();
+                            return (
+                              <div
+                                key={ta.id}
+                                className={`px-3 py-1.5 text-xs font-black font-mono rounded-lg border flex items-center gap-2 shadow-sm transition-all ${
+                                  isMine
+                                    ? 'bg-[#C1FF00] text-black border-black ring-2 ring-yellow-400 shadow-lg'
+                                    : 'bg-stone-900 text-stone-200 border-white/10'
+                                }`}
+                              >
+                                <span>🍽️ {ta.tableNumber}</span>
+                                <span className={`text-[10px] px-1.5 py-0.5 rounded uppercase font-bold ${
+                                  isMine ? 'bg-black text-[#C1FF00]' : 'bg-white/10 text-yellow-300'
+                                }`}>
+                                  👤 {ta.waiterName} {isMine ? '(የእርስዎ)' : ''}
+                                </span>
+                              </div>
+                            );
+                          })
                         )}
                       </div>
                     </div>
@@ -6610,26 +6763,60 @@ export default function App() {
                 )}
 
                 {/* Orders flow list */}
+                {/* Shift Selector Banner for Waiter */}
+                <div className="bg-[#181818] border border-yellow-400/30 p-3 rounded-xl flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-black text-yellow-400">👤 የፈረቃ ትዕዛዞች መክፈያ (Shift Work Isolation):</span>
+                    <select
+                      value={selectedWaiterShiftStaff}
+                      onChange={(e) => setSelectedWaiterShiftStaff(e.target.value)}
+                      className="bg-black border border-yellow-400 text-yellow-300 text-xs px-2.5 py-1 rounded font-bold outline-none cursor-pointer"
+                    >
+                      <option key="waiter-shift-my" value="my_shift">👤 የእኔ የጠረጴዛዎች/ትዕዛዞች ብቻ ({currentUser?.name || 'My Shift'})</option>
+                      <option key="waiter-shift-all" value="all">🌐 የሁሉም አስተናጋጆች ትዕዛዝ (All Waiters)</option>
+                      {staff.filter(s => (s.role || '').toLowerCase() === 'waiter' || (s.accessPrivilege || '').toLowerCase() === 'waiter').map((s, idx) => (
+                        <option key={`waiter-shift-${s.id || s.name || idx}`} value={s.name}>🏃 {s.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <span className="text-[10px] text-stone-400 font-mono">
+                    {selectedWaiterShiftStaff === 'my_shift' ? '🔒 የእርስዎ ትዕዛዝ ብቻ እየታየ ነው (Isolated to your shift)' : '🌐 የሁሉም አስተናጋጆች ትዕዛዝ እየታየ ነው'}
+                  </span>
+                </div>
+
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                   
                   {/* Left columns: Orders in progress */}
                   {(() => {
-                    const inPrepOrders = orders.filter(o => (o.cookingStatus || (o.status === 'Paid' ? 'Pending' : o.status)) === 'Pending' || (o.cookingStatus || (o.status === 'Paid' ? 'Pending' : o.status)) === 'Preparing');
+                    const allInPrepOrders = orders.filter(o => (o.cookingStatus || (o.status === 'Paid' ? 'Pending' : o.status)) === 'Pending' || (o.cookingStatus || (o.status === 'Paid' ? 'Pending' : o.status)) === 'Preparing');
                     
-                    const isOrderAssignedToMe = (ord: Order) => {
-                      if (!currentUser?.name) return false;
+                    const isOrderAssignedToTargetStaff = (ord: Order, staffName: string) => {
+                      if (!staffName) return false;
                       const orderWaiter = (ord.waiter || '').trim().toLowerCase();
-                      const curName = currentUser.name.trim().toLowerCase();
-                      if (orderWaiter === curName) return true;
+                      const targetName = staffName.trim().toLowerCase();
+                      if (orderWaiter === targetName) return true;
                       
                       const tableWaiter = getAssignedWaiterForTable(ord.location).trim().toLowerCase();
-                      return tableWaiter === curName;
+                      return tableWaiter === targetName;
                     };
 
+                    const isOrderAssignedToMe = (ord: Order) => isOrderAssignedToTargetStaff(ord, currentUser?.name || '');
+
+                    const filterOrdersByShift = (rawOrders: Order[]) => {
+                      if (selectedWaiterShiftStaff === 'my_shift') {
+                        const myName = currentUser?.name || '';
+                        if (!myName) return rawOrders;
+                        return rawOrders.filter(o => isOrderAssignedToTargetStaff(o, myName));
+                      } else if (selectedWaiterShiftStaff !== 'all') {
+                        return rawOrders.filter(o => isOrderAssignedToTargetStaff(o, selectedWaiterShiftStaff));
+                      }
+                      return rawOrders;
+                    };
+
+                    const inPrepOrders = filterOrdersByShift(allInPrepOrders);
                     const allReadyOrders = orders.filter(o => (o.cookingStatus || o.status) === 'Completed' && !o.servedByWaiter);
-                    const readyToDeliverOrders = showMyReadyDeliveriesOnly 
-                      ? allReadyOrders.filter(isOrderAssignedToMe)
-                      : allReadyOrders;
+                    const readyToDeliverOrders = filterOrdersByShift(allReadyOrders);
+
                     return (
                       <div className="lg:col-span-2 space-y-6">
                         {/* Two-part grid inside the waiter's left pan */}
@@ -6652,17 +6839,24 @@ export default function App() {
                               </p>
                             ) : (
                               <div className="space-y-3">
-                                {inPrepOrders.map(ord => (
-                                  <div key={ord.id} className="bg-[#181818] border border-white/5 p-3 flex flex-col justify-between gap-3">
-                                    <div className="flex justify-between items-start border-b border-white/5 pb-1.5">
-                                      <div>
-                                        <span className="font-mono text-[11px] font-black text-[#C1FF00]">{ord.id}</span>
-                                        <span className="text-[9px] uppercase font-mono text-white/40 block">Time: {ord.time}</span>
+                                {inPrepOrders.map(ord => {
+                                  const tableWaiter = getAssignedWaiterForTable(ord.location) || ord.waiter;
+                                  return (
+                                    <div key={ord.id} className="bg-[#181818] border border-white/5 p-3 flex flex-col justify-between gap-3">
+                                      <div className="flex justify-between items-start border-b border-white/5 pb-1.5">
+                                        <div>
+                                          <span className="font-mono text-[11px] font-black text-[#C1FF00]">{ord.id}</span>
+                                          <span className="text-[9px] uppercase font-mono text-white/40 block">Time: {ord.time}</span>
+                                        </div>
+                                        <div className="text-right">
+                                          <span className="font-black text-xs block text-[#C1FF00]">🍽️ {ord.location}</span>
+                                          {tableWaiter && (
+                                            <span className="text-[9px] text-yellow-300 font-mono block font-bold">
+                                              👤 {tableWaiter}
+                                            </span>
+                                          )}
+                                        </div>
                                       </div>
-                                      <div className="text-right">
-                                        <span className="font-black text-xs block text-[#C1FF00]">{ord.location}</span>
-                                      </div>
-                                    </div>
 
                                     <div className="space-y-1">
                                       {ord.items.map((i, idx) => (
@@ -6704,8 +6898,9 @@ export default function App() {
                                       </button>
                                     </div>
                                   </div>
-                                ))}
-                              </div>
+                                );
+                              })}
+                            </div>
                             )}
                           </div>
 
@@ -7037,9 +7232,17 @@ export default function App() {
                             <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
                           </span>
                           <div className="text-left font-mono leading-none">
-                            <span className="text-[9px] text-stone-500 block uppercase font-bold">{appLang === 'am' ? 'የሼፍ ስም' : 'Chef Name'}</span>
-                            <span className="text-[11px] text-[#C1FF00] font-black block mt-0.5">{currentUser?.name || 'Chef Executive'}</span>
+                            <span className="text-[9px] text-stone-400 block uppercase font-bold">{appLang === 'am' ? 'የሼፍ ስም' : 'Chef Name'}</span>
+                            <span className="text-[11px] text-yellow-300 font-black block mt-0.5">{currentUser?.name || 'Chef Executive'}</span>
                           </div>
+                        </div>
+
+                        {/* Chef Active Staff Badge */}
+                        <div className="bg-red-950/80 border border-yellow-400/50 px-3 py-1.5 rounded-xl flex items-center gap-2">
+                          <span className="text-[10px] text-yellow-400 font-mono font-bold uppercase whitespace-nowrap flex items-center gap-1">🔒 በስራ ላይ ያለ ሼፍ:</span>
+                          <span className="text-xs font-black font-mono text-white bg-black/60 px-2 py-0.5 rounded border border-red-500/50">
+                            👨‍🍳 {currentUser?.name || 'Chef Executive'}
+                          </span>
                         </div>
 
                         <div className="bg-black/40 border border-white/5 px-3.5 py-2 rounded-xl flex items-center gap-2.5">
@@ -7174,6 +7377,27 @@ export default function App() {
 
                   {/* CHEF ACTIVE ORDERS BOARD */}
                   <div className="bg-[#121212] border border-white/10 p-6 rounded-3xl space-y-4 text-left">
+                    {/* Shift Selector Banner for Chef */}
+                    <div className="bg-[#181818] border border-orange-500/30 p-3 rounded-xl flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-black text-orange-400">👨‍🍳 የሼፍ ፈረቃ መክፈያ (Chef Shift Isolation):</span>
+                        <select
+                          value={selectedChefShiftStaff}
+                          onChange={(e) => setSelectedChefShiftStaff(e.target.value)}
+                          className="bg-black border border-orange-500 text-orange-300 text-xs px-2.5 py-1 rounded font-bold outline-none cursor-pointer"
+                        >
+                          <option key="chef-shift-my" value="my_shift">👨‍🍳 የእኔ የኩሽና ማብሰያዎች ብቻ ({currentUser?.name || 'My Shift'})</option>
+                          <option key="chef-shift-all" value="all">🌐 የሁሉም ሼፎች ማብሰያ (All Kitchen Orders)</option>
+                          {staff.filter(s => (s.role || '').toLowerCase() === 'chef' || (s.accessPrivilege || '').toLowerCase() === 'chef').map((s, idx) => (
+                            <option key={`chef-shift-${s.id || s.name || idx}`} value={s.name}>👨‍🍳 {s.name}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <span className="text-[10px] text-stone-400 font-mono">
+                        {selectedChefShiftStaff === 'my_shift' ? '🔒 ለእርስዎ ኩሽና የተመደቡ ትዕዛዞች ብቻ' : '🌐 የሁሉም ሼፎች ትዕዛዞች እየታዩ ነው'}
+                      </span>
+                    </div>
+
                     <div className="flex justify-between items-center border-b border-white/5 pb-3">
                       <div>
                         <h3 className="text-sm font-black uppercase text-white tracking-wider flex items-center gap-2">
@@ -7185,7 +7409,19 @@ export default function App() {
                         </p>
                       </div>
                       <span className="text-xs font-mono bg-orange-500/10 text-orange-400 border border-orange-500/20 px-3 py-1 rounded-full font-black">
-                        {orders.filter(o => o.cookingStatus === 'Pending' || o.cookingStatus === 'Preparing').length} {appLang === 'am' ? 'ትዕዛዞች' : 'Orders'}
+                        {orders.filter(o => {
+                          const active = o.cookingStatus === 'Pending' || o.cookingStatus === 'Preparing';
+                          if (!active) return false;
+                          if (selectedChefShiftStaff === 'my_shift') {
+                            const myName = (currentUser?.name || '').toLowerCase();
+                            const cName = (o.chefName || '').toLowerCase();
+                            return !cName || cName === myName;
+                          } else if (selectedChefShiftStaff !== 'all') {
+                            const cName = (o.chefName || '').toLowerCase();
+                            return cName === selectedChefShiftStaff.toLowerCase();
+                          }
+                          return true;
+                        }).length} {appLang === 'am' ? 'ትዕዛዞች' : 'Orders'}
                       </span>
                     </div>
 
@@ -7243,9 +7479,9 @@ export default function App() {
                                           defaultValue={assignedWaiterName}
                                           className="w-full bg-[#121212] border border-white/10 text-white text-[10px] font-mono p-1.5 outline-none focus:border-yellow-400"
                                         >
-                                          <option value="">-- አስተናጋጅ ይምረጡ --</option>
+                                          <option key="unassigned" value="">-- አስተናጋጅ ይምረጡ --</option>
                                           {staff.filter(s => (s.role || '').toLowerCase() === 'waiter' || (s.accessPrivilege || '').toLowerCase() === 'waiter').map((w, idx) => (
-                                            <option key={idx} value={w.name}>{w.name}</option>
+                                            <option key={`deliverer-${w.id || w.name || idx}`} value={w.name}>{w.name}</option>
                                           ))}
                                         </select>
                                       </div>
@@ -7383,6 +7619,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                 <div className="flex border-b border-white/10 gap-1 overflow-x-auto no-scrollbar py-1">
                   {[
                     { id: 'sales', label: appLang === 'am' ? '📊 ገቢ/ወጪ' : '📊 Ledger', color: 'text-emerald-400' },
+                    { id: 'staff_audit', label: appLang === 'am' ? '📑 የሰራተኞች ፈረቃ ኦዲት' : '📑 Staff Audit', color: 'text-[#C1FF00]' },
                     { id: 'staff', label: appLang === 'am' ? '👥 ሰራተኞች' : '👥 Staff', color: 'text-sky-400' },
                     { id: 'menu', label: appLang === 'am' ? '🍽️ ምናሌ' : '🍽️ Menu', color: 'text-amber-400' },
                     { id: 'banks', label: appLang === 'am' ? '🏦 ባንኮች' : '🏦 Banks', color: 'text-[#C1FF00]' },
@@ -7407,6 +7644,198 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                     </button>
                   ))}
                 </div>
+
+                {/* TAB CONTENT: STAFF SHIFT AUDIT MATRIX */}
+                {activeAdminTab === 'staff_audit' && (
+                  <div className="bg-[#121212] border border-white/10 p-6 rounded-2xl space-y-6 text-white font-sans">
+                    <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-white/10 pb-4">
+                      <div>
+                        <span className="text-[9px] bg-[#C1FF00]/10 text-[#C1FF00] border border-[#C1FF00]/30 px-2 py-0.5 rounded font-mono font-bold uppercase tracking-wider">
+                          STAFF WORK & SHIFT AUDIT SYSTEM
+                        </span>
+                        <h3 className="text-lg font-black text-white uppercase mt-1">
+                          📑 የሰራተኞች የፈረቃ ስራዎች መቆጣጠሪያና ኦዲት ማዕከል
+                        </h3>
+                        <p className="text-xs text-stone-400 font-mono mt-0.5">
+                          በጥበቃዎች፣ በአስተናጋጆች፣ በሼፎች፣ በሪሴብሽኖች፣ በካሸሮች እና በማኔጀሮች የተከናወኑ ስራዎችን በስማቸው ለይተው ይከታተሉ።
+                        </p>
+                      </div>
+
+                      {/* Filter Controls */}
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <select
+                          value={selectedManagerAuditRole}
+                          onChange={(e) => {
+                            setSelectedManagerAuditRole(e.target.value);
+                            setSelectedManagerAuditStaff('all');
+                          }}
+                          className="bg-black border border-[#C1FF00]/50 text-[#C1FF00] font-bold text-xs px-3 py-2 rounded-lg outline-none cursor-pointer font-mono"
+                        >
+                          <option value="all">-- የሁሉም የሙያ ዘርፍ (All Roles) --</option>
+                          <option value="guard">👮 ጥበቃ (Guard)</option>
+                          <option value="waiter">🍽️ አስተናጋጅ (Waiter)</option>
+                          <option value="chef">👨‍🍳 ሼፍ (Chef)</option>
+                          <option value="receptionist">🏨 ሪሴብሽን (Receptionist)</option>
+                          <option value="cashier">💵 ካሸር (Cashier)</option>
+                          <option value="manager">👔 ማኔጀር/አስኪያጅ (Manager)</option>
+                        </select>
+
+                        <select
+                          value={selectedManagerAuditStaff}
+                          onChange={(e) => setSelectedManagerAuditStaff(e.target.value)}
+                          className="bg-black border border-sky-400/50 text-sky-300 font-bold text-xs px-3 py-2 rounded-lg outline-none cursor-pointer font-mono"
+                        >
+                          <option key="all-staff-audit" value="all">-- የሁሉም ሰራተኞች ስም (All Staff) --</option>
+                          {staff.map((s, idx) => (
+                            <option key={`staff-audit-${s.id || s.name || idx}`} value={s.name}>{s.name} ({s.role})</option>
+                          ))}
+                          {Array.from(new Set([
+                            ...visitorLog.map(v => v.registeredByGuard).filter(Boolean),
+                            ...visitorLog.map(v => v.verifiedByGuard).filter(Boolean),
+                            ...orders.map(o => o.waiter).filter(Boolean),
+                            ...orders.map(o => o.chefName).filter(Boolean),
+                            ...orders.map(o => o.cashierName).filter(Boolean),
+                            ...roomBookings.map(b => b.receptionistName).filter(Boolean),
+                            ...roomBookings.map(b => b.checkedOutByStaff).filter(Boolean),
+                            ...expenses.map(e => e.recordedByStaff).filter(Boolean)
+                          ]))
+                            .filter(sName => !staff.some(s => s.name === sName))
+                            .map((sName, idx) => (
+                              <option key={`extra-audit-${sName}-${idx}`} value={sName}>👤 {sName}</option>
+                            ))}
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* Summary Counters */}
+                    {(() => {
+                      const sel = selectedManagerAuditStaff;
+                      const isSel = (val?: string) => sel === 'all' || (val && val.toLowerCase() === sel.toLowerCase());
+
+                      const guardEntries = visitorLog.filter(v => isSel(v.registeredByGuard));
+                      const guardExits = visitorLog.filter(v => isSel(v.verifiedByGuard));
+                      const waiterOrders = orders.filter(o => isSel(o.waiter));
+                      const chefCooked = orders.filter(o => isSel(o.chefName));
+                      const cashierSales = orders.filter(o => o.status === 'Paid' && isSel(o.cashierName));
+                      const receptionBookings = roomBookings.filter(b => isSel(b.receptionistName));
+                      const receptionCheckouts = roomBookings.filter(b => isSel(b.checkedOutByStaff));
+                      const managerExpenses = expenses.filter(e => isSel(e.recordedByStaff));
+
+                      const totalCashCollected = cashierSales.reduce((sum, o) => sum + (o.total || 0), 0);
+
+                      return (
+                        <div className="space-y-6">
+                          {/* Stat Grid */}
+                          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 font-mono">
+                            <div className="bg-yellow-500/10 border border-yellow-500/30 p-4 rounded-xl">
+                              <span className="text-[9px] text-yellow-400 font-bold uppercase block">👮 የጥበቃ መዝገቦች</span>
+                              <span className="text-xl font-black text-white mt-1 block">
+                                {guardEntries.length} ገቡ / {guardExits.length} ወጡ
+                              </span>
+                              <span className="text-[9px] text-yellow-300/70 block mt-0.5">የፓርኪንግና የእንግዳ ጥበቃ</span>
+                            </div>
+
+                            <div className="bg-sky-500/10 border border-sky-500/30 p-4 rounded-xl">
+                              <span className="text-[9px] text-sky-400 font-bold uppercase block">🍽️ የአስተናጋጅ ትዕዛዞች</span>
+                              <span className="text-xl font-black text-white mt-1 block">
+                                {waiterOrders.length} ትዕዛዞች
+                              </span>
+                              <span className="text-[9px] text-sky-300/70 block mt-0.5">የጠረጴዛ አገልግሎት</span>
+                            </div>
+
+                            <div className="bg-orange-500/10 border border-orange-500/30 p-4 rounded-xl">
+                              <span className="text-[9px] text-orange-400 font-bold uppercase block">👨‍🍳 የሼፍ ማብሰያዎች</span>
+                              <span className="text-xl font-black text-white mt-1 block">
+                                {chefCooked.length} ምግቦች
+                              </span>
+                              <span className="text-[9px] text-orange-300/70 block mt-0.5">በኩሽና የተዘጋጁ</span>
+                            </div>
+
+                            <div className="bg-emerald-500/10 border border-emerald-500/30 p-4 rounded-xl">
+                              <span className="text-[9px] text-emerald-400 font-bold uppercase block">💵 የካሸር ስብስቦች</span>
+                              <span className="text-xl font-black text-[#C1FF00] mt-1 block">
+                                {totalCashCollected.toLocaleString()} ETB
+                              </span>
+                              <span className="text-[9px] text-emerald-300/70 block mt-0.5">{cashierSales.length} የተከፈሉ ደረሰኞች</span>
+                            </div>
+                          </div>
+
+                          {/* Activity Breakdown Table */}
+                          <div className="bg-black/60 border border-white/10 rounded-xl p-4 space-y-3">
+                            <h4 className="text-xs font-black uppercase text-[#C1FF00] font-mono flex items-center justify-between">
+                              <span>📋 የፈረቃ ስራዎች የጊዜ ተዋረድ ዝርዝር (Audit Activity Timeline)</span>
+                              <span className="text-[10px] text-white/50">መዝገብ፡ {sel === 'all' ? 'የሁሉም ሰራተኞች' : sel}</span>
+                            </h4>
+
+                            <div className="overflow-x-auto">
+                              <table className="w-full text-left font-mono text-xs">
+                                <thead>
+                                  <tr className="border-b border-white/10 text-[10px] text-stone-400 uppercase">
+                                    <th className="py-2 px-3">የስራ አይነት (Category)</th>
+                                    <th className="py-2 px-3">መለያ / ID</th>
+                                    <th className="py-2 px-3">የሰራተኛዉ ስም (Staff Name)</th>
+                                    <th className="py-2 px-3">ሚና (Role)</th>
+                                    <th className="py-2 px-3">ዝርዝር መግለጫ (Details)</th>
+                                    <th className="py-2 px-3">ሰዓት (Time)</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-white/5 text-[11px]">
+                                  {/* Render Guard entries */}
+                                  {guardEntries.slice(0, 10).map(v => (
+                                    <tr key={v.id} className="hover:bg-white/5">
+                                      <td className="py-2 px-3 text-yellow-400 font-bold">👮 የፓርኪንግ መግቢያ</td>
+                                      <td className="py-2 px-3 font-black text-white">{v.ticketTagNumber}</td>
+                                      <td className="py-2 px-3 font-bold text-yellow-300">{v.registeredByGuard || 'አቶ ዳዊት'}</td>
+                                      <td className="py-2 px-3 text-stone-400">Guard</td>
+                                      <td className="py-2 px-3 text-white">{v.name} ({v.carPlate}) - {v.purpose}</td>
+                                      <td className="py-2 px-3 text-emerald-400">{v.timeIn}</td>
+                                    </tr>
+                                  ))}
+
+                                  {/* Render Waiter orders */}
+                                  {waiterOrders.slice(0, 10).map(o => (
+                                    <tr key={o.id} className="hover:bg-white/5">
+                                      <td className="py-2 px-3 text-sky-400 font-bold">🍽️ የጠረጴዛ ትዕዛዝ</td>
+                                      <td className="py-2 px-3 font-black text-white">{o.id}</td>
+                                      <td className="py-2 px-3 font-bold text-sky-300">{o.waiter || 'አስተናጋጅ'}</td>
+                                      <td className="py-2 px-3 text-stone-400">Waiter</td>
+                                      <td className="py-2 px-3 text-white">{o.location} ({o.items.length} እቃዎች) - {o.total} ETB</td>
+                                      <td className="py-2 px-3 text-sky-400">{o.time}</td>
+                                    </tr>
+                                  ))}
+
+                                  {/* Render Cashier sales */}
+                                  {cashierSales.slice(0, 10).map(o => (
+                                    <tr key={'cash-' + o.id} className="hover:bg-white/5">
+                                      <td className="py-2 px-3 text-emerald-400 font-bold">💵 የገቢ ሂሳብ ስብስብ</td>
+                                      <td className="py-2 px-3 font-black text-white">{o.id}</td>
+                                      <td className="py-2 px-3 font-bold text-emerald-300">{o.cashierName || 'ካሸር'}</td>
+                                      <td className="py-2 px-3 text-stone-400">Cashier</td>
+                                      <td className="py-2 px-3 text-white">{o.location} - ክፍያ አረጋግጧል ({o.total} ETB)</td>
+                                      <td className="py-2 px-3 text-emerald-400">{o.time}</td>
+                                    </tr>
+                                  ))}
+
+                                  {/* Render Receptionist Bookings */}
+                                  {receptionBookings.slice(0, 10).map(b => (
+                                    <tr key={b.id} className="hover:bg-white/5">
+                                      <td className="py-2 px-3 text-teal-400 font-bold">🏨 የክፍል መዝገብ</td>
+                                      <td className="py-2 px-3 font-black text-white">ክፍል {b.roomNumber}</td>
+                                      <td className="py-2 px-3 font-bold text-teal-300">{b.receptionistName || 'ማርታ'}</td>
+                                      <td className="py-2 px-3 text-stone-400">Receptionist</td>
+                                      <td className="py-2 px-3 text-white">{b.guestIds?.[0]?.fullName} ({b.contactPhone})</td>
+                                      <td className="py-2 px-3 text-teal-400">{b.checkInDate}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                )}
 
                 {activeAdminTab === 'sales' && (
                   <AdminRevenueReports
@@ -7468,7 +7897,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                     </option>
                                   ))}
                                   {!customRoles.includes(editingStaff.role) && (
-                                    <option value={editingStaff.role}>
+                                    <option key="custom-editing-role" value={editingStaff.role}>
                                       {editingStaff.role.toUpperCase()}
                                     </option>
                                   )}
@@ -7980,7 +8409,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                         {customRoles.map(role => (
                           <span 
                             key={role} 
-                            className="px-2.5 py-1.5 rounded-lg text-xs font-mono font-bold flex items-center gap-1.5 bg-[#C1FF00]/10 border border-[#C1FF00]/30 text-[#C1FF00]"
+                            className="px-2.5 py-1.5 rounded-lg text-xs font-mono font-bold flex items-center gap-1.5 bg-red-950/80 border border-yellow-400/50 text-yellow-300 shadow-sm"
                           >
                             <span>{role === 'waiter' ? 'አስተናጋጅ (Waiter)' : 
                                    role === 'chef' ? 'የኩሽና ሰራተኛ (Chef)' : 
@@ -8057,7 +8486,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
 
                     {/* Visual System Access Privileges Management Widget */}
                     <div className="bg-[#121212] border border-white/10 p-5 rounded-xl shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] space-y-4">
-                      <h4 className="text-xs font-black uppercase text-[#00f5ff] border-b border-white/5 pb-2 flex items-center gap-1.5">
+                      <h4 className="text-xs font-black uppercase text-yellow-400 border-b border-white/5 pb-2 flex items-center gap-1.5">
                         🔐 የሲስተም መዳረሻ ፈቃድ ማስተዳደሪያ (System Privileges)
                       </h4>
                       <p className="text-[10px] text-white/60 leading-normal">
@@ -8069,7 +8498,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                         {customPrivileges.map(priv => (
                           <span 
                             key={priv} 
-                            className="px-2.5 py-1.5 rounded-lg text-xs font-mono font-bold flex items-center gap-1.5 bg-[#00f5ff]/10 border border-[#00f5ff]/30 text-[#00f5ff]"
+                            className="px-2.5 py-1.5 rounded-lg text-xs font-mono font-bold flex items-center gap-1.5 bg-red-950/80 border border-yellow-400/50 text-yellow-300 shadow-sm"
                           >
                             <span>{priv === 'waiter' ? 'አስተናጋጅ (Waiter)' :
                                    priv === 'chef' ? 'የኩሽና ሰራተኛ (Chef)' :
@@ -8089,7 +8518,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                   handleRenamePrivilege(priv, val.trim());
                                 }
                               }}
-                              className="text-white hover:text-[#00f5ff] transition-colors shrink-0 ml-1 text-[10px] bg-transparent border-none cursor-pointer"
+                              className="text-white hover:text-yellow-300 transition-colors shrink-0 ml-1 text-[10px] bg-transparent border-none cursor-pointer"
                               title="የመዳረሻ ፈቃድ ስም ቀይር (Rename privilege)"
                             >
                               ✍️
@@ -8178,7 +8607,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                     </div>
                                   </div>
                                 </td>
-                                <td className="uppercase font-mono text-[11px] text-[#C1FF00] font-black">{s.role}</td>
+                                <td className="uppercase font-mono text-[11px] font-black"><span className="bg-red-950/80 border border-yellow-400/50 text-yellow-300 px-2 py-0.5 rounded shadow-sm">{s.role}</span></td>
                                 <td className="font-mono text-white/80 py-2.5">
                                   <div className="text-[11px]">
                                     <p className="text-[#00f5ff]">{s.phone || 'ያልተገባ'}</p>
@@ -10882,9 +11311,9 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                             className="w-full bg-[#181818] border border-white/10 text-white text-xs font-bold p-2.5 outline-none focus:border-yellow-400"
                             required
                           >
-                            <option value="">-- አስተናጋጅ ይምረጡ --</option>
+                            <option key="unassigned" value="">-- አስተናጋጅ ይምረጡ --</option>
                             {staff.filter(s => (s.role || '').toLowerCase() === 'waiter' || (s.accessPrivilege || '').toLowerCase() === 'waiter').map((w, idx) => (
-                              <option key={idx} value={w.name}>{w.name} (PIN: {w.pin})</option>
+                              <option key={`admin-waiter-${w.id || w.name || idx}`} value={w.name}>{w.name} (PIN: {w.pin})</option>
                             ))}
                           </select>
                         </div>
@@ -11228,9 +11657,9 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                             required
                             className="w-full bg-[#181818] border border-white/10 text-white text-xs font-bold p-2.5 outline-none focus:border-yellow-400"
                           >
-                            <option value="">-- ሰራተኛ ይምረጡ / Choose Staff --</option>
+                            <option key="unassigned" value="">-- ሰራተኛ ይምረጡ / Choose Staff --</option>
                             {staff.map((s, idx) => (
-                              <option key={idx} value={s.name}>
+                              <option key={`bonus-staff-${s.id || s.name || idx}`} value={s.name}>
                                 {s.name} ({s.role.toUpperCase()})
                               </option>
                             ))}
@@ -11618,7 +12047,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                     </div>
                                   </td>
                                   <td className="p-3 uppercase">
-                                    <span className="text-[10px] font-mono bg-white/5 border border-white/15 py-0.5 px-2 rounded">
+                                    <span className="text-[10px] font-mono bg-red-950/80 text-yellow-300 border border-yellow-400/50 py-0.5 px-2 rounded font-bold shadow-sm">
                                       {s.role}
                                     </span>
                                   </td>
@@ -11691,9 +12120,9 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                             onChange={(e) => setAttFilterStaff(e.target.value)}
                             className="w-full bg-[#181818] border border-white/10 rounded-lg p-2 text-xs text-white outline-none focus:border-[#C1FF00] font-medium"
                           >
-                            <option value="all">{appLang === 'am' ? 'ሁሉም ሰራተኞች' : 'All Staff Members'}</option>
+                            <option key="all" value="all">{appLang === 'am' ? 'ሁሉም ሰራተኞች' : 'All Staff Members'}</option>
                             {staff.map((s, sIdx) => (
-                              <option key={sIdx} value={s.name}>{s.name}</option>
+                              <option key={`att-staff-${s.id || s.name || sIdx}`} value={s.name}>{s.name}</option>
                             ))}
                           </select>
                         </div>
@@ -12402,9 +12831,9 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                             className="w-full bg-[#181818] border border-white/10 text-white text-xs font-bold p-2.5 outline-none focus:border-yellow-400"
                             required
                           >
-                            <option value="">-- አስተናጋጅ ይምረጡ --</option>
+                            <option key="unassigned" value="">-- አስተናጋጅ ይምረጡ --</option>
                             {staff.filter(s => (s.role || '').toLowerCase() === 'waiter' || (s.accessPrivilege || '').toLowerCase() === 'waiter').map((w, idx) => (
-                              <option key={idx} value={w.name}>{w.name} (PIN: {w.pin})</option>
+                              <option key={`assign-waiter-${w.id || w.name || idx}`} value={w.name}>{w.name} (PIN: {w.pin})</option>
                             ))}
                           </select>
                         </div>
@@ -12831,7 +13260,15 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                       ስርዓት ሰራተኛ ረዳት፡ {currentUser?.name || 'Reception Staff'}
                     </p>
                   </div>
-                  <div className="flex gap-2">
+
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <div className="bg-red-950/80 border border-yellow-400/50 px-3 py-1.5 rounded flex items-center gap-2 text-xs font-mono">
+                      <span className="text-[10px] text-yellow-400 font-bold uppercase flex items-center gap-1">🔒 በስራ ላይ ያለ ሪሴብሽን:</span>
+                      <span className="text-xs font-black text-white bg-black/60 px-2 py-0.5 rounded border border-red-500/50">
+                        🏨 {currentUser?.name || 'Reception Staff'}
+                      </span>
+                    </div>
+
                     <button 
                       onClick={handleLogout}
                       className="bg-red-950/80 hover:bg-red-900 font-sans border-2 border-red-500/20 text-red-100 px-4 py-2 font-black text-xs uppercase flex items-center gap-1.5 transition-all text-[10px] tracking-wider cursor-pointer"
@@ -13090,6 +13527,27 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
 
                   {/* Right Column: Allocation status grid */}
                   <div className="lg:col-span-7 space-y-6">
+                    {/* Shift Selector Banner for Receptionist */}
+                    <div className="bg-[#181818] border border-emerald-500/30 p-3 rounded-xl flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-black text-emerald-400">🛎️ የሪሴብሽን ፈረቃ መክፈያ (Receptionist Shift Isolation):</span>
+                        <select
+                          value={selectedReceptionistShiftStaff}
+                          onChange={(e) => setSelectedReceptionistShiftStaff(e.target.value)}
+                          className="bg-black border border-emerald-500 text-emerald-300 text-xs px-2.5 py-1 rounded font-bold outline-none cursor-pointer"
+                        >
+                          <option key="recept-shift-my" value="my_shift">🛎️ የእኔ ፈረቃ ምዝገባዎች ብቻ ({currentUser?.name || 'My Shift'})</option>
+                          <option key="recept-shift-all" value="all">🌐 የሁሉም ሪሴብሽኖች መዝገብ (All Room Bookings)</option>
+                          {staff.filter(s => (s.role || '').toLowerCase() === 'receptionist' || (s.accessPrivilege || '').toLowerCase() === 'receptionist').map((s, idx) => (
+                            <option key={`recept-shift-${s.id || s.name || idx}`} value={s.name}>🛎️ {s.name}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <span className="text-[10px] text-stone-400 font-mono">
+                        {selectedReceptionistShiftStaff === 'my_shift' ? '🔒 በእርስዎ ፈረቃ የተመዘገቡ ክፍሎች ብቻ' : '🌐 የሁሉም ሪሴብሽኖች መዝገብ እየታየ ነው'}
+                      </span>
+                    </div>
+
                     {/* Active allocations list */}
                     <div className="bg-black/40 border border-white/5 rounded-xl p-5 shadow-lg">
                       <div className="flex justify-between items-center border-b border-white/5 pb-2.5 mb-4">
@@ -13100,18 +13558,49 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                           <p className="text-[10px] text-white/40 mt-0.5">በአሁኑ ሰዓት በሆቴሉ ውስጥ ያሉ እንግዶች ዝርዝር መዝገብ።</p>
                         </div>
                         <span className="bg-[#121212] border border-white/10 px-2 py-1 rounded text-xs text-[#C1FF00] font-mono font-bold">
-                          {roomBookings.filter(b => b.status === 'Active').length} Rooms Occupied
+                          {roomBookings.filter(b => {
+                            if (b.status !== 'Active') return false;
+                            if (selectedReceptionistShiftStaff === 'my_shift') {
+                              const myName = (currentUser?.name || '').toLowerCase();
+                              const recName = (b.receptionistName || '').toLowerCase();
+                              return !recName || recName === myName;
+                            } else if (selectedReceptionistShiftStaff !== 'all') {
+                              const recName = (b.receptionistName || '').toLowerCase();
+                              return recName === selectedReceptionistShiftStaff.toLowerCase();
+                            }
+                            return true;
+                          }).length} Rooms Occupied
                         </span>
                       </div>
 
-                      {roomBookings.length === 0 ? (
+                      {roomBookings.filter(b => {
+                        if (selectedReceptionistShiftStaff === 'my_shift') {
+                          const myName = (currentUser?.name || '').toLowerCase();
+                          const recName = (b.receptionistName || '').toLowerCase();
+                          return !recName || recName === myName;
+                        } else if (selectedReceptionistShiftStaff !== 'all') {
+                          const recName = (b.receptionistName || '').toLowerCase();
+                          return recName === selectedReceptionistShiftStaff.toLowerCase();
+                        }
+                        return true;
+                      }).length === 0 ? (
                         <div className="text-center py-10 text-white/30 border border-dashed border-white/5">
                           <p className="text-xs font-bold font-mono">🛎️ ምንም ንቁ አልጋ/ክፍል ምዝገባ አልተገኘም! (No Occupied Rooms)</p>
                           <p className="text-[9px] mt-1 text-white/20">አዲስ እንግዳ ለመመዝገብ በስተግራ በኩል ያለውን ቅጽ ይጠቀሙ。</p>
                         </div>
                       ) : (
                         <div className="space-y-4">
-                          {roomBookings.map((b, idx) => (
+                          {roomBookings.filter(b => {
+                            if (selectedReceptionistShiftStaff === 'my_shift') {
+                              const myName = (currentUser?.name || '').toLowerCase();
+                              const recName = (b.receptionistName || '').toLowerCase();
+                              return !recName || recName === myName;
+                            } else if (selectedReceptionistShiftStaff !== 'all') {
+                              const recName = (b.receptionistName || '').toLowerCase();
+                              return recName === selectedReceptionistShiftStaff.toLowerCase();
+                            }
+                            return true;
+                          }).map((b, idx) => (
                             <div key={b.id || idx} className={`p-4 border ${b.status === 'Active' ? 'border-emerald-500/15 bg-emerald-950/5' : 'border-white/5 bg-white/2'} flex flex-col md:flex-row justify-between gap-4 transition-all relative group`}>
                               
                               <div className="space-y-2 flex-1">
@@ -13234,24 +13723,41 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                 className="w-full max-w-7xl mx-auto space-y-6 pb-20 relative z-10"
               >
                 {/* Header widget */}
-                <div className="bg-[#0b1216] border border-cyan-500/30 p-6 rounded-2xl flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 shadow-lg pr-8">
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2">
-                      <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse"></span>
-                      <span className="text-[10px] font-mono font-black text-cyan-400 uppercase tracking-widest">CASH DESK STATION TERMINAL</span>
+                <div className="bg-[#0b1216] border border-cyan-500/30 p-6 rounded-2xl space-y-4 shadow-lg pr-8">
+                  <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse"></span>
+                        <span className="text-[10px] font-mono font-black text-cyan-400 uppercase tracking-widest">CASH DESK STATION TERMINAL</span>
+                      </div>
+                      <h2 className="text-xl font-black text-white uppercase">የካሸር የክፍያ እና የሽያጭ መቆጣጠሪያ ዋና ክፍል</h2>
+                      <p className="text-xs text-white/50">
+                        የእንግዶችን ሂሳብ መቀበል፣ የእለት ገቢ ማረጋገጥ እና ደረሰኞችን ማተሚያ ክፍል (Signed in as: <strong className="text-cyan-400">{currentUser?.name || 'Cashier Portal'}</strong>)
+                      </p>
                     </div>
-                    <h2 className="text-xl font-black text-white uppercase">የካሸር የክፍያ እና የሽያጭ መቆጣጠሪያ ዋና ክፍል</h2>
-                    <p className="text-xs text-white/50">
-                      የእንግዶችን ሂሳብ መቀበል፣ የእለት ገቢ ማረጋገጥ እና ደረሰኞችን ማተሚያ ክፍል (Signed in as: <strong className="text-cyan-400">{currentUser?.name || 'Cashier Portal'}</strong>)
-                    </p>
+                    
+                    <button 
+                      onClick={handleLogout}
+                      className="bg-[#121212] hover:bg-red-500/10 border border-white/10 hover:border-red-500/40 text-white/80 hover:text-red-400 px-4 py-2 text-xs font-mono font-black uppercase rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer shrink-0"
+                    >
+                      🚪 Logout Staff (መውጫ)
+                    </button>
                   </div>
-                  
-                  <button 
-                    onClick={handleLogout}
-                    className="bg-[#121212] hover:bg-red-500/10 border border-white/10 hover:border-red-500/40 text-white/80 hover:text-red-400 px-4 py-2 text-xs font-mono font-black uppercase rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer shrink-0"
-                  >
-                    🚪 Logout Staff (መውጫ)
-                  </button>
+
+                  {/* ACTIVE CASHIER SHIFT LOCKED DISPLAY */}
+                  <div className="bg-red-950/80 border border-yellow-400/50 p-3 rounded-xl flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 text-xs font-mono">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xl">💵</span>
+                      <div>
+                        <span className="text-[9px] text-yellow-400 font-bold uppercase block">🔒 በስራ ላይ ያለ ካሸር (ACTIVE CASHIER):</span>
+                        <span className="text-sm font-black text-white">{currentUser?.name || 'ሀይሌ (ካሸር)'}</span>
+                      </div>
+                    </div>
+
+                    <div className="bg-black/60 px-3 py-1.5 rounded border border-red-500/50 text-xs font-bold text-yellow-300 font-mono flex items-center gap-1.5">
+                      <span>🔒 በሲስተሙ የተመዘገበ የካሸር ፈረቃ</span>
+                    </div>
+                  </div>
                 </div>
 
                 {/* WiFi Clock in Verification block for Cashier */}
@@ -13478,7 +13984,8 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                   confirmed: true,
                                   orderType: cashierOrderType,
                                   time: timeNow,
-                                  date: dateTodayStr
+                                  date: dateTodayStr,
+                                  createdAt: Date.now()
                                 };
 
                                 setOrders(prev => [newOrder, ...prev]);
@@ -13503,6 +14010,27 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
 
                     {/* Pending Checkout Bills List */}
                     <div className="bg-[#101010] border border-white/10 p-5 rounded-2xl space-y-4">
+                      {/* Shift Selector Banner for Cashier */}
+                      <div className="bg-[#181818] border border-cyan-500/30 p-3 rounded-xl flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-black text-cyan-400">💵 የካሸር ፈረቃ መክፈያ (Cashier Shift Isolation):</span>
+                          <select
+                            value={selectedCashierShiftStaff}
+                            onChange={(e) => setSelectedCashierShiftStaff(e.target.value)}
+                            className="bg-black border border-cyan-500 text-cyan-300 text-xs px-2.5 py-1 rounded font-bold outline-none cursor-pointer"
+                          >
+                            <option key="cashier-shift-my" value="my_shift">💵 የእኔ ፈረቃ ክፍያዎች ብቻ ({currentUser?.name || 'My Shift'})</option>
+                            <option key="cashier-shift-all" value="all">🌐 የሁሉም ካሸሮች ክፍያ (All Cashier Sales)</option>
+                            {staff.filter(s => (s.role || '').toLowerCase() === 'cashier' || (s.accessPrivilege || '').toLowerCase() === 'cashier').map((s, idx) => (
+                              <option key={`cashier-shift-${s.id || s.name || idx}`} value={s.name}>💵 {s.name}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <span className="text-[10px] text-stone-400 font-mono">
+                          {selectedCashierShiftStaff === 'my_shift' ? '🔒 በእርስዎ ፈረቃ የተሰበሰቡ ክፍያዎች ብቻ' : '🌐 የሁሉም ካሸሮች ሂሳብ እየታየ ነው'}
+                        </span>
+                      </div>
+
                       <div className="flex justify-between items-center border-b border-white/5 pb-2">
                         <h3 className="text-xs font-black uppercase text-white/70">
                           📌 ያልተከፈሉ ንቁ ትዕዛዞች እና ክፍሎች (Unsettled Hospitality Bills)
@@ -13521,13 +14049,14 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                         <div className="space-y-3">
                           {orders.filter(o => o.status !== 'Paid').map((ord) => {
                             const subtotal = ord.items.reduce((s, item) => s + (item.qty * (item.price || 0)), 0);
+                            const tableWaiter = getAssignedWaiterForTable(ord.location) || ord.waiter;
                             return (
                               <div key={ord.id} className="bg-black/50 border border-white/5 hover:border-cyan-500/30 p-4 rounded-xl flex flex-col md:flex-row justify-between items-start md:items-center gap-4 transition-all">
                                 <div className="space-y-1.5 flex-1">
-                                  <div className="flex items-center gap-2">
+                                  <div className="flex flex-wrap items-center gap-2">
                                     <span className="text-xs font-mono font-black text-white/40">{ord.id}</span>
                                     <span className="text-xs font-bold text-cyan-400 bg-cyan-950/45 px-2 py-0.5 rounded font-mono uppercase">
-                                      {ord.location || "WALK-IN"} (ጠረጴዛ/ክፍል)
+                                      🍽️ {ord.location || "WALK-IN"} {tableWaiter ? `(👤 ${tableWaiter})` : ''}
                                     </span>
                                     <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold uppercase ${
                                       ord.status === 'Completed' ? 'bg-emerald-950 text-emerald-400 border border-emerald-500/20' : 'bg-yellow-950 text-yellow-400'
@@ -13670,59 +14199,358 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                 className="max-w-6xl mx-auto w-full space-y-6 pb-20 relative text-white"
               >
                 {/* Header Profile Dashboard */}
-                <div className="bg-[#121212] border-b border-yellow-500/30 p-6 rounded-xl flex flex-col md:flex-row justify-between items-start md:items-center gap-4 shadow-md">
-                  <div className="flex items-center gap-3">
-                    <div className="w-12 h-12 rounded-full bg-yellow-400/10 border border-yellow-400/30 flex items-center justify-center text-yellow-400">
-                      <Shield className="w-6 h-6" />
+                <div className="bg-[#121212] border-b border-yellow-500/30 p-6 rounded-xl space-y-4 shadow-md">
+                  <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                    <div className="flex items-center gap-3">
+                      <div className="w-12 h-12 rounded-full bg-yellow-400/10 border border-yellow-400/30 flex items-center justify-center text-yellow-400">
+                        <Shield className="w-6 h-6" />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[9px] bg-yellow-400/20 text-yellow-400 border border-yellow-400/30 px-2 py-0.5 uppercase font-bold tracking-widest font-mono">
+                            GATE CONTROL SYSTEM
+                          </span>
+                          <span className="text-[9px] bg-white/5 text-white/70 border border-white/10 px-2 py-0.5 uppercase font-normal font-mono">
+                            V2.1 - ACTIVE
+                          </span>
+                        </div>
+                        <h2 className="text-lg font-black tracking-wider text-white uppercase mt-0.5">
+                          👮 የጥበቃ ማዕከላዊ በር (Guard Central Gateway)
+                        </h2>
+                      </div>
                     </div>
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-[9px] bg-yellow-400/20 text-yellow-400 border border-yellow-400/30 px-2 py-0.5 uppercase font-bold tracking-widest font-mono">
-                          GATE CONTROL SYSTEM
+
+                    <button
+                      onClick={() => {
+                        setActiveRole('customer');
+                        sessionStorage.removeItem('papyrus_active_staff_session');
+                      }}
+                      className="flex items-center gap-2 bg-red-950/40 border border-red-500/25 hover:bg-red-600 hover:text-white text-red-400 px-4 py-2 font-black text-[10px] uppercase tracking-widest transition-all cursor-pointer font-sans"
+                    >
+                      <LogOut className="w-3.5 h-3.5" />
+                      ከሲስተም ውጣ (LOG OUT)
+                    </button>
+                  </div>
+
+                  {/* ACTIVE GUARD SHIFT SWITCHER (የጥበቃ ፈረቃ መቀየሪያ) */}
+                  <div className="bg-[#181818] border-2 border-yellow-400/60 p-3.5 rounded-xl flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 text-xs font-mono">
+                    <div className="flex items-center gap-2.5">
+                      <span className="text-xl">👮</span>
+                      <div>
+                        <span className="text-[9px] text-yellow-400 font-bold uppercase block tracking-wider">
+                          አሁን በፈረቃ ላይ ያለ ጥበቃ (ACTIVE GUARD ON DUTY):
                         </span>
-                        <span className="text-[9px] bg-white/5 text-white/70 border border-white/10 px-2 py-0.5 uppercase font-normal font-mono">
-                          V2.1 - ACTIVE
+                        <span className="text-sm font-black text-white uppercase flex items-center gap-2">
+                          {currentUser?.name || 'አቶ ዳዊት (ጥበቃ)'}
+                          <span className="text-[9px] bg-emerald-500/20 text-emerald-300 border border-emerald-400 px-2 py-0.5 rounded font-mono font-bold animate-pulse">
+                            🟢 በስራ ላይ
+                          </span>
                         </span>
                       </div>
-                      <h2 className="text-lg font-black tracking-wider text-white uppercase mt-0.5">
-                        👮 የጥበቃ ማዕከላዊ በር (Guard Central Gateway)
-                      </h2>
+                    </div>
+
+                    <div className="flex items-center gap-2 w-full sm:w-auto">
+                      <div className="bg-red-950/80 border border-yellow-400/50 px-3 py-1.5 rounded-lg flex items-center gap-2 font-mono">
+                        <span className="text-[10px] text-yellow-400 uppercase font-bold whitespace-nowrap flex items-center gap-1">🔒 በስራ ላይ ያለ ጥበቃ:</span>
+                        <span className="text-xs font-black text-white bg-black/60 px-2 py-0.5 rounded border border-red-500/50">
+                          👮 {currentUser?.name || 'አቶ ዳዊት'}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* TOAST NOTIFICATION FOR EXIT CHECKOUT */}
+                <AnimatePresence>
+                  {exitToastMessage && (
+                    <motion.div
+                      initial={{ opacity: 0, y: -10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -10 }}
+                      className="bg-emerald-500/20 border-2 border-emerald-400 text-emerald-200 p-4 rounded-xl text-xs font-mono font-bold flex items-center justify-between shadow-xl"
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="text-xl">✅</span>
+                        <span>{exitToastMessage}</span>
+                      </div>
+                      <button
+                        onClick={() => setExitToastMessage('')}
+                        className="text-white/60 hover:text-white text-xs cursor-pointer"
+                      >
+                        ✕
+                      </button>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+
+                {/* PARKING TICKET INQUIRY & SEARCH PORTAL (የፓርኪንግ መጠየቂያና መፈተሻ ፖርታል) */}
+                <div className="bg-[#151515] border-2 border-yellow-400/60 p-5 rounded-2xl space-y-4 shadow-xl">
+                  <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-white/10 pb-3">
+                    <div className="flex items-center gap-2.5">
+                      <span className="text-2xl">🔎</span>
+                      <div>
+                        <span className="text-[9px] text-yellow-400 font-mono font-black tracking-widest block uppercase">
+                          PARKING TICKET INQUIRY & SEARCH PORTAL
+                        </span>
+                        <h3 className="text-sm font-black text-white uppercase mt-0.5">
+                          የፓርኪንግ መጠየቂያ፣ ካርድ መፈተሻና የመውጫ ማረጋገጫ (PARKING QUERY)
+                        </h3>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 text-[10px] font-mono">
+                      <span className="bg-yellow-400/10 text-yellow-300 border border-yellow-400/30 px-2.5 py-1 rounded-lg font-bold">
+                        🅿️ በፓርኪንግ ያሉ፡ <strong className="text-white">{visitorLog.filter(v => v.status === 'In Lodge').length}</strong>
+                      </span>
+                      <span className="bg-emerald-400/10 text-emerald-300 border border-emerald-400/30 px-2.5 py-1 rounded-lg font-bold">
+                        🏁 የወጡ፡ <strong className="text-white">{visitorLog.filter(v => v.status === 'Checked Out').length}</strong>
+                      </span>
                     </div>
                   </div>
 
-                  <button
-                    onClick={() => {
-                      setActiveRole('customer');
-                      sessionStorage.removeItem('papyrus_active_staff_session');
-                    }}
-                    className="flex items-center gap-2 bg-red-950/40 border border-red-500/25 hover:bg-red-600 hover:text-white text-red-400 px-4 py-2 font-black text-[10px] uppercase tracking-widest transition-all cursor-pointer font-sans"
-                  >
-                    <LogOut className="w-3.5 h-3.5" />
-                    ከሲስተም ውጣ (LOG OUT)
-                  </button>
+                  {/* Search Query Input */}
+                  <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-center">
+                    <div className="md:col-span-8 relative">
+                      <input 
+                        type="text"
+                        value={parkingInquiryQuery}
+                        onChange={(e) => setParkingInquiryQuery(e.target.value)}
+                        placeholder="🔎 የካርድ ቁጥር (ለምሳሌ TAG-#101)፣ የመኪና ሰሌዳ (AA 2 B)፣ ወይም ስልክ ያስገቡ..."
+                        className="w-full bg-[#0d0d0d] border-2 border-yellow-400/80 focus:border-yellow-300 pl-4 pr-10 py-3 text-sm text-yellow-300 font-mono font-bold tracking-wider rounded-xl outline-none shadow-inner"
+                      />
+                      {parkingInquiryQuery && (
+                        <button
+                          onClick={() => setParkingInquiryQuery('')}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-white/50 hover:text-white font-bold cursor-pointer"
+                        >
+                          ✕
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="md:col-span-4 flex items-center gap-1.5 flex-wrap">
+                      <span className="text-[9px] font-mono text-white/50 uppercase block w-full">ፈጣን መፈለጊያ (Quick Tags):</span>
+                      {visitorLog.filter(v => v.status === 'In Lodge').slice(0, 3).map(v => (
+                        <button
+                          key={v.id}
+                          type="button"
+                          onClick={() => setParkingInquiryQuery(v.ticketTagNumber || v.carPlate)}
+                          className="bg-yellow-400/15 hover:bg-yellow-400 hover:text-black border border-yellow-400/40 text-yellow-300 px-2.5 py-1 rounded-lg text-[10px] font-mono font-bold tracking-wider transition-all cursor-pointer"
+                        >
+                          {v.ticketTagNumber || v.carPlate}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Search Results Display Area */}
+                  {parkingInquiryQuery.trim() && (
+                    <div className="space-y-3 pt-2 border-t border-white/10">
+                      <div className="text-[10px] font-mono font-bold text-yellow-400 uppercase flex justify-between items-center">
+                        <span>🔎 የፓርኪንግ መጠየቂያ ውጤት (Query Search Results):</span>
+                        <span className="text-white/40">
+                          {
+                            visitorLog.filter(v => {
+                              const q = parkingInquiryQuery.toLowerCase().trim();
+                              return v.name.toLowerCase().includes(q) ||
+                                     v.phone.toLowerCase().includes(q) ||
+                                     v.carPlate.toLowerCase().includes(q) ||
+                                     (v.ticketTagNumber && v.ticketTagNumber.toLowerCase().includes(q));
+                            }).length
+                          } መዝገቦች ተገኝተዋል
+                        </span>
+                      </div>
+
+                      {
+                        visitorLog.filter(v => {
+                          const q = parkingInquiryQuery.toLowerCase().trim();
+                          return v.name.toLowerCase().includes(q) ||
+                                 v.phone.toLowerCase().includes(q) ||
+                                 v.carPlate.toLowerCase().includes(q) ||
+                                 (v.ticketTagNumber && v.ticketTagNumber.toLowerCase().includes(q));
+                        }).length === 0 ? (
+                          <div className="bg-[#101010] border border-white/10 p-6 rounded-xl text-center space-y-2">
+                            <p className="text-xs font-mono text-amber-300 font-bold">
+                              ❌ "{parkingInquiryQuery}" በሚል ቁጥር/ሰሌዳ የተመዘገበ የፓርኪንግ ካርድ አልተገኘም።
+                            </p>
+                            <p className="text-[10px] text-white/40">
+                              እባክዎ የፓርኪንግ ካርድ ቁጥሩን (TAG-#101) ወይም የመኪና ሰሌዳውን በደንብ አረጋግጠው እንደገና ይፈልጉ።
+                            </p>
+                          </div>
+                        ) : (
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            {visitorLog.filter(v => {
+                              const q = parkingInquiryQuery.toLowerCase().trim();
+                              return v.name.toLowerCase().includes(q) ||
+                                     v.phone.toLowerCase().includes(q) ||
+                                     v.carPlate.toLowerCase().includes(q) ||
+                                     (v.ticketTagNumber && v.ticketTagNumber.toLowerCase().includes(q));
+                            }).map(v => {
+                              const isIn = v.status === 'In Lodge';
+                              return (
+                                <div 
+                                  key={v.id}
+                                  className={`p-4 rounded-xl border-2 space-y-3 transition-all ${
+                                    isIn 
+                                      ? 'bg-[#1a1810] border-yellow-400/80 shadow-lg' 
+                                      : 'bg-[#101010] border-white/10 opacity-75'
+                                  }`}
+                                >
+                                  <div className="flex justify-between items-start">
+                                    <div className="space-y-1">
+                                      <div className="flex items-center gap-2">
+                                        <span className="text-xl">
+                                          {v.vehicleType === 'motorcycle' ? '🏍️' : v.vehicleType === 'walk' ? '🚶' : '🚗'}
+                                        </span>
+                                        <span className="text-sm font-black text-white uppercase">{v.name}</span>
+                                      </div>
+                                      <div className="text-[11px] font-mono text-yellow-300 font-bold">
+                                        🚗 ሰሌዳ: {v.carPlate} | 📞 {v.phone}
+                                      </div>
+                                    </div>
+
+                                    <span className={`text-[9px] font-black uppercase font-mono px-2.5 py-1 rounded-full border ${
+                                      isIn 
+                                        ? 'bg-emerald-500/20 text-emerald-300 border-emerald-400' 
+                                        : 'bg-red-500/20 text-red-300 border-red-400'
+                                    }`}>
+                                      {isIn ? '🟢 በፓርኪንግ ውስጥ ይገኛል' : '🔴 በሰላም ወጥቷል'}
+                                    </span>
+                                  </div>
+
+                                  {/* Twin Card Details */}
+                                  <div className="bg-[#101010] border border-white/10 p-2.5 rounded-lg grid grid-cols-2 gap-2 text-[10px] font-mono">
+                                    <div className="bg-red-950/30 border border-red-500/30 p-2 rounded text-red-200">
+                                      <span className="block text-[8px] text-white/50 uppercase">1️⃣ የተሽከርካሪ ካርድ:</span>
+                                      <span className="font-extrabold text-yellow-300">{v.ticketTagNumber || 'TAG-#101'}</span>
+                                    </div>
+                                    <div className="bg-emerald-950/30 border border-emerald-500/30 p-2 rounded text-emerald-200">
+                                      <span className="block text-[8px] text-white/50 uppercase">2️⃣ የባለቤት ካርድ:</span>
+                                      <span className="font-extrabold text-emerald-300">{v.ticketTagNumber || 'TAG-#101'}</span>
+                                    </div>
+                                  </div>
+
+                                  <div className="flex items-center gap-2 pt-1">
+                                    {isIn ? (
+                                      <button
+                                        type="button"
+                                        onClick={() => handleCheckoutVisitor(v)}
+                                        className="flex-1 bg-yellow-400 hover:bg-white text-black font-black text-xs uppercase py-2.5 rounded-lg transition-all cursor-pointer shadow-md flex items-center justify-center gap-1"
+                                      >
+                                        <span>🚪 መውጫ አረጋግጥ (CONFIRM EXIT)</span>
+                                      </button>
+                                    ) : (
+                                      <div className="text-[10px] font-mono text-emerald-400 font-bold bg-emerald-500/10 p-2 rounded text-center w-full">
+                                        ✅ መውጫው የተረጋገጠ - የወጣበት ሰዓት: {v.timeOut || 'N/A'}
+                                      </div>
+                                    )}
+
+                                    <button
+                                      type="button"
+                                      onClick={() => setSelectedTicketPassVisitor(v)}
+                                      className="px-3 py-2 bg-white/10 hover:bg-white/20 text-yellow-300 border border-yellow-400/30 font-mono text-[10px] uppercase font-bold rounded cursor-pointer"
+                                    >
+                                      🎫 2ቱን ካርዶች አሳይ
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )
+                      }
+                    </div>
+                  )}
                 </div>
 
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
                   {/* Left Column: Register New Visitor Entry Form */}
                   <form 
                     onSubmit={handleAddVisitor}
-                    className="lg:col-span-5 bg-[#121212] border border-white/10 p-6 rounded-xl space-y-5"
+                    className="lg:col-span-5 bg-[#121212] border border-white/10 p-6 rounded-xl space-y-4"
                   >
                     <div className="border-b border-white/5 pb-2">
-                      <span className="text-[9px] text-yellow-500 font-mono font-bold tracking-wider block uppercase">VISITOR ENTRY GATE</span>
-                      <h3 className="text-xs font-black text-white uppercase mt-0.5">➕ አዲስ እንግዳ መመዝገቢያ (Visitor Registration)</h3>
+                      <span className="text-[9px] text-yellow-500 font-mono font-bold tracking-wider block uppercase">VISITOR & PARKING GATEWAY</span>
+                      <h3 className="text-xs font-black text-white uppercase mt-0.5">➕ አዲስ የመኪና/የሞተርና የእንግዳ መግቢያ (Vehicle Entry)</h3>
+                    </div>
+
+                    {/* Vehicle Type Selection */}
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-mono font-bold uppercase text-yellow-400 block">የተሽከርካሪ/መግቢያ ዓይነት (Transport Type) *</label>
+                      <div className="grid grid-cols-3 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setGVehicleType('car')}
+                          className={`p-2.5 rounded-xl border text-center transition-all cursor-pointer ${
+                            gVehicleType === 'car'
+                              ? 'bg-yellow-400 text-black border-yellow-500 font-black shadow-md scale-[1.02]'
+                              : 'bg-[#181818] text-white/70 border-white/10 hover:border-white/30'
+                          }`}
+                        >
+                          <span className="text-lg block">🚗</span>
+                          <span className="text-[10px] uppercase font-bold tracking-tight block mt-0.5">መኪና (Car)</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setGVehicleType('motorcycle')}
+                          className={`p-2.5 rounded-xl border text-center transition-all cursor-pointer ${
+                            gVehicleType === 'motorcycle'
+                              ? 'bg-yellow-400 text-black border-yellow-500 font-black shadow-md scale-[1.02]'
+                              : 'bg-[#181818] text-white/70 border-white/10 hover:border-white/30'
+                          }`}
+                        >
+                          <span className="text-lg block">🏍️</span>
+                          <span className="text-[10px] uppercase font-bold tracking-tight block mt-0.5">ሞተር/ባጃጅ</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setGVehicleType('walk')}
+                          className={`p-2.5 rounded-xl border text-center transition-all cursor-pointer ${
+                            gVehicleType === 'walk'
+                              ? 'bg-yellow-400 text-black border-yellow-500 font-black shadow-md scale-[1.02]'
+                              : 'bg-[#181818] text-white/70 border-white/10 hover:border-white/30'
+                          }`}
+                        >
+                          <span className="text-lg block">🚶</span>
+                          <span className="text-[10px] uppercase font-bold tracking-tight block mt-0.5">እግርኛ</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Ticket Tag Serial Number */}
+                    <div className="space-y-1.5">
+                      <div className="flex justify-between items-center">
+                        <label className="text-[10px] font-mono font-bold uppercase text-yellow-400">የፓርኪንግ ቁጥር / የታግ ቁጥር (Ticket Tag #)</label>
+                        <span className="text-[9px] text-white/40 font-mono">ተከታታይ የድርጅቱ ቁጥር</span>
+                      </div>
+                      <input 
+                        type="text"
+                        value={gTicketTag}
+                        onChange={(e) => setGTicketTag(e.target.value)}
+                        placeholder={`ለምሳሌ፡ TAG-#${100 + visitorLog.length + 1} (ወይም ባዶ ይተው)`}
+                        className="w-full bg-[#181818] border border-yellow-500/30 p-2.5 text-xs text-yellow-300 font-mono font-black uppercase tracking-widest outline-none focus:border-yellow-400 rounded"
+                      />
+                    </div>
+
+                    {/* Twin Tag Notice Box */}
+                    <div className="bg-amber-500/10 border border-amber-500/30 p-3 rounded-xl text-[10px] font-mono text-amber-200/90 space-y-1">
+                      <p className="font-extrabold text-amber-300 uppercase">🎟️ የድርጅቱ ሁለት ተመሳስይ ፓርኪንግ ካርዶች፦</p>
+                      <p>1️⃣ <span className="font-bold text-white">ካርድ 1 (Vehicle Tag):</span> ተሽከርካሪው/ሞተሩ ላይ ይለጠፋል/ይቀመጣል</p>
+                      <p>2️⃣ <span className="font-bold text-white">ካርድ 2 (Driver Pass):</span> ለባለቤቱ ይገባል፤ ሲወጡ ተመሳስሎ ይረከባል</p>
                     </div>
 
                     {/* Guest Name input */}
                     <div className="space-y-1.5">
-                      <label className="text-[10px] font-mono font-bold uppercase text-white/50 block">የእንግዳ ስም (Visitor Full Name) *</label>
+                      <label className="text-[10px] font-mono font-bold uppercase text-white/50 block">የእንግዳ/የባለቤት ስም (Visitor Full Name) *</label>
                       <input 
                         type="text"
                         required
                         value={gName}
                         onChange={(e) => setGName(e.target.value)}
-                        placeholder="የእንግዳ ስም ያስገቡ..."
-                        className="w-full bg-[#181818] border border-white/10 p-3 text-xs text-white uppercase tracking-wider outline-none focus:border-yellow-400 rounded"
+                        placeholder="የእንግዳ ወይም የባለቤት ስም ያስገቡ..."
+                        className="w-full bg-[#181818] border border-white/10 p-2.5 text-xs text-white uppercase tracking-wider outline-none focus:border-yellow-400 rounded"
                       />
                     </div>
 
@@ -13734,30 +14562,31 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                         value={gPhone}
                         onChange={(e) => setGPhone(e.target.value)}
                         placeholder="ለምሳሌ፡ 0911223344"
-                        className="w-full bg-[#181818] border border-white/10 p-3 text-xs text-white font-mono outline-none focus:border-yellow-400 rounded"
+                        className="w-full bg-[#181818] border border-white/10 p-2.5 text-xs text-white font-mono outline-none focus:border-yellow-400 rounded"
                       />
                     </div>
 
                     {/* Car Plate input */}
                     <div className="space-y-1.5">
-                      <label className="text-[10px] font-mono font-bold uppercase text-white/50 block">የመኪና ሰሌዳ ቁጥር (Car Plate Number)</label>
+                      <label className="text-[10px] font-mono font-bold uppercase text-white/50 block">የመኪና/የሞተር ሰሌዳ ቁጥር (Plate Number)</label>
                       <input 
                         type="text"
                         value={gPlate}
                         onChange={(e) => setGPlate(e.target.value)}
-                        placeholder="AA 2 B 12345"
-                        className="w-full bg-[#181818] border border-white/10 p-3 text-xs text-white uppercase tracking-wider outline-none focus:border-yellow-400 rounded"
+                        placeholder="AA 2 B 12345 (ወይም ኮድ 2/3)"
+                        className="w-full bg-[#181818] border border-white/10 p-2.5 text-xs text-white uppercase tracking-wider outline-none focus:border-yellow-400 rounded font-mono"
                       />
                     </div>
 
                     {/* Purpose selection & Fast presets */}
                     <div className="space-y-2">
-                      <label className="text-[10px] font-mono font-bold uppercase text-white/50 block">የጉብኝት ምክንያት (Purpose of Visit)</label>
+                      <label className="text-[10px] font-mono font-bold uppercase text-white/50 block">የጉብኝት ምክንያት (Purpose of Visit) *</label>
                       <select
                         value={gPurpose}
                         onChange={(e) => setGPurpose(e.target.value)}
-                        className="w-full bg-[#181818] border border-white/10 p-3 text-xs text-white outline-none focus:border-yellow-400 rounded cursor-pointer font-sans"
+                        className="w-full bg-[#181818] border border-white/10 p-2.5 text-xs text-white outline-none focus:border-yellow-400 rounded cursor-pointer font-sans"
                       >
+                        <option value="ለፓርኪንግ መግቢያ (Parking Entry)">🅿️ ለፓርኪንግ መግቢያ (Parking Entry)</option>
                         <option value="ምግብና መጠጥ (Dine & Drink)">🍽️ ምግብና መጠጥ (Dine & Drink)</option>
                         <option value="ክፍል ለመያዝ (Lodge Booking)">🏨 ክፍል ለመያዝ (Lodge Booking)</option>
                         <option value="ሰራተኛ ለመጠየቅ (Staff Visit)">👥 ሰራተኛ ለመጠየቅ (Staff Visit)</option>
@@ -13767,6 +14596,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
 
                       <div className="flex flex-wrap gap-1.5 pt-1">
                         {[
+                          'Parking Entry',
                           'Dine & Drink',
                           'Lodge Booking',
                           'Staff Visit',
@@ -13776,6 +14606,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                             key={presetName}
                             type="button"
                             onClick={() => {
+                              if (presetName === 'Parking Entry') setGPurpose('ለፓርኪንግ መግቢያ (Parking Entry)');
                               if (presetName === 'Dine & Drink') setGPurpose('ምግብና መጠጥ (Dine & Drink)');
                               if (presetName === 'Lodge Booking') setGPurpose('ክፍል ለመያዝ (Lodge Booking)');
                               if (presetName === 'Staff Visit') setGPurpose('ሰራተኛ ለመጠየቅ (Staff Visit)');
@@ -13791,9 +14622,9 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
 
                     <button
                       type="submit"
-                      className="w-full bg-yellow-400 hover:bg-white text-black font-black text-xs uppercase py-3.5 tracking-wider rounded transition-colors cursor-pointer flex items-center justify-center gap-1"
+                      className="w-full bg-yellow-400 hover:bg-white text-black font-black text-xs uppercase py-3.5 tracking-wider rounded transition-colors cursor-pointer flex items-center justify-center gap-1 shadow-lg"
                     >
-                      <span>➕ አስመዝግብ (REGISTER VISIT)</span>
+                      <span>🅿️ መግቢያ መዝግብና 2ቱን ካርዶች አውጣ (REGISTER ENTRY)</span>
                     </button>
                   </form>
 
@@ -13801,21 +14632,93 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                   <div className="lg:col-span-7 bg-[#121212] border border-white/10 p-6 rounded-xl space-y-4">
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-white/5 pb-2">
                       <div>
-                        <span className="text-[9px] text-yellow-500 font-mono font-bold tracking-wider block uppercase">VISITOR LOGS DATABASE</span>
-                        <h3 className="text-xs font-black text-white uppercase mt-0.5">📋 የዛሬው የእንግዶች እንቅስቃሴ (Visitor Log)</h3>
+                        <span className="text-[9px] text-yellow-500 font-mono font-bold tracking-wider block uppercase">PARKING & VISITOR LOGS DATABASE</span>
+                        <h3 className="text-xs font-black text-white uppercase mt-0.5">📋 የዛሬው የፓርኪንግና የእንግዶች እንቅስቃሴ (Vehicle & Visitor Log)</h3>
                       </div>
-                      <div className="text-right">
+                      <div className="text-right flex items-center gap-2">
                         <span className="text-[9px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded font-black font-mono">
-                          {visitorLog.filter(v => v.status === 'In Lodge').length} INSIDE LOOSELY
+                          🅿️ {visitorLog.filter(v => v.status === 'In Lodge').length} በፓርኪንግ/ሎጁ ውስጥ ያሉ
                         </span>
                       </div>
+                    </div>
+
+                    {/* Guard Shift Staff Filter Controls (በጥበቃ ስምና በፈረቃ የመለያ መቆጣጠሪያ) */}
+                    <div className="bg-[#181818] border border-yellow-400/30 p-2.5 rounded-lg flex flex-wrap items-center justify-between gap-2 text-xs font-mono">
+                      <span className="text-[10px] font-bold text-yellow-400 uppercase flex items-center gap-1">
+                        <span>👮</span> የጥበቃ ፈረቃ መለያ (GUARD SHIFT ISOLATION):
+                      </span>
+                      
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedGuardShiftStaff('all')}
+                          className={`px-2.5 py-1 rounded text-[10px] font-bold transition-all cursor-pointer ${
+                            selectedGuardShiftStaff === 'all'
+                              ? 'bg-yellow-400 text-black font-black shadow'
+                              : 'bg-white/5 text-white/70 hover:bg-white/10'
+                          }`}
+                        >
+                          🌐 የሁሉም ጥበቃዎች መዝገብ
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setSelectedGuardShiftStaff('my_shift')}
+                          className={`px-2.5 py-1 rounded text-[10px] font-bold transition-all cursor-pointer ${
+                            selectedGuardShiftStaff === 'my_shift'
+                              ? 'bg-emerald-400 text-black font-black shadow'
+                              : 'bg-emerald-950/40 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-900/40'
+                          }`}
+                        >
+                          👤 የእኔ ፈረቃ ብቻ ({currentUser?.name || 'አቶ ዳዊት'})
+                        </button>
+
+                        <select
+                          value={selectedGuardShiftStaff}
+                          onChange={(e) => setSelectedGuardShiftStaff(e.target.value)}
+                          className="bg-black border border-yellow-400/50 text-yellow-300 text-[10px] px-2 py-1 rounded font-bold outline-none cursor-pointer"
+                        >
+                          <option key="all" value="all">-- በጥበቃ ስም ይለዩ (Select Guard) --</option>
+                          {Array.from(new Set([
+                            'አቶ ዳዊት', 'አቶ ካሊድ', 'አቶ አበበ',
+                            ...visitorLog.map(v => v.registeredByGuard).filter(Boolean),
+                            ...visitorLog.map(v => v.verifiedByGuard).filter(Boolean)
+                          ])).map((gName, idx) => (
+                            <option key={`guard-filter-${gName}-${idx}`} value={gName}>👮 {gName}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* Category Filter Tabs */}
+                    <div className="flex flex-wrap gap-1.5 pt-1">
+                      {[
+                        { id: 'all', label: '🔍 ሁሉንም', count: visitorLog.length },
+                        { id: 'in_parking', label: '🟢 በፓርኪንግ ያሉ', count: visitorLog.filter(v => v.status === 'In Lodge').length },
+                        { id: 'cars', label: '🚗 መኪኖች', count: visitorLog.filter(v => v.vehicleType === 'car').length },
+                        { id: 'motorcycles', label: '🏍️ ሞተሮች', count: visitorLog.filter(v => v.vehicleType === 'motorcycle').length },
+                        { id: 'checked_out', label: '🔴 የወጡ', count: visitorLog.filter(v => v.status === 'Checked Out').length },
+                      ].map((cat) => (
+                        <button
+                          key={cat.id}
+                          type="button"
+                          onClick={() => setParkingFilterCategory(cat.id as any)}
+                          className={`px-2.5 py-1 rounded-lg text-[10px] font-mono font-bold transition-all cursor-pointer ${
+                            parkingFilterCategory === cat.id
+                              ? 'bg-yellow-400 text-black shadow'
+                              : 'bg-white/5 text-white/60 hover:bg-white/10 hover:text-white border border-white/10'
+                          }`}
+                        >
+                          {cat.label} ({cat.count})
+                        </button>
+                      ))}
                     </div>
 
                     {/* Search Field */}
                     <div className="relative">
                       <input 
                         type="search"
-                        placeholder="ስም፣ ስልክ ወይም የመኪና ሰሌዳ ቁጥር ይፈልጉ..."
+                        placeholder="ስም፣ ስልክ፣ የፓርኪንግ ቁጥር (TAG) ወይም የመኪና ሰሌዳ ቁጥር ይፈልጉ..."
                         value={guardSearch}
                         onChange={(e) => setGuardSearch(e.target.value)}
                         className="w-full bg-[#181818] border border-white/10 pl-3 pr-10 py-2.5 text-xs text-white outline-none focus:border-yellow-400 rounded"
@@ -13825,80 +14728,164 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
 
                     <div className="overflow-y-auto max-h-[480px] space-y-2.5 pr-1">
                       {visitorLog.filter(v => {
+                        // Guard shift staff filter
+                        if (selectedGuardShiftStaff === 'my_shift') {
+                          const myName = (currentUser?.name || '').toLowerCase();
+                          const regG = (v.registeredByGuard || '').toLowerCase();
+                          const verG = (v.verifiedByGuard || '').toLowerCase();
+                          if (!regG.includes(myName) && !verG.includes(myName)) return false;
+                        } else if (selectedGuardShiftStaff !== 'all' && selectedGuardShiftStaff !== 'my_shift') {
+                          const selG = selectedGuardShiftStaff.toLowerCase();
+                          const regG = (v.registeredByGuard || '').toLowerCase();
+                          const verG = (v.verifiedByGuard || '').toLowerCase();
+                          if (!regG.includes(selG) && !verG.includes(selG)) return false;
+                        }
+
+                        // Category filter
+                        if (parkingFilterCategory === 'in_parking' && v.status !== 'In Lodge') return false;
+                        if (parkingFilterCategory === 'checked_out' && v.status !== 'Checked Out') return false;
+                        if (parkingFilterCategory === 'cars' && v.vehicleType !== 'car') return false;
+                        if (parkingFilterCategory === 'motorcycles' && v.vehicleType !== 'motorcycle') return false;
+
+                        // Search query filter
                         const q = guardSearch.toLowerCase().trim();
                         if (!q) return true;
                         return v.name.toLowerCase().includes(q) || 
                                v.phone.toLowerCase().includes(q) || 
                                v.carPlate.toLowerCase().includes(q) ||
+                               (v.ticketTagNumber && v.ticketTagNumber.toLowerCase().includes(q)) ||
                                v.purpose.toLowerCase().includes(q);
                       }).length === 0 ? (
                         <div className="text-center py-12 text-white/30 text-xs font-mono space-y-1">
-                          <p>📭 ምንም የእንግዳ መዝገብ አልተገኘም።</p>
-                          <p className="text-[10px] text-white/20">No matching visitor records found.</p>
+                          <p>📭 ምንም የፓርኪንግ ወይንም የእንግዳ መዝገብ አልተገኘም።</p>
+                          <p className="text-[10px] text-white/20">No matching visitor or parking records found.</p>
                         </div>
                       ) : (
                         visitorLog.filter(v => {
+                          // Guard shift staff filter
+                          if (selectedGuardShiftStaff === 'my_shift') {
+                            const myName = (currentUser?.name || '').toLowerCase();
+                            const regG = (v.registeredByGuard || '').toLowerCase();
+                            const verG = (v.verifiedByGuard || '').toLowerCase();
+                            if (!regG.includes(myName) && !verG.includes(myName)) return false;
+                          } else if (selectedGuardShiftStaff !== 'all' && selectedGuardShiftStaff !== 'my_shift') {
+                            const selG = selectedGuardShiftStaff.toLowerCase();
+                            const regG = (v.registeredByGuard || '').toLowerCase();
+                            const verG = (v.verifiedByGuard || '').toLowerCase();
+                            if (!regG.includes(selG) && !verG.includes(selG)) return false;
+                          }
+
+                          // Category filter
+                          if (parkingFilterCategory === 'in_parking' && v.status !== 'In Lodge') return false;
+                          if (parkingFilterCategory === 'checked_out' && v.status !== 'Checked Out') return false;
+                          if (parkingFilterCategory === 'cars' && v.vehicleType !== 'car') return false;
+                          if (parkingFilterCategory === 'motorcycles' && v.vehicleType !== 'motorcycle') return false;
+
+                          // Search query filter
                           const q = guardSearch.toLowerCase().trim();
                           if (!q) return true;
                           return v.name.toLowerCase().includes(q) || 
                                  v.phone.toLowerCase().includes(q) || 
                                  v.carPlate.toLowerCase().includes(q) ||
+                                 (v.ticketTagNumber && v.ticketTagNumber.toLowerCase().includes(q)) ||
                                  v.purpose.toLowerCase().includes(q);
                         }).map((v) => {
                           const isInside = v.status === 'In Lodge';
+                          const isParking = v.purpose.includes('ፓርኪንግ') || v.purpose.toLowerCase().includes('parking');
                           return (
                             <div 
                               key={v.id}
-                              className={`border p-4 transition-all rounded-lg ${
+                              className={`border p-4 transition-all rounded-lg relative overflow-hidden ${
                                 isInside 
-                                  ? 'bg-[#181818] hover:bg-[#202020] border-yellow-500/20' 
-                                  : 'bg-black/20 hover:bg-[#121212]/30 border-white/5 opacity-70'
+                                  ? 'bg-[#181818] hover:bg-[#202020] border-yellow-500/30 shadow-md' 
+                                  : 'bg-black/30 hover:bg-[#121212]/30 border-white/5 opacity-75'
                               }`}
                             >
                               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3.5">
-                                <div className="space-y-1">
+                                <div className="space-y-1.5">
                                   <div className="flex items-center gap-2 flex-wrap">
                                     <h4 className="font-extrabold text-sm uppercase text-white tracking-wide">{v.name}</h4>
+                                    
+                                    {/* Vehicle Type Badge */}
+                                    <span className="text-[9px] bg-amber-500/20 text-amber-300 border border-amber-500/40 px-2 py-0.5 font-black uppercase font-mono tracking-wider rounded flex items-center gap-1">
+                                      {v.vehicleType === 'motorcycle' ? '🏍️ ሞተር/ባጃጅ' : v.vehicleType === 'walk' ? '🚶 እግርኛ' : '🚗 መኪና'}
+                                    </span>
+
+                                    {/* Ticket Tag Badge */}
+                                    <span className="text-[9px] bg-yellow-400 text-black font-black px-2 py-0.5 font-mono tracking-wider rounded">
+                                      🎫 {v.ticketTagNumber || 'TAG-#101'}
+                                    </span>
+
                                     <span className={`text-[8px] px-2 py-0.5 font-bold uppercase tracking-wider rounded ${
                                       isInside 
-                                        ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30' 
-                                        : 'bg-white/5 text-white/40 border border-white/5'
+                                        ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 animate-pulse' 
+                                        : 'bg-red-500/15 text-red-400 border border-red-500/30'
                                     }`}>
-                                      {isInside ? '🟢 በሎጁ ውስጥ' : '🔴 ወጥቷል / OUT'}
+                                      {isInside ? '🟢 በሎጁ/ፓርኪንግ ውስጥ' : '🔴 በሰላም ወጥቷል / EXIT VERIFIED'}
                                     </span>
                                   </div>
 
-                                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-y-1 gap-x-4 text-[10px] font-mono text-white/60">
+                                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-y-1 gap-x-4 text-[10px] font-mono text-white/70">
                                     {v.phone && <div>📞 ስልክ: <span className="text-white font-bold">{v.phone}</span></div>}
-                                    {v.carPlate && <div>🚗 ሰሌዳ: <span className="text-amber-400 font-bold uppercase">{v.carPlate}</span></div>}
-                                    <div>🌟 ምክንያት: <span className="text-[#C1FF00]">{v.purpose}</span></div>
+                                    {v.carPlate && (
+                                      <div className="bg-yellow-400/10 border border-yellow-400/30 px-1.5 py-0.5 rounded inline-block">
+                                        🚗 ሰሌዳ: <span className="text-yellow-300 font-extrabold uppercase tracking-widest">{v.carPlate}</span>
+                                      </div>
+                                    )}
+                                    <div>🌟 ምክንያት: <span className="text-[#C1FF00] font-bold">{v.purpose}</span></div>
                                   </div>
 
-                                  <div className="text-[9px] text-white/40 flex items-center gap-3 font-mono pt-0.5">
-                                    <div>🕒 የገባበት፡ <span className="text-white/60">{v.timeIn}</span></div>
+                                  <div className="text-[9px] text-white/50 flex flex-wrap items-center gap-3 font-mono pt-0.5">
+                                    <div>🕒 የመግቢያ ሰዓት፡ <span className="text-emerald-300 font-bold">{v.timeIn}</span></div>
                                     {!isInside && v.timeOut && (
-                                      <div>🕒 የወጣበት፡ <span className="text-red-400 font-bold">{v.timeOut}</span></div>
+                                      <div>🏁 የመውጫ ሰዓት፡ <span className="text-red-400 font-bold">{v.timeOut}</span></div>
+                                    )}
+                                    <div className="text-yellow-300 font-bold bg-yellow-500/10 border border-yellow-500/20 px-1.5 py-0.5 rounded">
+                                      👮 የመዘገበው ጥበቃ: <span className="text-white">{v.registeredByGuard || 'አቶ ዳዊት'}</span>
+                                    </div>
+                                    {v.verifiedByGuard && (
+                                      <div className="text-emerald-300 font-bold bg-emerald-500/10 border border-emerald-500/20 px-1.5 py-0.5 rounded">
+                                        🚪 ያረጋገጠው/ያወጣው: <span className="text-white">{v.verifiedByGuard}</span>
+                                      </div>
                                     )}
                                   </div>
                                 </div>
 
-                                <div className="flex items-center gap-2 w-full sm:w-auto shrink-0 pt-2 sm:pt-0">
+                                <div className="flex flex-wrap sm:flex-nowrap items-center gap-2 w-full sm:w-auto shrink-0 pt-2 sm:pt-0">
+                                  {/* View / Print Dual Passes Button */}
+                                  <button
+                                    type="button"
+                                    onClick={() => setSelectedTicketPassVisitor(v)}
+                                    className="px-3 py-2 bg-yellow-500/20 hover:bg-yellow-400 hover:text-black text-yellow-300 border border-yellow-400/40 font-mono font-bold text-[9.5px] uppercase tracking-wider rounded transition-all cursor-pointer flex items-center gap-1"
+                                    title="ሁለቱን ተመሳስይ ካርዶች አትም / ተመልከት"
+                                  >
+                                    <span>🎫 2ቱን ካርዶች አሳይ/አትም</span>
+                                  </button>
+
                                   {isInside ? (
                                     <button
                                       type="button"
-                                      onClick={() => handleCheckoutVisitor(v.id)}
-                                      className="flex-1 sm:flex-none px-4 py-2 bg-yellow-400 hover:bg-white text-black font-extrabold text-[10px] uppercase tracking-wider cursor-pointer transition-colors"
+                                      onClick={() => handleCheckoutVisitor(v)}
+                                      className="flex-1 sm:flex-none px-3.5 py-2 bg-yellow-400 hover:bg-white text-black font-extrabold text-[10px] uppercase tracking-wider cursor-pointer transition-colors shadow-md rounded"
                                     >
-                                      🚪 ውጭ አድርግ (CHECK OUT)
+                                      🚪 መውጫ አረጋግጥ (EXIT)
                                     </button>
                                   ) : (
-                                    <span className="text-[9.5px] text-white/30 font-mono italic px-3">ወጥቷል Verified</span>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        alert(`📄 የፓርኪንግና የመውጫ ማረጋገጫ ቲኬት (Gate Exit Pass):\n\n• የእንግዳ ስም: ${v.name}\n• የተሽከርካሪ አይነት: ${v.vehicleType === 'motorcycle' ? '🏍️ ሞተር / ባጃጅ' : v.vehicleType === 'walk' ? '🚶 እግርኛ' : '🚗 መኪና'}\n• የፓርኪንግ ካርድ #: ${v.ticketTagNumber || 'TAG-#101'}\n• የመኪና/ሞተር ሰሌዳ: ${v.carPlate || 'N/A'}\n• ስልክ: ${v.phone || 'N/A'}\n• የገባበት ሰዓት: ${v.timeIn}\n• የወጣበት ሰዓት: ${v.timeOut || 'N/A'}\n• ያረጋገጠው ጥበቃ: ${v.verifiedByGuard || 'Guard Gate'}\n• ሁኔታ: ✅ 2ቱ ካርዶች ተመሳስለው በሰላም ተሸኝቷል (Verified Exit)`);
+                                      }}
+                                      className="px-3 py-1.5 bg-white/10 hover:bg-white/20 text-yellow-300 border border-yellow-400/30 rounded text-[9px] font-mono uppercase tracking-wider cursor-pointer"
+                                    >
+                                      📄 የመውጫ ቲኬት አሳይ
+                                    </button>
                                   )}
 
                                   <button
                                     type="button"
                                     onClick={() => handleDeleteVisitor(v.id)}
-                                    className="p-2 bg-red-950/20 hover:bg-red-900 border border-white/5 hover:border-red-500 transition-colors text-red-400 hover:text-white cursor-pointer"
+                                    className="p-2 bg-red-950/20 hover:bg-red-900 border border-white/5 hover:border-red-500 transition-colors text-red-400 hover:text-white cursor-pointer rounded"
                                     title="መዝገብ ሰርዝ"
                                   >
                                     <Trash2 className="w-3.5 h-3.5" />
@@ -13992,6 +14979,45 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
         chapaActive={chapaActive}
         chapaMode={chapaMode}
         appLang={appLang}
+        orders={orders}
+        onOpenLiveTracker={() => {
+          setIsCartOpen(false);
+          setIsLiveTrackerOpen(true);
+        }}
+      />
+
+      {/* LIVE ORDER TRACKER & QUEUE DISPLAY MODAL */}
+      <LiveOrderTracker
+        mode="modal"
+        isOpen={isLiveTrackerOpen}
+        onClose={() => setIsLiveTrackerOpen(false)}
+        orders={orders}
+        guestLocation={guestLocation}
+        trackedOrderIds={trackedOrderIds}
+        highlightedOrderId={lastPlacedOrderId}
+        appLang={appLang}
+        expandedOrders={expandedOrders}
+        onToggleExpand={(orderId) =>
+          setExpandedOrders((prev) => ({
+            ...prev,
+            [orderId]: prev[orderId] !== undefined ? !prev[orderId] : false,
+          }))
+        }
+        onEditOrder={(ord) => {
+          setIsLiveTrackerOpen(false);
+          setAdjustingOrder(ord);
+        }}
+        onCancelOrder={(orderId) => {
+          askConfirmAndRun(
+            'ይህንን ትዕዛዝ ሙሉ በሙሉ መሰረዝ ይፈልጋሉ? (Are you sure you want to cancel this order?)',
+            () => {
+              setOrders((prev) => prev.filter((o) => o.id !== orderId));
+              setTrackedOrderIds((prev) => prev.filter((id) => id !== orderId));
+              if (lastPlacedOrderId === orderId) setLastPlacedOrderId(null);
+            }
+          );
+        }}
+        onRefresh={handleRefreshLiveOrders}
       />
 
       {/* VIDEO BACKWARD COMPATIBLE RESILIENT FALLBACK PLAYER MODAL */}
@@ -14187,6 +15213,505 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                 ))}
               </div>
             </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* QUICK BACKGROUND VIDEO MODAL */}
+      <AnimatePresence>
+        {showQuickVideoModal && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => setShowQuickVideoModal(false)}
+            className="fixed inset-0 bg-black/80 backdrop-blur-md z-[999] flex items-center justify-center p-4"
+          >
+            <motion.div 
+              initial={{ scale: 0.9, y: 20 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.9, y: 20 }}
+              onClick={(e) => e.stopPropagation()}
+              className="bg-[#121212] border-2 border-amber-500/50 rounded-2xl max-w-xl w-full p-5 shadow-2xl text-white space-y-4 relative overflow-hidden"
+            >
+              {/* Glow Accent */}
+              <div className="absolute -top-10 -right-10 w-40 h-40 bg-amber-500/10 rounded-full blur-2xl pointer-events-none" />
+
+              {/* Header */}
+              <div className="flex items-center justify-between border-b border-white/10 pb-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-2xl">🎬</span>
+                  <div>
+                    <h3 className="text-base font-black text-white uppercase tracking-wider">
+                      {appLang === 'am' ? 'የጀርባ ቪዲዮ ማስተካከያ' : 'Background Video Control'}
+                    </h3>
+                    <p className="text-[10px] text-stone-400 font-mono">
+                      {appLang === 'am' ? 'የሬስቶራንቱን የጀርባ ቪዲዮ ይምረጡ ወይም የራስዎን ይጫኑ' : 'Choose a background video loop or upload your own'}
+                    </p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setShowQuickVideoModal(false)}
+                  className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white font-bold flex items-center justify-center cursor-pointer transition-colors"
+                >
+                  ✕
+                </button>
+              </div>
+
+              {/* Toggle Video On/Off */}
+              <div className="flex items-center justify-between bg-black/50 p-3 rounded-xl border border-white/10">
+                <span className="text-xs font-extrabold uppercase text-amber-200">
+                  {appLang === 'am' ? 'የጀርባ ቪዲዮ ማብሪያ/ማጥፊያ' : 'Background Video Status'}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const newState = !isBgVideoEnabled;
+                    setIsBgVideoEnabled(newState);
+                  }}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-black uppercase tracking-wider transition-colors cursor-pointer border ${
+                    isBgVideoEnabled 
+                      ? 'bg-[#C1FF00] text-black border-[#C1FF00]' 
+                      : 'bg-stone-800 text-stone-400 border-stone-700'
+                  }`}
+                >
+                  {isBgVideoEnabled ? (appLang === 'am' ? 'BERTWAL (ON)' : 'ON') : (appLang === 'am' ? 'TEFTWAL (OFF)' : 'OFF')}
+                </button>
+              </div>
+
+              {/* Preset Video Grid */}
+              <div className="space-y-2">
+                <span className="text-[10px] font-mono font-bold text-amber-300 uppercase block tracking-wider">
+                  ✨ {appLang === 'am' ? 'የተዘጋጁ ምርጥ የቪዲዮ አማራጮች (PRESET LOOPS)' : 'PRESET VIDEO LOOPS'}
+                </span>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBgVideoUrl('https://www.youtube.com/watch?v=EvwYOmxaxdA');
+                      setBgVideoType('youtube');
+                      setIsBgVideoEnabled(true);
+                      alert(appLang === 'am' ? '👨‍🍳 የሼፍ ኩኪንግ እሳት ቪዲዮ ተመረጠ!' : 'Chef Cooking Fire loop selected!');
+                    }}
+                    className={`p-3 rounded-xl border text-left transition-all flex items-center gap-3 cursor-pointer ${
+                      bgVideoType === 'youtube' && bgVideoUrl.includes('EvwYOmxaxdA')
+                        ? 'bg-amber-500/20 border-amber-400 text-white shadow-lg shadow-amber-500/10'
+                        : 'bg-white/5 border-white/10 text-stone-300 hover:bg-white/10'
+                    }`}
+                  >
+                    <span className="text-2xl">👨‍🍳</span>
+                    <div>
+                      <div className="text-xs font-extrabold text-amber-100">
+                        {appLang === 'am' ? 'የሼፍ ኩኪንግ እሳትና ምግብ' : 'Chef Cooking & Fire Sizzle'}
+                      </div>
+                      <div className="text-[9px] font-mono text-amber-300/80">Black Spaghetti & Pan Fire</div>
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBgVideoUrl('https://www.youtube.com/watch?v=1GrEP_j9A4c');
+                      setBgVideoType('youtube');
+                      setIsBgVideoEnabled(true);
+                      alert(appLang === 'am' ? '🥩 የምግብና ጃዝ አምቢያንስ ተመረጠ!' : 'Gourmet Jazz Ambience selected!');
+                    }}
+                    className={`p-3 rounded-xl border text-left transition-all flex items-center gap-3 cursor-pointer ${
+                      bgVideoType === 'youtube' && bgVideoUrl.includes('1GrEP_j9A4c')
+                        ? 'bg-amber-500/20 border-amber-400 text-white shadow-lg shadow-amber-500/10'
+                        : 'bg-white/5 border-white/10 text-stone-300 hover:bg-white/10'
+                    }`}
+                  >
+                    <span className="text-2xl">🥩</span>
+                    <div>
+                      <div className="text-xs font-extrabold text-amber-100">
+                        {appLang === 'am' ? 'የምግብና ጃዝ ሬስቶራንት' : 'Gourmet Jazz & Dining'}
+                      </div>
+                      <div className="text-[9px] font-mono text-amber-300/80">Luxury Dining Ambience</div>
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBgVideoUrl('https://www.youtube.com/watch?v=AHuU7i--EUc');
+                      setBgVideoType('youtube');
+                      setIsBgVideoEnabled(true);
+                      alert(appLang === 'am' ? '🏨 የፓፒረስ ሎጅ መግቢያ ተመረጠ!' : 'Papyrus Lodge Entrance selected!');
+                    }}
+                    className={`p-3 rounded-xl border text-left transition-all flex items-center gap-3 cursor-pointer ${
+                      bgVideoType === 'youtube' && bgVideoUrl.includes('AHuU7i--EUc')
+                        ? 'bg-amber-500/20 border-amber-400 text-white shadow-lg shadow-amber-500/10'
+                        : 'bg-white/5 border-white/10 text-stone-300 hover:bg-white/10'
+                    }`}
+                  >
+                    <span className="text-2xl">🏨</span>
+                    <div>
+                      <div className="text-xs font-extrabold text-amber-100">
+                        {appLang === 'am' ? 'የፓፒረስ ሎጅ መግቢያ' : 'Papyrus Lodge Resort'}
+                      </div>
+                      <div className="text-[9px] font-mono text-amber-300/80">Resort & Entrance View</div>
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBgVideoUrl('https://www.youtube.com/watch?v=RIsV69W7Qj0');
+                      setBgVideoType('youtube');
+                      setIsBgVideoEnabled(true);
+                      alert(appLang === 'am' ? '🌿 የሐዋሳ ሐይቅ ተፈጥሮ ተመረጠ!' : 'Lake Hawassa View selected!');
+                    }}
+                    className={`p-3 rounded-xl border text-left transition-all flex items-center gap-3 cursor-pointer ${
+                      bgVideoType === 'youtube' && bgVideoUrl.includes('RIsV69W7Qj0')
+                        ? 'bg-amber-500/20 border-amber-400 text-white shadow-lg shadow-amber-500/10'
+                        : 'bg-white/5 border-white/10 text-stone-300 hover:bg-white/10'
+                    }`}
+                  >
+                    <span className="text-2xl">🌿</span>
+                    <div>
+                      <div className="text-xs font-extrabold text-amber-100">
+                        {appLang === 'am' ? 'የሐዋሳ ሐይቅ ተፈጥሮ' : 'Lake Hawassa Scenic'}
+                      </div>
+                      <div className="text-[9px] font-mono text-amber-300/80">Nature & Water Waves</div>
+                    </div>
+                  </button>
+                </div>
+              </div>
+
+              {/* Upload Local Video File Option */}
+              <div className="bg-gradient-to-r from-amber-950/40 via-stone-900 to-black p-3.5 rounded-xl border border-amber-500/30 space-y-2">
+                <span className="text-[10px] font-mono font-bold text-amber-300 uppercase block tracking-wider">
+                  📤 {appLang === 'am' ? 'የራስዎን ቪዲዮ ይጫኑ (UPLOAD YOUR OWN VIDEO)' : 'UPLOAD YOUR OWN VIDEO'}
+                </span>
+                <label className="flex items-center justify-center gap-2 border-2 border-dashed border-amber-400/40 hover:border-amber-400 bg-amber-500/10 p-3 rounded-xl cursor-pointer transition-colors group">
+                  <span className="text-xl group-hover:scale-110 transition-transform">📁</span>
+                  <span className="text-xs font-black text-[#C1FF00] uppercase">
+                    {appLang === 'am' ? 'ከስልክዎ ወይም ከኮምፒውተርዎ ቪዲዮ ይምረጡ' : 'Select Video File (.mp4, .webm, .mov)'}
+                  </span>
+                  <input
+                    type="file"
+                    accept="video/mp4,video/webm,video/quicktime"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) {
+                        const blobUrl = URL.createObjectURL(file);
+                        setBgVideoUrl(blobUrl);
+                        setBgVideoType('local');
+                        setIsBgVideoEnabled(true);
+                        alert(appLang === 'am' ? '📤 የጫኑት ቪዲዮ በጀርባ ላይ መስራት ጀምሯል!' : 'Your uploaded video is now playing in the background!');
+                      }
+                    }}
+                  />
+                </label>
+              </div>
+
+              {/* Footer Done Button */}
+              <div className="pt-2 flex justify-end">
+                <button
+                  onClick={() => setShowQuickVideoModal(false)}
+                  className="bg-[#C1FF00] hover:bg-white text-black font-extrabold text-xs uppercase px-5 py-2.5 rounded-xl transition-colors cursor-pointer shadow-lg"
+                >
+                  {appLang === 'am' ? 'ተጨርሷል (DONE)' : 'DONE'}
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* PRINTABLE DUAL PARKING PASS CARD MODAL */}
+      <AnimatePresence>
+        {selectedTicketPassVisitor && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/85 backdrop-blur-md z-[100] flex items-center justify-center p-4 overflow-y-auto"
+          >
+            <motion.div 
+              initial={{ scale: 0.95, opacity: 0, y: 10 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.95, opacity: 0, y: 10 }}
+              className="bg-stone-900 border-2 border-yellow-400 text-stone-900 rounded-3xl max-w-2xl w-full p-6 space-y-6 shadow-2xl relative overflow-hidden my-8"
+            >
+              {/* Header Action Bar (Screen Only) */}
+              <div className="flex justify-between items-center border-b border-white/10 pb-3 text-white print:hidden">
+                <div className="flex items-center gap-2">
+                  <span className="text-xl">🅿️</span>
+                  <div>
+                    <h3 className="font-black text-sm uppercase text-yellow-400 tracking-wider">
+                      የሀዋሳ ፓፒረስ ሎጅ - የፓርኪንግ ካርድ (PARKING PASS TICKET)
+                    </h3>
+                    <p className="text-[10px] text-stone-400 font-mono">
+                      ድርጅቱ የሚጠቀምባቸው ሁለት ተመሳስይ የፓርኪንግ ቁጥር መለያ ካርዶች
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => window.print()}
+                    className="bg-yellow-400 hover:bg-white text-black px-3.5 py-1.5 rounded-xl font-mono text-xs font-black uppercase tracking-wider transition-all cursor-pointer shadow-md flex items-center gap-1.5"
+                  >
+                    🖨️ አትም (PRINT)
+                  </button>
+                  <button
+                    onClick={() => setSelectedTicketPassVisitor(null)}
+                    className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center font-bold cursor-pointer"
+                  >
+                    ✕
+                  </button>
+                </div>
+              </div>
+
+              {/* Printable Body */}
+              <div className="bg-white p-6 rounded-2xl border border-stone-200 text-stone-900 space-y-6 shadow-inner" id="printable-parking-cards">
+                
+                {/* Lodge Header */}
+                <div className="text-center border-b-2 border-stone-900 pb-4 space-y-1">
+                  <div className="flex justify-center items-center gap-3">
+                    <img src={logoUrl} alt="Logo" className="w-12 h-12 object-contain rounded-full border border-stone-300" />
+                    <div className="text-left">
+                      <h2 className="text-xl font-black uppercase tracking-tight text-[#b21f1f]">HAWASSA PAPYRUS LODGE</h2>
+                      <p className="text-[11px] font-bold text-stone-700 tracking-widest uppercase">ሀዋሳ ፓፒረስ ሎጅና ሬስቶራንት - የጥበቃ በር ፓርኪንግ</p>
+                    </div>
+                  </div>
+                  <div className="pt-2 flex justify-between items-center text-[10px] font-mono text-stone-600 font-bold px-2">
+                    <span>📞 {contactHotline1}</span>
+                    <span>📍 {contactLocation}</span>
+                    <span>🕒 {selectedTicketPassVisitor.timeIn}</span>
+                  </div>
+                </div>
+
+                {/* TWIN PASS CARDS CONTAINER */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  
+                  {/* CARD 1: VEHICLE TAG CARD (attached to car/motorcycle) */}
+                  <div className="border-2 border-dashed border-red-600 bg-red-50 p-4 rounded-2xl relative space-y-3">
+                    <div className="absolute top-2 right-2 bg-red-600 text-white px-2 py-0.5 rounded font-mono text-[9px] font-black uppercase">
+                      CARD 1 - ተሽከርካሪ ላይ የሚቀመጥ
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <span className="text-2xl">
+                        {selectedTicketPassVisitor.vehicleType === 'motorcycle' ? '🏍️' : selectedTicketPassVisitor.vehicleType === 'walk' ? '🚶' : '🚗'}
+                      </span>
+                      <div>
+                        <span className="text-[9px] font-mono font-bold text-stone-500 uppercase block">VEHICLE ATTACHMENT PASS</span>
+                        <h4 className="text-xs font-black uppercase text-stone-900">1️⃣ የተሽከርካሪ/ሞተር መለያ ካርድ</h4>
+                      </div>
+                    </div>
+
+                    <div className="bg-white border border-red-200 p-3 rounded-xl text-center space-y-1 shadow-sm">
+                      <span className="text-[9px] font-mono uppercase text-stone-500 font-bold block">ተከታታይ የፓርኪንግ ቁጥር (PASS SERIAL)</span>
+                      <div className="text-2xl font-black font-mono tracking-widest text-[#b21f1f] bg-yellow-100 py-1 rounded-lg border border-yellow-300">
+                        {selectedTicketPassVisitor.ticketTagNumber || 'TAG-#101'}
+                      </div>
+                    </div>
+
+                    <div className="space-y-1 text-xs font-mono text-stone-800">
+                      <div className="flex justify-between border-b border-red-200/60 pb-1">
+                        <span className="text-stone-500">የሰሌዳ ቁጥር (Plate):</span>
+                        <span className="font-extrabold uppercase text-stone-900">{selectedTicketPassVisitor.carPlate}</span>
+                      </div>
+                      <div className="flex justify-between border-b border-red-200/60 pb-1">
+                        <span className="text-stone-500">ዓይነት (Vehicle):</span>
+                        <span className="font-extrabold text-stone-900">
+                          {selectedTicketPassVisitor.vehicleType === 'motorcycle' ? '🏍️ ሞተር / ባጃጅ' : selectedTicketPassVisitor.vehicleType === 'walk' ? '🚶 እግርኛ' : '🚗 መኪና'}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-stone-500">የገባበት ሰዓት:</span>
+                        <span className="font-bold text-stone-900">{selectedTicketPassVisitor.timeIn}</span>
+                      </div>
+                    </div>
+
+                    <div className="bg-red-100 text-red-900 text-[9px] font-mono p-2 rounded-lg text-center font-bold">
+                      ⚠️ ይህ ካርድ ተሽከርካሪው/ሞተሩ ላይ ይታሰራል/ይቀመጣል።
+                    </div>
+                  </div>
+
+                  {/* CARD 2: GUEST DRIVER PASS CARD (handed to driver) */}
+                  <div className="border-2 border-dashed border-emerald-600 bg-emerald-50 p-4 rounded-2xl relative space-y-3">
+                    <div className="absolute top-2 right-2 bg-emerald-600 text-white px-2 py-0.5 rounded font-mono text-[9px] font-black uppercase">
+                      CARD 2 - ለባለቤቱ የሚሰጥ
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <span className="text-2xl">🎫</span>
+                      <div>
+                        <span className="text-[9px] font-mono font-bold text-stone-500 uppercase block">DRIVER GUEST PASS</span>
+                        <h4 className="text-xs font-black uppercase text-stone-900">2️⃣ የእንግዳው/የባለቤቱ መያዣ ካርድ</h4>
+                      </div>
+                    </div>
+
+                    <div className="bg-white border border-emerald-200 p-3 rounded-xl text-center space-y-1 shadow-sm">
+                      <span className="text-[9px] font-mono uppercase text-stone-500 font-bold block">ተከታታይ የፓርኪንግ ቁጥር (PASS SERIAL)</span>
+                      <div className="text-2xl font-black font-mono tracking-widest text-emerald-800 bg-emerald-100 py-1 rounded-lg border border-emerald-300">
+                        {selectedTicketPassVisitor.ticketTagNumber || 'TAG-#101'}
+                      </div>
+                    </div>
+
+                    <div className="space-y-1 text-xs font-mono text-stone-800">
+                      <div className="flex justify-between border-b border-emerald-200/60 pb-1">
+                        <span className="text-stone-500">የእንግዳ ስም (Name):</span>
+                        <span className="font-extrabold uppercase text-stone-900">{selectedTicketPassVisitor.name}</span>
+                      </div>
+                      <div className="flex justify-between border-b border-emerald-200/60 pb-1">
+                        <span className="text-stone-500">ስልክ (Phone):</span>
+                        <span className="font-bold text-stone-900">{selectedTicketPassVisitor.phone}</span>
+                      </div>
+                      <div className="flex justify-between border-b border-emerald-200/60 pb-1">
+                        <span className="text-stone-500">የሰሌዳ ቁጥር (Plate):</span>
+                        <span className="font-extrabold uppercase text-stone-900">{selectedTicketPassVisitor.carPlate}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-stone-500">ምክንያት:</span>
+                        <span className="font-bold text-emerald-800">{selectedTicketPassVisitor.purpose}</span>
+                      </div>
+                    </div>
+
+                    <div className="bg-emerald-100 text-emerald-900 text-[9px] font-mono p-2 rounded-lg text-center font-bold">
+                      🔑 ሲወጡ ተሽከርካሪውን ለመውሰድ ይህን ካርድ ለጥበቃው ያሳዩ እና ያስረክቡ።
+                    </div>
+                  </div>
+
+                </div>
+
+                {/* Footer instructions */}
+                <div className="border-t border-stone-200 pt-3 text-center text-[9.5px] font-mono text-stone-500 space-y-0.5">
+                  <p className="font-bold text-stone-700">ከሀዋሳ ፓፒረስ ሎጅና ሬስቶራንት - የህዝብ ደህንነትና ጥበቃ መምሪያ</p>
+                  <p>HAWASSA PAPYRUS LODGE & RESTAURANT - PUBLIC SAFETY & SECURITY GATEWAY</p>
+                </div>
+
+              </div>
+
+              {/* Close Button at bottom (screen only) */}
+              <div className="flex justify-end print:hidden pt-2">
+                <button
+                  onClick={() => setSelectedTicketPassVisitor(null)}
+                  className="bg-white/10 hover:bg-white/20 text-white font-mono text-xs font-bold uppercase px-5 py-2.5 rounded-xl cursor-pointer"
+                >
+                  ዘጋ (CLOSE)
+                </button>
+              </div>
+
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* EXIT CHECKOUT & TWIN TAG VERIFICATION MODAL */}
+      <AnimatePresence>
+        {checkoutConfirmVisitor && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/90 backdrop-blur-md z-[110] flex items-center justify-center p-4 overflow-y-auto"
+          >
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0, y: 15 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.9, opacity: 0, y: 15 }}
+              className="bg-[#181818] border-2 border-yellow-400 text-white rounded-2xl max-w-lg w-full p-6 space-y-5 shadow-2xl relative overflow-hidden"
+            >
+              {/* Top Banner */}
+              <div className="flex items-center justify-between border-b border-white/10 pb-3">
+                <div className="flex items-center gap-2.5">
+                  <span className="text-2xl">🚪</span>
+                  <div>
+                    <h3 className="font-extrabold text-sm uppercase text-yellow-400 tracking-wider">
+                      የመውጫ ማረጋገጫና የተረከበበት ቅፅ (EXIT VERIFICATION)
+                    </h3>
+                    <p className="text-[10px] text-white/50 font-mono">
+                      የሁለቱን ተመሳስይ የፓርኪንግ ካርዶች ትክክለኛነት ያረጋግጡ
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setCheckoutConfirmVisitor(null)}
+                  className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center font-bold cursor-pointer"
+                >
+                  ✕
+                </button>
+              </div>
+
+              {/* Vehicle & Tag Details Card */}
+              <div className="bg-[#121212] border border-yellow-500/30 p-4 rounded-xl space-y-3">
+                <div className="flex justify-between items-center border-b border-white/10 pb-2">
+                  <span className="text-[10px] font-mono text-white/50 uppercase">የፓርኪንግ ካርድ ቁጥር (TICKET TAG)</span>
+                  <span className="text-base font-black font-mono text-black bg-yellow-400 px-3 py-1 rounded tracking-widest">
+                    🎫 {checkoutConfirmVisitor.ticketTagNumber || 'TAG-#101'}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 text-xs font-mono">
+                  <div>
+                    <span className="text-white/40 block text-[9px]">የእንግዳ/ባለቤት ስም:</span>
+                    <span className="font-bold text-white uppercase text-sm">{checkoutConfirmVisitor.name}</span>
+                  </div>
+                  <div>
+                    <span className="text-white/40 block text-[9px]">የተሽከርካሪ አይነት:</span>
+                    <span className="font-extrabold text-amber-300">
+                      {checkoutConfirmVisitor.vehicleType === 'motorcycle' ? '🏍️ ሞተር / ባጃጅ' : checkoutConfirmVisitor.vehicleType === 'walk' ? '🚶 እግርኛ' : '🚗 መኪና'}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-white/40 block text-[9px]">የሰሌዳ ቁጥር (PLATE):</span>
+                    <span className="font-black text-yellow-300 tracking-wider uppercase">{checkoutConfirmVisitor.carPlate}</span>
+                  </div>
+                  <div>
+                    <span className="text-white/40 block text-[9px]">ስልክ ቁጥር:</span>
+                    <span className="font-bold text-white">{checkoutConfirmVisitor.phone}</span>
+                  </div>
+                  <div className="col-span-2">
+                    <span className="text-white/40 block text-[9px]">የገባበት ሰዓት:</span>
+                    <span className="font-bold text-emerald-400">{checkoutConfirmVisitor.timeIn}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Twin Verification Checklist */}
+              <div className="bg-amber-500/10 border border-amber-500/30 p-3.5 rounded-xl space-y-2 text-xs font-mono text-amber-200">
+                <div className="font-bold text-yellow-300 uppercase flex items-center gap-1">
+                  <span>✅ የጥበቃ ማረጋገጫ ዝርዝር (Checklist):</span>
+                </div>
+                <div className="space-y-1.5 text-[11px] text-white/80">
+                  <div className="flex items-center gap-2">
+                    <span className="text-emerald-400 font-bold">✓</span>
+                    <span>1️⃣ ተሽከርካሪው ላይ የነበረው ካርድ ቁጥር፦ <strong className="text-yellow-300">{checkoutConfirmVisitor.ticketTagNumber || 'TAG-#101'}</strong></span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-emerald-400 font-bold">✓</span>
+                    <span>2️⃣ ባለቤቱ ያቀረበው ካርድ ቁጥር፦ <strong className="text-yellow-300">{checkoutConfirmVisitor.ticketTagNumber || 'TAG-#101'}</strong></span>
+                  </div>
+                  <div className="text-[10px] text-amber-300/80 italic pt-1">
+                    * ሁለቱም ካርዶች ከተረከቡ በኋላ ተሽከርካሪው ውጭ እንዲወጣ ይፈቀድለታል።
+                  </div>
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex items-center gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => confirmExitCheckout(checkoutConfirmVisitor)}
+                  className="flex-1 bg-yellow-400 hover:bg-white text-black font-black text-xs uppercase py-3.5 tracking-wider rounded-xl transition-all cursor-pointer shadow-lg flex items-center justify-center gap-1.5"
+                >
+                  <span>🚪 መውጫውን አረጋግጥና አስወጣ (CONFIRM EXIT)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCheckoutConfirmVisitor(null)}
+                  className="bg-white/10 hover:bg-white/20 text-white font-mono text-xs font-bold uppercase px-4 py-3.5 rounded-xl cursor-pointer"
+                >
+                  ሰርዝ
+                </button>
+              </div>
+            </motion.div>
           </motion.div>
         )}
       </AnimatePresence>

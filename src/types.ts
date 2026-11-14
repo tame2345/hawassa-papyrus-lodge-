@@ -54,6 +54,8 @@ export interface RoomBooking {
   status: 'Active' | 'Checked Out' | string;
   pricePerNight?: number;
   notes?: string;
+  receptionistName?: string;
+  checkedOutByStaff?: string;
 }
 
 export interface BankAccount {
@@ -91,11 +93,15 @@ export interface Order {
   receiptComment?: string;
   confirmed: boolean;
   waiter?: string;
+  createdByRole?: string;
+  chefName?: string;
+  cashierName?: string;
   orderType: OrderType;
   deliveryPhone?: string;
   deliveryAddress?: string;
   time: string;
   date?: string;
+  createdAt?: number;
   cookingStatus?: 'Pending' | 'Preparing' | 'Completed';
   servedByWaiter?: boolean;
 }
@@ -152,6 +158,8 @@ export interface Expense {
   date: string;
   time: string;
   notes?: string;
+  recordedByStaff?: string;
+  recordedByRole?: string;
 }
 
 export interface VisitorLog {
@@ -163,6 +171,11 @@ export interface VisitorLog {
   timeIn: string;
   timeOut?: string;
   status: 'In Lodge' | 'Checked Out' | string;
+  vehicleType?: 'car' | 'motorcycle' | 'walk' | string;
+  ticketTagNumber?: string;
+  registeredByGuard?: string;
+  registeredByRole?: string;
+  verifiedByGuard?: string;
 }
 
 

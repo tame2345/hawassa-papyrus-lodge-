@@ -3,10 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
-import { OrderItem, BankAccount, OrderType, PaymentMethod } from '../types';
-import { Trash2, Smartphone, MapPin, DollarSign, HelpCircle, X } from 'lucide-react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { Order, OrderItem, BankAccount, OrderType, PaymentMethod } from '../types';
+import { Trash2, Smartphone, MapPin, DollarSign, HelpCircle, X, ShoppingCart, Clock, ListOrdered } from 'lucide-react';
 import { supabase } from '../supabaseClient';
+import { computeLiveOrderQueue } from '../utils/orderQueue';
 
 interface CartModalProps {
   isOpen: boolean;
@@ -33,6 +34,8 @@ interface CartModalProps {
   chapaKey?: string;
   chapaMode?: 'live' | 'test';
   appLang: string;
+  orders?: Order[];
+  onOpenLiveTracker?: () => void;
 }
 
 export default function CartModal({
@@ -48,7 +51,9 @@ export default function CartModal({
   chapaActive = true,
   chapaKey = '',
   chapaMode = 'test',
-  appLang
+  appLang,
+  orders = [],
+  onOpenLiveTracker
 }: CartModalProps) {
   const cartUiLocales = {
     cart_title: {
@@ -356,6 +361,11 @@ export default function CartModal({
     }
   }, [isOpen, banks]);
 
+  const liveQueue = useMemo(() => computeLiveOrderQueue(orders), [orders]);
+  const ordersAheadNow = liveQueue.activeKitchenQueue.length;
+  const projectedPosition = ordersAheadNow + 1;
+  const estimatedWaitNow = Math.max(8, ordersAheadNow * 5 + 8);
+
   if (!isOpen) return null;
 
   const subtotal = cart.reduce((sum, item) => sum + (item.price * item.qty), 0);
@@ -447,24 +457,29 @@ export default function CartModal({
   };
 
   return (
-    <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-50 flex items-center justify-center p-4">
-      <div className="bg-[#121212] w-full max-w-md rounded-none border border-white/10 shadow-2xl relative overflow-hidden flex flex-col max-h-[90vh]">
+    <div className="fixed inset-0 bg-black/75 backdrop-blur-md z-50 flex items-center justify-center p-4">
+      <div className="bg-white w-full max-w-lg rounded-3xl border border-stone-200 shadow-2xl relative overflow-hidden flex flex-col max-h-[92vh] text-stone-900">
         
-        {/* Yellow, White, Red top accent header */}
-        <div className="h-1.5 w-full bg-gradient-to-r from-yellow-400 via-white to-red-600"></div>
+        {/* Yellow, White, Red top accent header banner */}
+        <div className="h-2 w-full bg-gradient-to-r from-yellow-400 via-red-600 to-yellow-400"></div>
 
-        <div className="p-4 border-b border-white/10 flex justify-between items-center text-white">
-          <div>
-            <h3 className="text-sm font-black uppercase tracking-widest text-yellow-400">
-              {cartUiLocales.cart_title[appLang as keyof typeof cartUiLocales.cart_title] || cartUiLocales.cart_title.en}
-            </h3>
-            <p className="font-mono text-[9px] uppercase tracking-wider text-white/50">
-              {cartUiLocales.cart_subtitle[appLang as keyof typeof cartUiLocales.cart_subtitle] || cartUiLocales.cart_subtitle.en}
-            </p>
+        <div className="p-4 sm:p-5 border-b border-stone-200 bg-[#b21f1f] text-white flex justify-between items-center shadow-sm">
+          <div className="flex items-center gap-2.5">
+            <div className="w-9 h-9 rounded-full bg-[#f4c22b] text-stone-900 flex items-center justify-center font-bold shadow-md shrink-0">
+              <ShoppingCart className="w-5 h-5 text-stone-900" />
+            </div>
+            <div>
+              <h3 className="text-sm sm:text-base font-black uppercase tracking-wider text-white">
+                {cartUiLocales.cart_title[appLang as keyof typeof cartUiLocales.cart_title] || cartUiLocales.cart_title.en}
+              </h3>
+              <p className="font-mono text-[9.5px] uppercase tracking-wider text-yellow-200/90 font-bold">
+                {cartUiLocales.cart_subtitle[appLang as keyof typeof cartUiLocales.cart_subtitle] || cartUiLocales.cart_subtitle.en}
+              </p>
+            </div>
           </div>
           <button 
             onClick={onClose} 
-            className="text-white/40 hover:text-white transition-colors"
+            className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-all cursor-pointer"
             id="btn-close-cart"
           >
             <X className="w-5 h-5" />
@@ -472,31 +487,36 @@ export default function CartModal({
         </div>
 
         {/* Modal Body scrollable area */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-4 no-scrollbar">
+        <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-5 no-scrollbar bg-white">
           
-          {/* Cart items list */}
+          {/* Cart items list styled like menu cards */}
           {cart.length === 0 ? (
-            <div className="py-10 text-center text-white/30 font-bold border border-dashed border-white/10 p-4">
+            <div className="py-12 text-center text-stone-500 font-bold border-2 border-dashed border-stone-300 rounded-2xl bg-stone-50 p-6">
+              <span className="text-3xl block mb-2">🛒</span>
               {cartUiLocales.empty_cart[appLang as keyof typeof cartUiLocales.empty_cart] || cartUiLocales.empty_cart.en}
             </div>
           ) : (
-            <div className="space-y-2">
+            <div className="space-y-3">
+              <span className="text-[10px] font-mono uppercase text-[#b21f1f] font-black tracking-widest block">
+                {appLang === 'am' ? 'የተመረጡ የምግብና መጠጥ አይነቶች' : 'SELECTED MENU ITEMS'}
+              </span>
               {cart.map((item, idx) => (
-                <div key={idx} className="bg-[#181818] border border-white/5 p-3 flex justify-between items-center text-white">
-                  <div>
-                    <h5 className="text-xs font-black tracking-tight">{item.name}</h5>
-                    <p className="text-[10px] text-white/40 font-mono mt-0.5">
+                <div key={idx} className="bg-stone-50 text-stone-900 rounded-2xl p-3.5 flex justify-between items-center shadow-sm border border-stone-200 transition-all hover:border-[#b21f1f]">
+                  <div className="pr-2">
+                    <h5 className="text-xs sm:text-sm font-black tracking-tight text-stone-900">{item.name}</h5>
+                    <p className="text-[11px] text-stone-600 font-mono font-bold mt-0.5">
                       {item.qty} × {item.price} ብር
                     </p>
                   </div>
-                  <div className="flex items-center gap-3">
-                    <span className="font-mono text-xs font-black text-[#C1FF00]">
+                  <div className="flex items-center gap-2.5 shrink-0">
+                    <span className="font-mono text-xs font-black bg-[#f4c22b] text-stone-900 px-3 py-1 rounded-xl shadow-sm">
                       {item.qty * item.price} ብር
                     </span>
                     <button 
                       id={`delete-cart-item-${idx}`}
                       onClick={() => onRemoveItem(item.id)} 
-                      className="text-red-400 hover:text-red-500 transition-colors"
+                      className="p-1.5 text-red-600 hover:text-red-700 bg-red-100 hover:bg-red-200 rounded-xl transition-colors cursor-pointer"
+                      title="Remove item"
                     >
                       <Trash2 className="w-4 h-4" />
                     </button>
@@ -506,19 +526,79 @@ export default function CartModal({
             </div>
           )}
 
+          {/* LIVE KITCHEN QUEUE PREVIEW WHILE ORDERING */}
+          <div className="bg-[#fcfbf7] border border-[#ebe5d8] rounded-2xl p-3.5 space-y-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 text-xs font-black text-stone-900">
+                <ListOrdered className="w-4 h-4 text-[#b21f1f] shrink-0" />
+                <span>
+                  {appLang === 'am'
+                    ? 'የቀጥታ ኩሽና ወረፋ ሁኔታ (Live Queue Check)'
+                    : 'Live Kitchen Queue Check'}
+                </span>
+              </div>
+              {onOpenLiveTracker && (
+                <button
+                  type="button"
+                  onClick={onOpenLiveTracker}
+                  className="text-[11px] font-black text-[#b21f1f] hover:underline cursor-pointer shrink-0"
+                >
+                  {appLang === 'am' ? 'ላይቭ ቦርድ ይመልከቱ →' : 'View Live Board →'}
+                </button>
+              )}
+            </div>
+
+            <div className="grid grid-cols-3 gap-2 text-center">
+              <div className="bg-white border border-stone-200 rounded-xl p-2">
+                <span className="text-[10px] text-stone-500 font-bold block">
+                  {appLang === 'am' ? 'ከፊትዎ ያሉ' : 'Ahead Now'}
+                </span>
+                <span className="text-base font-mono font-black text-[#b21f1f] tabular-nums">
+                  {ordersAheadNow}
+                </span>
+              </div>
+              <div className="bg-[#f4c22b]/20 border border-[#f4c22b] rounded-xl p-2">
+                <span className="text-[10px] text-stone-800 font-bold block">
+                  {appLang === 'am' ? 'የእርስዎ ተራ' : 'Your Spot'}
+                </span>
+                <span className="text-base font-mono font-black text-stone-900 tabular-nums">
+                  #{projectedPosition}
+                </span>
+              </div>
+              <div className="bg-white border border-stone-200 rounded-xl p-2">
+                <span className="text-[10px] text-stone-500 font-bold block">
+                  {appLang === 'am' ? 'ግምታዊ ጊዜ' : 'Est. Wait'}
+                </span>
+                <span className="text-base font-mono font-black text-stone-800 tabular-nums">
+                  ~{estimatedWaitNow}m
+                </span>
+              </div>
+            </div>
+
+            <p className="text-[11px] text-stone-600 font-semibold leading-snug">
+              {ordersAheadNow === 0
+                ? appLang === 'am'
+                  ? '🎯 ከእርስዎ በፊት ምንም ትዕዛዝ የለም — አሁን ካዘዙ #1ኛ ተራ ላይ ይሆናሉ!'
+                  : '🎯 0 orders ahead right now — ordering now makes you #1 in line!'
+                : appLang === 'am'
+                ? `⏳ በአሁኑ ሰዓት ${ordersAheadNow} ትዕዛዝ(ዞች) ከፊትዎ አሉ (${liveQueue.preparingOrders.length} እየተዘጋጁ፣ ${liveQueue.pendingOrders.length} ወረፋ ላይ) — አሁን ካዘዙ #${projectedPosition}ኛው ትዕዛዝ ላይ ይሆናሉ።`
+                : `⏳ ${ordersAheadNow} order(s) ahead (${liveQueue.preparingOrders.length} preparing, ${liveQueue.pendingOrders.length} queued) — your order will be #${projectedPosition} in line.`}
+            </p>
+          </div>
+
           {/* Delivery Configuration */}
-          <div className="border-t border-white/10 pt-3">
-            <label className="text-[10px] font-mono uppercase text-white/50 block mb-1.5 font-bold">
+          <div className="border-t border-stone-200 pt-4">
+            <label className="text-[10px] font-mono uppercase text-[#b21f1f] block mb-2 font-black tracking-wider">
               {cartUiLocales.order_type[appLang as keyof typeof cartUiLocales.order_type] || cartUiLocales.order_type.en}
             </label>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-2 gap-2.5">
               <button 
                 id="btn-type-dine-react"
                 onClick={() => setOrderType('dine')}
-                className={`py-2.5 text-xs font-black uppercase tracking-wide border transition-all ${
+                className={`py-2.5 text-xs font-black uppercase tracking-wider rounded-xl transition-all cursor-pointer ${
                   orderType === 'dine' 
-                    ? 'bg-[#C1FF00] text-black border-[#C1FF00]' 
-                    : 'bg-[#181818] text-white border-white/10 hover:border-white/20'
+                    ? 'bg-[#b21f1f] text-white border-2 border-[#8c1414] shadow-md scale-[1.01]' 
+                    : 'bg-stone-100 text-stone-700 border border-stone-200 hover:bg-stone-200'
                 }`}
               >
                 {cartUiLocales.dine_in[appLang as keyof typeof cartUiLocales.dine_in] || cartUiLocales.dine_in.en}
@@ -526,10 +606,10 @@ export default function CartModal({
               <button 
                 id="btn-type-delivery-react"
                 onClick={() => setOrderType('delivery')}
-                className={`py-2.5 text-xs font-black uppercase tracking-wide border transition-all ${
+                className={`py-2.5 text-xs font-black uppercase tracking-wider rounded-xl transition-all cursor-pointer ${
                   orderType === 'delivery' 
-                    ? 'bg-[#C1FF00] text-black border-[#C1FF00]' 
-                    : 'bg-[#181818] text-white border-white/10 hover:border-white/20'
+                    ? 'bg-[#b21f1f] text-white border-2 border-[#8c1414] shadow-md scale-[1.01]' 
+                    : 'bg-stone-100 text-stone-700 border border-stone-200 hover:bg-stone-200'
                 }`}
               >
                 {cartUiLocales.delivery[appLang as keyof typeof cartUiLocales.delivery] || cartUiLocales.delivery.en}
@@ -539,8 +619,8 @@ export default function CartModal({
 
           {/* Table/Room logic */}
           {orderType === 'dine' && (
-            <div className="bg-[#1A1A1A] p-3 border border-white/5 space-y-1">
-              <label className="text-[9px] font-mono uppercase text-white/50 font-bold">
+            <div className="bg-stone-50 p-3.5 border border-stone-200 rounded-2xl space-y-1.5">
+              <label className="text-[9.5px] font-mono uppercase text-[#b21f1f] font-black">
                 {cartUiLocales.room_number[appLang as keyof typeof cartUiLocales.room_number] || cartUiLocales.room_number.en}
               </label>
               <input 
@@ -548,17 +628,17 @@ export default function CartModal({
                 id="cart-table-no"
                 value={location}
                 onChange={(e) => setLocation(e.target.value)}
-                placeholder={appLang === 'am' ? 'ለምሳሌ፡ Room 101' : 'e.g. Room 101'}
-                className="w-full bg-black border border-white/10 text-white font-black text-center text-sm p-2 outline-none focus:border-[#C1FF00]"
+                placeholder={appLang === 'am' ? 'ለምሳሌ፡ Room 101 ወይንም Table 5' : 'e.g. Room 101 or Table 5'}
+                className="w-full bg-white border border-stone-300 text-stone-900 font-black text-center text-sm p-2.5 rounded-xl outline-none focus:border-[#b21f1f] focus:ring-1 focus:ring-[#b21f1f]"
               />
             </div>
           )}
 
           {/* Delivery form logic */}
           {orderType === 'delivery' && (
-            <div className="bg-[#1A1A1A] p-3 border border-white/5 space-y-3">
+            <div className="bg-stone-50 p-3.5 border border-stone-200 rounded-2xl space-y-3">
               <div>
-                <label className="text-[9px] font-mono uppercase text-white/50 block mb-1 font-bold">
+                <label className="text-[9.5px] font-mono uppercase text-[#b21f1f] block mb-1 font-black">
                   {cartUiLocales.phone_number[appLang as keyof typeof cartUiLocales.phone_number] || cartUiLocales.phone_number.en} *
                 </label>
                 <input 
@@ -567,11 +647,11 @@ export default function CartModal({
                   value={phone}
                   onChange={(e) => setPhone(e.target.value)}
                   placeholder="09xxxxxxxx"
-                  className="w-full bg-black border border-white/10 text-white font-mono text-xs p-2 outline-none focus:border-[#C1FF00]"
+                  className="w-full bg-white border border-stone-300 text-stone-900 font-mono text-xs p-2.5 rounded-xl outline-none focus:border-[#b21f1f] focus:ring-1 focus:ring-[#b21f1f]"
                 />
               </div>
               <div>
-                <label className="text-[9px] font-mono uppercase text-white/50 block mb-1 font-bold">
+                <label className="text-[9.5px] font-mono uppercase text-[#b21f1f] block mb-1 font-black">
                   {cartUiLocales.delivery_address[appLang as keyof typeof cartUiLocales.delivery_address] || cartUiLocales.delivery_address.en} *
                 </label>
                 <textarea 
@@ -580,35 +660,35 @@ export default function CartModal({
                   onChange={(e) => setAddress(e.target.value)}
                   placeholder={appLang === 'am' ? 'የሰፈር ስም፣ የቤት ቁጥር ወይም መለያ ምልክት...' : 'Neighborhood name, House No or landmarks...'}
                   rows={2}
-                  className="w-full bg-black border border-white/10 text-white text-xs p-2 outline-none focus:border-[#C1FF00] resize-none"
+                  className="w-full bg-white border border-stone-300 text-stone-900 text-xs p-2.5 rounded-xl outline-none focus:border-[#b21f1f] focus:ring-1 focus:ring-[#b21f1f] resize-none"
                 />
               </div>
             </div>
           )}
 
           {/* Tipping inputs */}
-          <div className="border-t border-white/10 pt-3">
-            <label className="text-[10px] font-mono uppercase text-white/50 block mb-1.5 font-bold">
+          <div className="border-t border-stone-200 pt-4">
+            <label className="text-[10px] font-mono uppercase text-[#b21f1f] block mb-2 font-black tracking-wider">
               {cartUiLocales.tip[appLang as keyof typeof cartUiLocales.tip] || cartUiLocales.tip.en}
             </label>
-            <div className="grid grid-cols-4 gap-1.5 text-center">
+            <div className="grid grid-cols-4 gap-2 text-center">
               {[0, 5, 10, 15].map(p => (
                 <button
                   key={p}
                   id={`btn-tip-${p}-react`}
                   onClick={() => { setTipPercent(p); setCustomTip(''); }}
-                  className={`py-1.5 text-[11px] font-black border uppercase transition-all ${
+                  className={`py-2 text-[11px] font-black rounded-xl uppercase transition-all cursor-pointer ${
                     tipPercent === p 
-                      ? 'bg-[#C1FF00] text-black border-[#C1FF00]' 
-                      : 'bg-[#181818] text-white border-white/10 hover:border-white/20'
+                      ? 'bg-[#b21f1f] text-white border-2 border-[#8c1414] shadow-md scale-[1.01]' 
+                      : 'bg-stone-100 text-stone-700 border border-stone-200 hover:bg-stone-200'
                   }`}
                 >
                   {p === 0 ? (appLang === 'am' ? 'የለም' : 'None') : `${p}%`}
                 </button>
               ))}
             </div>
-            <div className="mt-2 flex items-center gap-2">
-              <span className="text-[9px] font-mono uppercase text-white/40">
+            <div className="mt-2.5 flex items-center gap-2">
+              <span className="text-[9.5px] font-mono uppercase text-stone-600 font-bold shrink-0">
                 {appLang === 'am' ? 'ተለዋዋጭ መጠን (ብር)፦' : 'Custom Amount (Birr):'}
               </span>
               <input 
@@ -619,25 +699,25 @@ export default function CartModal({
                   setTipPercent(-1);
                 }}
                 placeholder="Custom Birr"
-                className="flex-1 bg-[#181818] border border-white/10 text-white font-mono text-xs p-1.5 outline-none focus:border-[#C1FF00]"
+                className="flex-1 bg-white border border-stone-300 text-stone-900 font-mono text-xs p-2 rounded-xl outline-none focus:border-[#b21f1f] focus:ring-1 focus:ring-[#b21f1f]"
               />
             </div>
           </div>
 
           {/* Payment Methods */}
-          <div className="border-t border-white/10 pt-3">
-            <label className="text-[10px] font-mono uppercase text-white/50 block mb-1.5 font-bold">
+          <div className="border-t border-stone-200 pt-4">
+            <label className="text-[10px] font-mono uppercase text-[#b21f1f] block mb-2 font-black tracking-wider">
               {cartUiLocales.payment_method[appLang as keyof typeof cartUiLocales.payment_method] || cartUiLocales.payment_method.en}
             </label>
-            <div className="grid grid-cols-3 gap-1.5">
+            <div className="grid grid-cols-3 gap-2">
               <button 
                 type="button"
                 id="btn-pay-cash-react"
                 onClick={() => setPayment('cash')}
-                className={`py-2 text-[10.5px] font-black border uppercase transition-all rounded ${
+                className={`py-2.5 text-[11px] font-black uppercase tracking-wider transition-all rounded-xl cursor-pointer ${
                   payment === 'cash' 
-                    ? 'bg-[#C1FF00] text-black border-[#C1FF00]' 
-                    : 'bg-[#181818] text-white border-white/10 hover:border-white/20'
+                    ? 'bg-[#b21f1f] text-white border-2 border-[#8c1414] shadow-md scale-[1.01]' 
+                    : 'bg-stone-100 text-stone-700 border border-stone-200 hover:bg-stone-200'
                 }`}
               >
                 {cartUiLocales.cash[appLang as keyof typeof cartUiLocales.cash] || cartUiLocales.cash.en}
@@ -646,10 +726,10 @@ export default function CartModal({
                 type="button"
                 id="btn-pay-bank-react"
                 onClick={() => setPayment('bank')}
-                className={`py-2 text-[10.5px] font-black border uppercase transition-all rounded ${
+                className={`py-2.5 text-[11px] font-black uppercase tracking-wider transition-all rounded-xl cursor-pointer ${
                   payment === 'bank' 
-                    ? 'bg-[#C1FF00] text-black border-[#C1FF00]' 
-                    : 'bg-[#181818] text-white border-white/10 hover:border-white/20'
+                    ? 'bg-[#b21f1f] text-white border-2 border-[#8c1414] shadow-md scale-[1.01]' 
+                    : 'bg-stone-100 text-stone-700 border border-stone-200 hover:bg-stone-200'
                 }`}
               >
                 {cartUiLocales.bank[appLang as keyof typeof cartUiLocales.bank] || cartUiLocales.bank.en}
@@ -664,12 +744,12 @@ export default function CartModal({
                   }
                   setPayment('chapa');
                 }}
-                className={`py-2 text-[10.5px] font-black border uppercase transition-all rounded relative ${
+                className={`py-2.5 text-[11px] font-black uppercase tracking-wider transition-all rounded-xl cursor-pointer relative ${
                   !chapaActive ? 'opacity-40 cursor-not-allowed' : ''
                 } ${
                   payment === 'chapa' 
-                    ? 'bg-[#00f5ff] text-black border-[#00f5ff]' 
-                    : 'bg-[#181818] text-white border-white/10 hover:border-white/20'
+                    ? 'bg-cyan-600 text-white border-2 border-cyan-700 shadow-md scale-[1.01]' 
+                    : 'bg-stone-100 text-stone-700 border border-stone-200 hover:bg-stone-200'
                 }`}
               >
                 {cartUiLocales.chapa_secure[appLang as keyof typeof cartUiLocales.chapa_secure] || cartUiLocales.chapa_secure.en}
@@ -679,32 +759,32 @@ export default function CartModal({
 
           {/* Bank Transfer block */}
           {payment === 'bank' && (
-            <div className="bg-[#1A1A1A] p-3 border border-white/5 space-y-3">
-              <p className="text-[9px] text-[#C1FF00]/90 leading-tight uppercase font-mono font-bold">
+            <div className="bg-stone-50 p-3.5 border border-stone-200 rounded-2xl space-y-3">
+              <p className="text-[10px] text-[#b21f1f] leading-tight uppercase font-mono font-bold">
                 {appLang === 'am' 
                   ? 'መጀመሪያ መክፈል የሚፈልጉትን አካውንት ይምረጡ፤ ያስተላለፉበትን የማረጋገጫ ቁጥር ይጻፉ።' 
                   : 'Select payment destination bank account first, then enter transaction reference code.'}
               </p>
-              <div className="space-y-1.5 text-xs text-white">
-                {banks.map((b, idx) => (
+              <div className="space-y-2 text-xs text-stone-900">
+                {banks.map((b) => (
                   <div 
                     key={b.id} 
                     id={`bank-row-select-${b.id}`}
                     onClick={() => setSelectedBankId(b.id)}
-                    className={`p-2 border cursor-pointer select-none transition-all ${
+                    className={`p-2.5 rounded-xl border cursor-pointer select-none transition-all ${
                       selectedBankId === b.id 
-                        ? 'bg-[#C1FF00]/10 border-[#C1FF00]' 
-                        : 'bg-black/40 border-white/5'
+                        ? 'bg-amber-100/80 border-amber-500 shadow-sm' 
+                        : 'bg-white border-stone-200 hover:border-stone-300'
                     }`}
                   >
-                    <p className="font-black text-[10px] tracking-tight">{b.name}</p>
-                    <p className="font-mono text-[9px] text-white/60">A/C: {b.number}</p>
-                    <p className="text-[9px] text-white/50 mt-0.5">Holder: {b.holder}</p>
+                    <p className="font-black text-xs text-[#b21f1f] tracking-tight">{b.name}</p>
+                    <p className="font-mono text-[10px] text-stone-800 font-bold">A/C: {b.number}</p>
+                    <p className="text-[9.5px] text-stone-600 mt-0.5">Holder: {b.holder}</p>
                   </div>
                 ))}
               </div>
               <div className="pt-2">
-                <label className="text-[9px] font-mono uppercase text-white/50 block mb-1 font-bold">
+                <label className="text-[9.5px] font-mono uppercase text-[#b21f1f] block mb-1 font-black">
                   {cartUiLocales.ref_placeholder[appLang as keyof typeof cartUiLocales.ref_placeholder] || cartUiLocales.ref_placeholder.en} *
                 </label>
                 <input 
@@ -714,19 +794,19 @@ export default function CartModal({
                   onChange={(e) => setBankRef(e.target.value)}
                   placeholder="CBE-XXXXXXXXX"
                   required
-                  className="w-full bg-black border border-white/10 text-white font-mono text-xs p-2 outline-none focus:border-[#C1FF00]"
+                  className="w-full bg-white border border-stone-300 text-stone-900 font-mono text-xs p-2.5 rounded-xl outline-none focus:border-[#b21f1f] focus:ring-1 focus:ring-[#b21f1f]"
                 />
               </div>
 
               {/* Receipt / Screenshot Attachment section */}
-              <div className="pt-2 border-t border-white/5 space-y-2">
-                <label className="text-[9px] font-mono uppercase text-white/50 block font-bold">
+              <div className="pt-2 border-t border-stone-200 space-y-2">
+                <label className="text-[9.5px] font-mono uppercase text-[#b21f1f] block font-black">
                   {cartUiLocales.receipt_upload[appLang as keyof typeof cartUiLocales.receipt_upload] || cartUiLocales.receipt_upload.en}
                 </label>
                 
                 {/* Real File Input for upload */}
                 <div className="flex flex-col gap-1.5">
-                  <label className="bg-black hover:bg-white/5 text-white border border-white/10 hover:border-[#C1FF00]/40 py-2 px-3 text-[10px] font-mono font-black uppercase text-center rounded flex items-center justify-center gap-2 cursor-pointer transition-colors">
+                  <label className="bg-stone-200 hover:bg-stone-300 text-stone-800 border border-stone-300 hover:border-[#b21f1f] py-2.5 px-3 text-[10px] font-mono font-black uppercase text-center rounded-xl flex items-center justify-center gap-2 cursor-pointer transition-colors shadow-sm">
                     📸 {appLang === 'am' ? 'ፎቶ ወይም እስክሪንሻት ይጫኑ' : 'Upload Screenshot / Proof'}
                     <input 
                       type="file" 
@@ -739,17 +819,17 @@ export default function CartModal({
 
                 {/* Instant Real Mock options */}
                 <div className="space-y-1">
-                  <p className="text-[8px] font-mono text-white/40 uppercase">
+                  <p className="text-[8.5px] font-mono text-stone-500 uppercase font-bold">
                     {appLang === 'am' ? 'በቀላሉ ለመሞከር ማረጋገጫ ይምረጡ፦' : 'To test easily, pick simulated proof receipt:'}
                   </p>
-                  <div className="grid grid-cols-2 gap-1 text-[8px] font-mono">
+                  <div className="grid grid-cols-2 gap-1.5 text-[8.5px] font-mono">
                     <button
                       type="button"
                       onClick={() => {
                         setReceiptScreenshot('https://images.unsplash.com/photo-1554415707-6e8cfc93fe23?w=600');
                         alert('✅ Simulated CBE Bank receipt attached.');
                       }}
-                      className="py-1 bg-white/5 hover:bg-[#C1FF00]/10 border border-white/5 hover:border-[#C1FF00]/20 text-white hover:text-[#C1FF00] rounded text-[8px]"
+                      className="py-1.5 bg-white hover:bg-amber-50 border border-stone-300 hover:border-amber-400 text-stone-800 hover:text-[#b21f1f] rounded-xl text-[8.5px] font-bold transition-all"
                     >
                       📱 CBE App screenshot
                     </button>
@@ -759,7 +839,7 @@ export default function CartModal({
                         setReceiptScreenshot('https://images.unsplash.com/photo-1621416894569-0f39ed31d247?w=600');
                         alert('✅ Simulated Telebirr receipt attached.');
                       }}
-                      className="py-1 bg-white/5 hover:bg-[#C1FF00]/10 border border-white/5 hover:border-[#C1FF00]/20 text-white hover:text-[#C1FF00] rounded text-[8px]"
+                      className="py-1.5 bg-white hover:bg-amber-50 border border-stone-300 hover:border-amber-400 text-stone-800 hover:text-[#b21f1f] rounded-xl text-[8.5px] font-bold transition-all"
                     >
                       📲 Telebirr Receipt proof
                     </button>
@@ -773,24 +853,24 @@ export default function CartModal({
                     value={receiptScreenshot}
                     onChange={(e) => setReceiptScreenshot(e.target.value)}
                     placeholder="or paste Screenshot Image URL..."
-                    className="w-full bg-black border border-white/10 text-white/60 font-mono text-[9px] p-2 outline-none"
+                    className="w-full bg-white border border-stone-300 text-stone-800 font-mono text-[9.5px] p-2 rounded-xl outline-none"
                   />
                 </div>
 
                 {/* Screenshot preview */}
                 {receiptScreenshot && (
-                  <div className="bg-black/80 p-2 border border-[#C1FF00]/20 rounded relative text-center">
-                    <p className="text-[8px] uppercase font-mono text-[#C1FF00] mb-1 font-bold">Attached Payment Proof Preview</p>
+                  <div className="bg-white p-2.5 border border-amber-400 rounded-xl relative text-center shadow-sm">
+                    <p className="text-[8.5px] uppercase font-mono text-[#b21f1f] mb-1 font-bold">Attached Payment Proof Preview</p>
                     <img 
                       src={receiptScreenshot} 
-                      className="max-h-24 mx-auto object-contain border border-white/15" 
+                      className="max-h-24 mx-auto object-contain border border-stone-200 rounded-lg" 
                       alt="Payment Receipt Preview" 
                       referrerPolicy="no-referrer"
                     />
                     <button 
                       type="button"
                       onClick={() => setReceiptScreenshot('')}
-                      className="absolute top-1 right-1 text-[8px] font-mono text-red-400 bg-black/60 px-1 rounded hover:text-white"
+                      className="absolute top-1 right-1 text-[8px] font-mono text-red-600 bg-red-100 px-1.5 py-0.5 rounded-md hover:bg-red-200"
                     >
                       REMOVE
                     </button>
@@ -799,8 +879,8 @@ export default function CartModal({
               </div>
 
               {/* Receipt Comments */}
-              <div className="pt-2 border-t border-white/5">
-                <label className="text-[9px] font-mono uppercase text-white/50 block mb-1 font-bold">
+              <div className="pt-2 border-t border-stone-200">
+                <label className="text-[9.5px] font-mono uppercase text-[#b21f1f] block mb-1 font-black">
                   {appLang === 'am' ? 'ተጨማሪ ማሳሰቢያ ወይንም አስተያየት እዚህ ይጻፉ' : 'Receipt Remarks & Notes'}
                 </label>
                 <input 
@@ -808,7 +888,7 @@ export default function CartModal({
                   placeholder={cartUiLocales.receipt_comment_placeholder[appLang as keyof typeof cartUiLocales.receipt_comment_placeholder] || cartUiLocales.receipt_comment_placeholder.en}
                   value={receiptComment}
                   onChange={(e) => setReceiptComment(e.target.value)}
-                  className="w-full bg-black border border-white/10 text-white text-[10px] p-2 outline-none focus:border-[#C1FF00]"
+                  className="w-full bg-white border border-stone-300 text-stone-900 text-xs p-2.5 rounded-xl outline-none focus:border-[#b21f1f] focus:ring-1 focus:ring-[#b21f1f]"
                 />
               </div>
             </div>
@@ -816,23 +896,21 @@ export default function CartModal({
 
           {/* Chapa Secure Checkout configuration */}
           {payment === 'chapa' && (
-            <div className="bg-[#0b1319] p-4 border border-[#00f5ff]/20 space-y-3.5 rounded-xl relative overflow-hidden">
-              <div className="absolute top-0 right-0 w-16 h-16 bg-[#00f5ff]/5 rounded-full blur-xl pointer-events-none" />
-              
-              <div className="flex justify-between items-center border-b border-white/10 pb-1.5">
-                <span className="text-[9px] text-[#00f5ff] font-mono font-black tracking-widest uppercase block">🔌 CHAPA SECURE CHECKOUT</span>
-                <span className="bg-[#00f5ff]/10 text-[#00f5ff] px-2 py-0.5 rounded text-[7.5px] font-mono font-black">
+            <div className="bg-cyan-50 p-4 border border-cyan-300 space-y-3.5 rounded-2xl relative overflow-hidden text-stone-900">
+              <div className="flex justify-between items-center border-b border-cyan-200 pb-1.5">
+                <span className="text-[9.5px] text-cyan-900 font-mono font-black tracking-widest uppercase block">🔌 CHAPA SECURE CHECKOUT</span>
+                <span className="bg-cyan-200 text-cyan-900 px-2 py-0.5 rounded-md text-[8px] font-mono font-black">
                   {chapaMode === 'live' ? 'LIVE DEPLOY' : 'SANDBOX SIMULATOR'}
                 </span>
               </div>
 
-              <div className="space-y-3 text-white">
-                <p className="text-[10px] text-white/70 leading-relaxed font-semibold">
+              <div className="space-y-3 text-stone-800">
+                <p className="text-[10.5px] text-stone-700 leading-relaxed font-semibold">
                   በኢትዮጵያ ቀዳሚ በሆነው የቻፓ ክፍያ (telebirr, CBE birr, Mobile money እና ካርድ) ደረሰኝዎን በቀና መንገድ እዚህ ይክፈሉ።
                 </p>
 
                 <div>
-                  <label className="text-[8px] font-mono uppercase text-white/50 block mb-1">
+                  <label className="text-[8.5px] font-mono uppercase text-stone-600 block mb-1 font-bold">
                     የቻፓ ክፍያ አስፈጻሚው ኢሜይል (EMAIL)*
                   </label>
                   <input 
@@ -841,13 +919,13 @@ export default function CartModal({
                     value={chapaEmail}
                     onChange={(e) => setChapaEmail(e.target.value)}
                     placeholder="e.g. caleb@yohannes.com"
-                    className="w-full bg-black border border-white/10 text-white text-xs p-2 outline-none focus:border-[#00f5ff] rounded font-mono"
+                    className="w-full bg-white border border-stone-300 text-stone-900 text-xs p-2.5 outline-none focus:border-cyan-600 rounded-xl font-mono"
                   />
                 </div>
 
                 <div className="grid grid-cols-2 gap-2">
                   <div>
-                    <label className="text-[8px] font-mono uppercase text-white/50 block mb-1">
+                    <label className="text-[8.5px] font-mono uppercase text-stone-600 block mb-1 font-bold">
                       የመጀመሪያ ስም (FIRST NAME)*
                     </label>
                     <input 
@@ -856,11 +934,11 @@ export default function CartModal({
                       value={chapaFirstName}
                       onChange={(e) => setChapaFirstName(e.target.value)}
                       placeholder="Caleb"
-                      className="w-full bg-black border border-white/10 text-white text-xs p-2 outline-none focus:border-[#00f5ff] rounded"
+                      className="w-full bg-white border border-stone-300 text-stone-900 text-xs p-2.5 outline-none focus:border-cyan-600 rounded-xl"
                     />
                   </div>
                   <div>
-                    <label className="text-[8px] font-mono uppercase text-white/50 block mb-1">
+                    <label className="text-[8.5px] font-mono uppercase text-stone-600 block mb-1 font-bold">
                       የአያት ስም (LAST NAME)*
                     </label>
                     <input 
@@ -869,24 +947,24 @@ export default function CartModal({
                       value={chapaLastName}
                       onChange={(e) => setChapaLastName(e.target.value)}
                       placeholder="Yohannes"
-                      className="w-full bg-black border border-white/10 text-white text-xs p-2 outline-none focus:border-[#00f5ff] rounded"
+                      className="w-full bg-white border border-stone-300 text-stone-900 text-xs p-2.5 outline-none focus:border-cyan-600 rounded-xl"
                     />
                   </div>
                 </div>
 
-                <div className="p-2.5 bg-black/40 border border-white/5 rounded text-[9px] text-white/60 space-y-1">
-                  <div className="flex justify-between text-white/80 font-bold">
+                <div className="p-2.5 bg-white border border-cyan-200 rounded-xl text-[9.5px] text-stone-800 space-y-1">
+                  <div className="flex justify-between text-stone-900 font-bold">
                     <span>ጠቅላላ የሚከፈል ሂሳብ መጠን:</span>
-                    <span className="font-mono text-[#00f5ff] font-black">{grandTotal} Birr</span>
+                    <span className="font-mono text-cyan-900 font-black">{grandTotal} Birr</span>
                   </div>
                   <div className="flex justify-between">
                     <span>{appLang === 'am' ? 'የሲስተም ሁኔታ (System State):' : 'System State:'}</span>
                     {chapaKey ? (
-                      <span className="text-emerald-400 font-bold font-mono">
+                      <span className="text-emerald-700 font-bold font-mono">
                         {appLang === 'am' ? '✔️ የኤፒአይ ቁልፍ ተገናኝቷል (API KEY CONNECTED)' : '✔️ API KEY CONNECTED'}
                       </span>
                     ) : (
-                      <span className="text-yellow-400 font-bold font-mono">
+                      <span className="text-amber-700 font-bold font-mono">
                         {appLang === 'am' ? '⚠️ የቻፓ ማሳያ ሙከራ ንቁ ነው (CHAPA DEMO EMULATOR active)' : '⚠️ CHAPA DEMO EMULATOR active'}
                       </span>
                     )}
@@ -899,34 +977,34 @@ export default function CartModal({
         </div>
 
         {/* Modal footer containing compliant pricing blocks */}
-        <div className="p-4 border-t border-white/10 bg-[#141414] text-white space-y-2">
-          <div className="flex justify-between text-[11px] font-mono text-white/50">
+        <div className="p-4 sm:p-5 border-t border-stone-200 bg-stone-50 text-stone-900 space-y-2 rounded-b-3xl">
+          <div className="flex justify-between text-xs font-mono text-stone-600">
             <span>{cartUiLocales.subtotal[appLang as keyof typeof cartUiLocales.subtotal] || cartUiLocales.subtotal.en}</span>
-            <span className="font-bold text-white">{subtotal} {appLang === 'am' ? 'ብር' : 'Birr'}</span>
+            <span className="font-bold text-stone-900">{subtotal} {appLang === 'am' ? 'ብር' : 'Birr'}</span>
           </div>
-          <div className="flex justify-between text-[11px] font-mono text-white/50">
+          <div className="flex justify-between text-xs font-mono text-stone-600">
             <span>{cartUiLocales.service_charge[appLang as keyof typeof cartUiLocales.service_charge] || cartUiLocales.service_charge.en} ({serviceChargeRate}%)</span>
-            <span className="font-bold text-white">{serviceCharge} {appLang === 'am' ? 'ብር' : 'Birr'}</span>
+            <span className="font-bold text-stone-900">{serviceCharge} {appLang === 'am' ? 'ብር' : 'Birr'}</span>
           </div>
-          <div className="flex justify-between text-[11px] font-mono text-white/50">
+          <div className="flex justify-between text-xs font-mono text-stone-600">
             <span>{cartUiLocales.vat[appLang as keyof typeof cartUiLocales.vat] || cartUiLocales.vat.en} ({vatRate}%)</span>
-            <span className="font-bold text-white">{vat} {appLang === 'am' ? 'ብር' : 'Birr'}</span>
+            <span className="font-bold text-stone-900">{vat} {appLang === 'am' ? 'ብር' : 'Birr'}</span>
           </div>
-          <div className="flex justify-between text-[11px] font-mono text-emerald-400">
+          <div className="flex justify-between text-xs font-mono text-[#b21f1f]">
             <span>{cartUiLocales.tip_label[appLang as keyof typeof cartUiLocales.tip_label] || cartUiLocales.tip_label.en}</span>
             <span className="font-bold">{tipAmount} {appLang === 'am' ? 'ብር' : 'Birr'}</span>
           </div>
-          <div className="flex justify-between border-t border-white/10 pt-2 text-xs">
-            <span className="font-black uppercase tracking-widest text-yellow-400">
+          <div className="flex justify-between items-center border-t border-stone-200 pt-2.5 mt-1">
+            <span className="font-black uppercase tracking-wider text-sm sm:text-base text-[#b21f1f]">
               {cartUiLocales.grand_total[appLang as keyof typeof cartUiLocales.grand_total] || cartUiLocales.grand_total.en}
             </span>
-            <span className="font-mono font-black text-lg text-yellow-400">{grandTotal} {appLang === 'am' ? 'ብር' : 'Birr'}</span>
+            <span className="font-mono font-black text-xl text-[#b21f1f]">{grandTotal} {appLang === 'am' ? 'ብር' : 'Birr'}</span>
           </div>
 
           <button 
             id="checkout-confirm-btn"
             onClick={handleSubmit}
-            className="w-full bg-gradient-to-r from-yellow-400 via-white to-red-600 hover:from-yellow-300 hover:to-red-500 text-black font-black uppercase text-xs tracking-wider py-3.5 mt-3 transition-all rounded-xl border-2 border-red-600 shadow-lg shrink-0 font-sans cursor-pointer active:scale-95"
+            className="w-full bg-[#b21f1f] hover:bg-[#8c1414] text-white font-black uppercase text-xs sm:text-sm tracking-wider py-3.5 mt-3 transition-all rounded-2xl border-2 border-[#8c1414] shadow-lg shrink-0 font-sans cursor-pointer active:scale-95"
           >
             {cartUiLocales.place_order_btn[appLang as keyof typeof cartUiLocales.place_order_btn] || cartUiLocales.place_order_btn.en}
           </button>

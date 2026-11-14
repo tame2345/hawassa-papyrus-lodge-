@@ -6,31 +6,20 @@
 import React from 'react';
 
 export default function FooterTicker() {
-  const words = [
-    'HAWASSA PAPYRUS LODGE',
-    'EXQUISITE lakeside ESCAPES',
-    'ETHIOPIAN TRADITIONAL SHEKLA TIBS',
-    'FAST DELIVERY SERVICES',
-    'SECURE CBE & TELEBIRR TRANSACTIONS',
-    'SCAN. ORDER. ENJOY.'
-  ];
-
   return (
-    <footer className="h-11 border-t border-white/10 flex items-center bg-[#070707] relative overflow-hidden text-white w-full select-none">
-      <div className="w-full flex justify-between px-6 items-center text-[10px] tracking-[0.25em] font-mono leading-none">
-        <div className="flex gap-8 items-center overflow-hidden whitespace-nowrap">
-          <div className="flex gap-8 animate-pulse">
-            {words.map((w, idx) => (
-              <span key={idx} className="text-white/45 font-black uppercase text-[9px] flex items-center gap-2">
-                <span className="w-1.5 h-1.5 bg-[#C1FF00] inline-block rounded-full"></span>
-                {w}
-              </span>
-            ))}
-          </div>
+    <footer className="border-t border-white/10 bg-[#070707] text-white w-full select-none py-3 px-4 sm:px-6">
+      <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2 text-center sm:text-left">
+        <div className="space-y-0.5">
+          <p className="text-[11px] sm:text-xs font-bold text-white/90 tracking-wide">
+            © 2026 ጉራቻ ቴክኖሎጂ (Guracha Technology) • ሐዋሳ እና አዲስ አበባ 🇪🇹
+          </p>
+          <p className="text-[10px] sm:text-[11px] text-white/60 font-medium">
+            ዘመናዊ ዲጂታል ሜኑ እና የሆቴል አስተዳደር ሲስተም
+          </p>
         </div>
-        <div className="hidden lg:flex items-center gap-2 text-white/50 bg-white/5 border border-white/5 px-3 py-1 font-mono text-[9px]">
-          <span>COORD: 7.0621° N, 38.4763° E</span>
-          <span className="text-[#C1FF00] font-black">● LIVE</span>
+        <div className="inline-flex items-center gap-1.5 text-[10px] sm:text-[11px] font-mono font-black tracking-wider text-[#C1FF00] bg-white/5 border border-white/10 px-3 py-1 rounded-lg">
+          <span className="text-white/60 font-normal">Powered by</span>
+          <span>Guracha Tech</span>
         </div>
       </div>
     </footer>
