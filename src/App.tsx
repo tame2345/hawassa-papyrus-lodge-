@@ -24,10 +24,12 @@ import CartModal from './components/CartModal';
 import PrintableCertificateModal from './components/PrintableCertificateModal';
 import OrderAdjustmentModal from './components/OrderAdjustmentModal';
 import LiveOrderTracker from './components/LiveOrderTracker';
+import MenuAiAssistant from './components/MenuAiAssistant';
 import HeroDemo from './components/ui/demo';
 import AdminRevenueReports from './components/AdminRevenueReports';
 import { SupabaseLogin } from './components/SupabaseLogin';
-import { getEffectiveCookingStatus } from './utils/orderQueue';
+import { getEffectiveCookingStatus, computeLiveOrderQueue } from './utils/orderQueue';
+import { downloadOrderReceiptPdf } from './utils/receiptPdf';
 
 // Gourmet Restaurant Paradise Background Assets
 // @ts-ignore
@@ -294,9 +296,26 @@ export default function App() {
   ]);
 
   const [hasLoadedCloudSettings, setHasLoadedCloudSettings] = useState(false);
+  const cloudHydratedAtRef = useRef<number>(0);
+  const invalidateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [rlsBlockedKeys, setRlsBlockedKeys] = useState<string[]>([]);
   const [isRlsBannerDismissed, setIsRlsBannerDismissed] = useState(false);
+
+  const scheduleServerCacheInvalidation = (key: string) => {
+    if (Date.now() - cloudHydratedAtRef.current < 1500) return;
+    if (invalidateTimerRef.current) {
+      clearTimeout(invalidateTimerRef.current);
+    }
+    invalidateTimerRef.current = setTimeout(() => {
+      fetch('/api/cache/invalidate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key }),
+        keepalive: true,
+      }).catch(() => {});
+    }, 350);
+  };
 
   // Sync state helper with explicit error checking
   const syncKeyToCloud = async (key: string, value: any) => {
@@ -327,6 +346,7 @@ export default function App() {
       } else {
         setRlsBlockedKeys(prev => prev.filter(k => k !== key));
         setSyncError(null);
+        scheduleServerCacheInvalidation(key);
       }
     } catch (err: any) {
       console.warn(`Supabase sync exception for key '${key}':`, err);
@@ -402,6 +422,7 @@ export default function App() {
   const [selectedChefShiftStaff, setSelectedChefShiftStaff] = useState<string>('my_shift');
   const [selectedReceptionistShiftStaff, setSelectedReceptionistShiftStaff] = useState<string>('my_shift');
   const [selectedCashierShiftStaff, setSelectedCashierShiftStaff] = useState<string>('my_shift');
+  const [receiptDownloadedId, setReceiptDownloadedId] = useState<string | null>(null);
   const [selectedManagerAuditStaff, setSelectedManagerAuditStaff] = useState<string>('all');
   const [selectedManagerAuditRole, setSelectedManagerAuditRole] = useState<string>('all');
 
@@ -1772,6 +1793,101 @@ export default function App() {
       };
 
       try {
+        // High-scale fast path: fetch all system_settings & gallery in 1 compressed server-cached request
+        try {
+          const bootRes = await fetch('/api/bootstrap', {
+            headers: { Accept: 'application/json' },
+          });
+          if (bootRes.ok) {
+            const boot = await bootRes.json() as {
+              configured?: boolean;
+              settings?: Record<string, any>;
+              gallery?: any[];
+            };
+            if (boot && boot.configured && boot.settings) {
+              const s = boot.settings;
+              if (s.logoUrl && s.logoUrl.url !== undefined) {
+                setLogoUrl(sanitizeLogoUrl(s.logoUrl.url));
+                if (s.logoUrl.url.startsWith('http://') || s.logoUrl.url.startsWith('https://')) {
+                  handleUpdateLogoAndSync(DEFAULT_LOGO);
+                }
+              }
+              if (s.attendance && Array.isArray(s.attendance.records)) setAttendance(s.attendance.records);
+              if (s.menu && Array.isArray(s.menu.items)) setMenuItems(s.menu.items);
+              if (s.categories && Array.isArray(s.categories.list)) setCategories(s.categories.list);
+              if (s.banks && Array.isArray(s.banks.accounts)) setBanks(s.banks.accounts);
+              if (s.staff && Array.isArray(s.staff.list)) setStaff(s.staff.list);
+              if (s.orders && Array.isArray(s.orders.list)) setOrders(s.orders.list);
+              if (s.roomBookings && Array.isArray(s.roomBookings.list)) setRoomBookings(s.roomBookings.list);
+              if (s.visitorLog && Array.isArray(s.visitorLog.list)) setVisitorLog(s.visitorLog.list);
+              if (s.promos && Array.isArray(s.promos.list)) setPromos(s.promos.list);
+              if (s.aboutLodgeText && s.aboutLodgeText.text !== undefined) setAboutLodgeText(s.aboutLodgeText.text);
+              if (s.bgVideoUrl && s.bgVideoUrl.url !== undefined && s.bgVideoUrl.url && !s.bgVideoUrl.url.includes('pixabay.com') && !s.bgVideoUrl.url.includes('202004')) {
+                setBgVideoUrl(s.bgVideoUrl.url);
+              } else {
+                setBgVideoUrl('https://www.youtube.com/watch?v=EvwYOmxaxdA');
+              }
+              if (s.bgVideoType && s.bgVideoType.type !== undefined && s.bgVideoType.type !== 'gourmet-paradise' && s.bgVideoType.type !== 'mango-paradise') {
+                setBgVideoType(s.bgVideoType.type);
+              } else {
+                setBgVideoType('youtube');
+              }
+              if (s.isBgVideoEnabled && s.isBgVideoEnabled.enabled !== undefined) {
+                setIsBgVideoEnabled(s.isBgVideoEnabled.enabled);
+              } else {
+                setIsBgVideoEnabled(true);
+              }
+              if (s.assistanceCalls && Array.isArray(s.assistanceCalls.list)) setAssistanceCalls(s.assistanceCalls.list);
+              if (s.feedback && Array.isArray(s.feedback.list)) setFeedback(s.feedback.list);
+              if (s.expenses && Array.isArray(s.expenses.list)) setExpenses(s.expenses.list);
+              if (s.bonuses && Array.isArray(s.bonuses.list)) setBonuses(s.bonuses.list);
+              if (s.table_assignments && Array.isArray(s.table_assignments.list)) setTableAssignments(s.table_assignments.list);
+              if (s.serviceChargeRate && typeof s.serviceChargeRate.rate === 'number') setServiceChargeRate(s.serviceChargeRate.rate);
+              if (s.vatRate && typeof s.vatRate.rate === 'number') setVatRate(s.vatRate.rate);
+              if (s.chapa) {
+                if (s.chapa.key !== undefined) setChapaKey(s.chapa.key);
+                if (s.chapa.active !== undefined) setChapaActive(s.chapa.active);
+                if (s.chapa.mode !== undefined) setChapaMode(s.chapa.mode);
+              }
+              if (Array.isArray(boot.gallery)) setGalleryItems(boot.gallery);
+              if (s.custom_roles && Array.isArray(s.custom_roles.list)) setCustomRoles(s.custom_roles.list);
+              if (s.custom_privileges && Array.isArray(s.custom_privileges.list)) setCustomPrivileges(s.custom_privileges.list);
+              if (s.pending_attendance && Array.isArray(s.pending_attendance.list)) setPendingAttendanceRequests(s.pending_attendance.list);
+              if (s.hero_title_am?.text !== undefined) setHeroTitleAm(s.hero_title_am.text);
+              if (s.hero_title_en?.text !== undefined) setHeroTitleEn(s.hero_title_en.text);
+              if (s.hero_subtitle_am?.text !== undefined) setHeroSubtitleAm(s.hero_subtitle_am.text);
+              if (s.hero_subtitle_en?.text !== undefined) setHeroSubtitleEn(s.hero_subtitle_en.text);
+              if (s.hero_intro_am?.text !== undefined) setHeroIntroAm(s.hero_intro_am.text);
+              if (s.hero_intro_en?.text !== undefined) setHeroIntroEn(s.hero_intro_en.text);
+              if (s.contact_hotline1?.text !== undefined) setContactHotline1(s.contact_hotline1.text);
+              if (s.contact_hotline2?.text !== undefined) setContactHotline2(s.contact_hotline2.text);
+              if (s.contact_location?.text !== undefined) setContactLocation(s.contact_location.text);
+              if (s.contact_address?.text !== undefined) setContactAddress(s.contact_address.text);
+              if (s.wifi_guest_ssid?.text !== undefined) setWifiGuestSsid(s.wifi_guest_ssid.text);
+              if (s.wifi_guest_password?.text !== undefined) setWifiGuestPassword(s.wifi_guest_password.text);
+              if (s.dining_breakfast_title_am?.text !== undefined) setDiningBreakfastTitleAm(s.dining_breakfast_title_am.text);
+              if (s.dining_breakfast_title_en?.text !== undefined) setDiningBreakfastTitleEn(s.dining_breakfast_title_en.text);
+              if (s.dining_breakfast_hours_am?.text !== undefined) setDiningBreakfastHoursAm(s.dining_breakfast_hours_am.text);
+              if (s.dining_breakfast_hours_en?.text !== undefined) setDiningBreakfastHoursEn(s.dining_breakfast_hours_en.text);
+              if (s.reception_assistance_am?.text !== undefined) setReceptionAssistanceAm(s.reception_assistance_am.text);
+              if (s.reception_assistance_en?.text !== undefined) setReceptionAssistanceEn(s.reception_assistance_en.text);
+              if (s.reception_emergency?.text !== undefined) setReceptionEmergency(s.reception_emergency.text);
+
+              try {
+                if (localStorage.getItem('papyrus_cache_enabled') !== 'false') {
+                  localStorage.setItem('papyrus_settings_cache', JSON.stringify(s));
+                  localStorage.setItem('papyrus_cache_last_sync', new Date().toISOString());
+                }
+              } catch {}
+
+              cloudHydratedAtRef.current = Date.now();
+              return;
+            }
+          }
+        } catch (bootErr) {
+          console.warn('Bootstrap fast-path unavailable, falling back to direct Supabase sync:', bootErr);
+        }
+
         // 1. Fetch logoUrl
         const logoVal = await fetchKeyAndCache('logoUrl');
         if (logoVal && logoVal.url !== undefined) {
@@ -1954,6 +2070,7 @@ export default function App() {
       } catch (err) {
         console.warn("Error fetching configurations from Supabase, using local state and cache systems:", err);
       } finally {
+        cloudHydratedAtRef.current = Date.now();
         setHasLoadedCloudSettings(true);
       }
     };
@@ -3415,6 +3532,29 @@ export default function App() {
     setCart(prev => prev.filter(c => c.id !== id));
   };
 
+  const handleQuickAddItemFromAssistant = (item: MenuItem) => {
+    const newItem: OrderItem = {
+      id: `${item.id}-${Date.now()}`,
+      baseId: item.id,
+      name: appLang === 'am' ? item.nameAm : (item.nameEn || item.nameAm),
+      qty: 1,
+      price: item.price
+    };
+    setCart(prev => [...prev, newItem]);
+  };
+
+  const handleFocusMenuItemFromAssistant = (item: MenuItem) => {
+    setMenuSearchQuery('');
+    setSelectedCategory(item.cat);
+    setSelectedMenuCardId(item.id);
+    setTimeout(() => {
+      const el = document.getElementById(`menu-card-item-${item.id}`);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+      }
+    }, 120);
+  };
+
   // GUEST CHEKOUT LOGIC
   const handleCheckoutPlaceOrder = (details: {
     location: string;
@@ -4537,6 +4677,23 @@ export default function App() {
               className="bg-[#b21f1f] hover:bg-[#8c1414] text-white px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all shadow-md active:scale-95 cursor-pointer border border-[#8c1414] shrink-0"
             >
               {appLang === 'am' ? 'እርዳታ ይጥሩ 🛎️' : 'Need Help? 🛎️'}
+            </button>
+
+            {/* AI Menu Assistant Quick Jump */}
+            <button
+              type="button"
+              onClick={() => {
+                const panel = document.getElementById('menu-ai-assistant-panel');
+                if (panel) panel.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                const toggleBtn = document.getElementById('btn-toggle-menu-ai');
+                if (toggleBtn && (toggleBtn.textContent?.includes('ክፈት') || toggleBtn.textContent?.includes('Ask AI'))) {
+                  toggleBtn.click();
+                }
+              }}
+              className="bg-white hover:bg-stone-100 text-[#b21f1f] px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all shadow-md active:scale-95 cursor-pointer border border-stone-200 flex items-center gap-1 shrink-0 whitespace-nowrap"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-[#b21f1f]" />
+              <span>{appLang === 'am' ? 'AI ሜኑ ረዳት' : 'AI Guide'}</span>
             </button>
 
             {/* Live Order Check & Queue Button */}
@@ -5706,6 +5863,19 @@ export default function App() {
                       )}
                     </div>
                   </div>
+
+                  {/* AI MENU ASSISTANT EMBEDDED ON THE MENU */}
+                  <MenuAiAssistant
+                    menuItems={menuItems}
+                    categories={categories}
+                    appLang={appLang}
+                    guestLocation={guestLocation}
+                    activeQueueCount={computeLiveOrderQueue(orders).activeKitchenQueue.length}
+                    serviceChargeRate={serviceChargeRate}
+                    vatRate={vatRate}
+                    onAddToCart={handleQuickAddItemFromAssistant}
+                    onFocusMenuItem={handleFocusMenuItemFromAssistant}
+                  />
 
                   {/* Horizontal navigation category chips with clean scrolling layout */}
                   <div className="relative z-10 font-sans flex items-center">
@@ -14080,29 +14250,48 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                     <span className="text-base font-black text-emerald-400 font-mono">{subtotal}.00 ETB</span>
                                   </div>
 
-                                  <div className="flex gap-2 w-full sm:w-auto mt-1">
-                                    <button
-                                      onClick={() => setAdjustingOrder(ord)}
-                                      className="flex-1 sm:flex-none bg-sky-500 hover:bg-sky-600 text-black text-[10.5px] font-black uppercase px-3.5 py-2 rounded-lg cursor-pointer transition-colors font-mono"
-                                    >
-                                      ✏️ ማስተካከያ (Adjust)
-                                    </button>
-                                    <button
-                                      onClick={() => {
-                                        askConfirmAndRun(
-                                          `የጠረጴዛ/ክፍል ${ord.location} ሂሳብ መጠን ${subtotal} ብር ለመቀበል ይፈልጋሉ? Order status will be updated to "Paid".`,
-                                          () => {
-                                            setOrders(prev => prev.map(o => o.id === ord.id ? { ...o, status: 'Paid' } : o));
-                                            playVoiceAlert(`Bill for Table ${ord.location || 'Walk-In'} processed successfully. Settle approval granted.`);
-                                            alert(`💸 ክፍያ በተሳካ ሁኔታ ተረጋግጧል! ሂሳቡ ተከፍሏል። ደረሰኝ ማተም ይችላሉ።`);
-                                          }
-                                        );
-                                      }}
-                                      className="flex-1 sm:flex-none bg-cyan-500 hover:bg-cyan-600 text-black text-[10.5px] font-black uppercase px-3.5 py-2 rounded-lg cursor-pointer transition-colors font-mono"
-                                    >
-                                      💵 ሂሳብ ዝጋ (Settle Paid)
-                                    </button>
-                                  </div>
+                                    <div className="flex flex-wrap gap-2 w-full sm:w-auto mt-1">
+                                      {(ord.status === 'Completed' || ord.cookingStatus === 'Completed') && (
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            downloadOrderReceiptPdf(ord, {
+                                              cashierName: currentUser?.name || 'Cashier Desk',
+                                              serviceChargeRate,
+                                              vatRate,
+                                              hotline: contactHotline1,
+                                              address: contactAddress,
+                                            });
+                                            setReceiptDownloadedId(ord.id);
+                                            setTimeout(() => setReceiptDownloadedId(null), 2200);
+                                          }}
+                                          className="flex-1 sm:flex-none bg-emerald-500 hover:bg-emerald-400 text-black text-[10.5px] font-black uppercase px-3.5 py-2 rounded-lg cursor-pointer transition-colors font-mono flex items-center justify-center gap-1.5"
+                                        >
+                                          <Printer className="w-3.5 h-3.5" />
+                                          <span>{receiptDownloadedId === ord.id ? '✓ PDF Saved' : 'Print Receipt'}</span>
+                                        </button>
+                                      )}
+                                      <button
+                                        onClick={() => setAdjustingOrder(ord)}
+                                        className="flex-1 sm:flex-none bg-sky-500 hover:bg-sky-600 text-black text-[10.5px] font-black uppercase px-3.5 py-2 rounded-lg cursor-pointer transition-colors font-mono"
+                                      >
+                                        ✏️ ማስተካከያ (Adjust)
+                                      </button>
+                                      <button
+                                        onClick={() => {
+                                          askConfirmAndRun(
+                                            `የጠረጴዛ/ክፍል ${ord.location} ሂሳብ መጠን ${subtotal} ብር ለመቀበል ይፈልጋሉ? Order status will be updated to "Paid".`,
+                                            () => {
+                                              setOrders(prev => prev.map(o => o.id === ord.id ? { ...o, status: 'Paid', cashierName: currentUser?.name || o.cashierName || 'Cashier' } : o));
+                                              playVoiceAlert(`Bill for Table ${ord.location || 'Walk-In'} processed successfully. Settle approval granted.`);
+                                            }
+                                          );
+                                        }}
+                                        className="flex-1 sm:flex-none bg-cyan-500 hover:bg-cyan-600 text-black text-[10.5px] font-black uppercase px-3.5 py-2 rounded-lg cursor-pointer transition-colors font-mono"
+                                      >
+                                        💵 ሂሳብ ዝጋ (Settle Paid)
+                                      </button>
+                                    </div>
                                 </div>
                               </div>
                             );
@@ -14110,6 +14299,129 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                         </div>
                       )}
                     </div>
+
+                    {/* Completed & Paid Orders — PDF Receipt Printing Desk */}
+                    {(() => {
+                      const completedOrders = orders.filter((o) => {
+                        const isCompletedOrder =
+                          o.status === 'Paid' ||
+                          o.status === 'Completed' ||
+                          o.cookingStatus === 'Completed' ||
+                          Boolean(o.servedByWaiter);
+                        if (!isCompletedOrder) return false;
+                        if (selectedCashierShiftStaff === 'all' || selectedCashierShiftStaff === 'my_shift') {
+                          if (selectedCashierShiftStaff === 'my_shift' && o.cashierName && currentUser?.name) {
+                            return o.cashierName.toLowerCase() === currentUser.name.toLowerCase();
+                          }
+                          return true;
+                        }
+                        return (o.cashierName || '').toLowerCase() === selectedCashierShiftStaff.toLowerCase();
+                      });
+
+                      return (
+                        <div className="bg-[#101010] border border-emerald-500/25 p-5 rounded-2xl space-y-4">
+                          <div className="flex flex-wrap justify-between items-center gap-2 border-b border-white/5 pb-3">
+                            <div>
+                              <h3 className="text-xs font-black uppercase text-emerald-400 flex items-center gap-2">
+                                <Printer className="w-4 h-4" />
+                                <span>🧾 የተጠናቀቁ እና የተከፈሉ ትዕዛዞች (Completed Orders &amp; PDF Receipts)</span>
+                              </h3>
+                              <p className="text-[10px] text-white/50 font-mono mt-0.5">
+                                Generate and download a PDF customer receipt for any completed or settled order
+                              </p>
+                            </div>
+                            <span className="font-mono text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2.5 py-1 rounded font-black uppercase tabular-nums">
+                              {completedOrders.length} Completed
+                            </span>
+                          </div>
+
+                          {completedOrders.length === 0 ? (
+                            <div className="text-center py-8 border border-dashed border-white/10 rounded-xl text-white/35 text-xs">
+                              No completed or paid orders yet. Completed &amp; settled bills will appear here for PDF receipt printing.
+                            </div>
+                          ) : (
+                            <div className="space-y-3">
+                              {completedOrders.map((ord) => {
+                                const itemsSubtotal = ord.items.reduce(
+                                  (s, item) => s + (item.qty || 1) * (item.price || 0),
+                                  0
+                                );
+                                const displayTotal = ord.total > 0 ? ord.total : itemsSubtotal;
+                                const isDownloaded = receiptDownloadedId === ord.id;
+
+                                return (
+                                  <div
+                                    key={`completed-${ord.id}`}
+                                    className="bg-black/50 border border-white/10 hover:border-emerald-500/40 p-4 rounded-xl flex flex-col md:flex-row justify-between items-start md:items-center gap-4 transition-all"
+                                  >
+                                    <div className="space-y-1.5 flex-1">
+                                      <div className="flex flex-wrap items-center gap-2">
+                                        <span className="text-xs font-mono font-black text-white">{ord.id}</span>
+                                        <span className="text-xs font-bold text-cyan-400 bg-cyan-950/45 px-2 py-0.5 rounded font-mono uppercase">
+                                          🍽️ {ord.location || 'WALK-IN'}
+                                        </span>
+                                        <span className="text-[9.5px] px-2 py-0.5 rounded font-mono font-black uppercase bg-emerald-950 text-emerald-400 border border-emerald-500/25">
+                                          {ord.status === 'Paid' ? 'PAID' : 'COMPLETED'}
+                                        </span>
+                                        <span className="text-[10px] font-mono text-white/50">
+                                          {String(ord.payment || 'cash').toUpperCase()} · {ord.time || ''}
+                                        </span>
+                                      </div>
+
+                                      <div className="space-y-0.5 pl-3 border-l-2 border-emerald-500/30">
+                                        {ord.items.map((it, idx) => (
+                                          <p key={idx} className="text-xs text-white/80 font-semibold">
+                                            {it.qty} × {it.name}{' '}
+                                            <span className="text-white/40 font-mono text-[10px]">
+                                              ({it.price} Birr)
+                                            </span>
+                                          </p>
+                                        ))}
+                                      </div>
+                                    </div>
+
+                                    <div className="flex flex-col items-start md:items-end gap-2 shrink-0 w-full md:w-auto">
+                                      <div className="text-left md:text-right">
+                                        <span className="text-[9px] text-white/40 block font-mono uppercase">
+                                          RECEIPT TOTAL
+                                        </span>
+                                        <span className="text-base font-black text-emerald-400 font-mono tabular-nums">
+                                          {displayTotal.toFixed(2)} ETB
+                                        </span>
+                                      </div>
+
+                                      <button
+                                        type="button"
+                                        id={`btn-print-receipt-${ord.id.replace(/[^a-zA-Z0-9_-]/g, '')}`}
+                                        onClick={() => {
+                                          downloadOrderReceiptPdf(ord, {
+                                            cashierName: currentUser?.name || 'Cashier Desk',
+                                            serviceChargeRate,
+                                            vatRate,
+                                            hotline: contactHotline1,
+                                            address: contactAddress,
+                                          });
+                                          setReceiptDownloadedId(ord.id);
+                                          setTimeout(() => setReceiptDownloadedId(null), 2200);
+                                        }}
+                                        className={`w-full sm:w-auto text-[11px] font-black uppercase px-4 py-2 rounded-lg cursor-pointer transition-all font-mono flex items-center justify-center gap-2 ${
+                                          isDownloaded
+                                            ? 'bg-emerald-600 text-white'
+                                            : 'bg-[#f4c22b] hover:bg-yellow-400 text-black'
+                                        }`}
+                                      >
+                                        <Printer className="w-3.5 h-3.5" />
+                                        <span>{isDownloaded ? '✓ PDF Downloaded' : 'Print Receipt'}</span>
+                                      </button>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </div>
 
                   {/* Right Column (1 Col wide) for Shift Logs and Register Operations */}
