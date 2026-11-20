@@ -4,22 +4,24 @@
  */
 
 import React from 'react';
+import { useLanguage } from '../context/LanguageContext';
 
 export default function SidebarRail() {
+  const { t } = useLanguage();
   return (
-    <aside className="hidden md:flex w-20 border-r border-white/10 flex-col items-center justify-between py-10 bg-[#0F0F0F]">
+    <aside className="hidden md:flex w-20 border-r-2 border-[#F4C22B]/50 flex-col items-center justify-between py-10 bg-[#8C1414]">
       <span 
-        className="uppercase text-[9px] tracking-[0.35em] font-black text-white/40 font-mono" 
+        className="uppercase text-[9px] tracking-[0.35em] font-black text-white/85 font-mono" 
         style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}
       >
-        LODGE DESIGNATOR VOL 02 / 2026
+        {t('sidebar.designator')}
       </span>
-      <div className="w-px h-20 bg-white/10"></div>
+      <div className="w-px h-20 bg-[#F4C22B]/40"></div>
       <div className="flex flex-col items-center gap-2">
-        <span className="font-mono text-[10px] text-[#C1FF00] font-black tracking-widest bg-[#C1FF00]/10 px-2 py-0.5 rounded">
+        <span className="font-mono text-[10px] text-stone-950 font-black tracking-widest bg-[#F4C22B] px-2 py-0.5 rounded">
           HPL
         </span>
-        <span className="font-mono text-[9px] text-white/30 font-bold">002</span>
+        <span className="font-mono text-[9px] text-[#FDE68A] font-bold">002</span>
       </div>
     </aside>
   );

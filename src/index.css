@@ -8,8 +8,12 @@
 
 body {
   font-family: var(--font-sans);
-  background-color: #1F1F1F;
+  background-color: #070707;
   color: #ffffff;
+}
+
+body:has(.staff-menu-theme) {
+  background-color: #FAF6F0;
 }
 
 /* ELEGANT LIGHT THEME OVERRIDES FOR NEO-BRUTALIST TACTILE 3D */
@@ -184,9 +188,197 @@ body:has(.light-mode),
   scrollbar-width: none; /* Firefox */
 }
 
-/* Smooth scroll behaviors */
-html {
-  scroll-behavior: smooth;
+/* Crisp, settled scroll discipline (prevents trackpad lag and horizontal wobble) */
+html,
+body {
+  overflow-x: clip;
+  overscroll-behavior-y: contain;
+}
+
+/* Keep the Digital Menu container free of vertical scroll traps while allowing smooth page scrolling up and down */
+#category-highlights-section,
+.menu-container-scroll {
+  overflow-x: clip;
+  overflow-y: visible;
+}
+
+.menu-horizontal-only {
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  overscroll-behavior-y: auto;
+  touch-action: pan-x pan-y;
+}
+
+/* LiveOrderTracker subtle CSS pulse animations for Preparing & Completed transitions */
+@keyframes statusHaloPreparing {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(178, 31, 31, 0.35);
+    transform: scale(1);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(178, 31, 31, 0);
+    transform: scale(1.06);
+  }
+}
+
+@keyframes statusHaloCompleted {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4);
+    transform: scale(1);
+  }
+  50% {
+    box-shadow: 0 0 0 7px rgba(16, 185, 129, 0);
+    transform: scale(1.06);
+  }
+}
+
+@keyframes statusBarSoftPulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.62;
+  }
+}
+
+@keyframes statusCardTransitionPreparing {
+  0% {
+    box-shadow: 0 0 0 0 rgba(244, 194, 43, 0.65);
+  }
+  50% {
+    box-shadow: 0 0 0 8px rgba(178, 31, 31, 0.16);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(244, 194, 43, 0);
+  }
+}
+
+@keyframes statusCardTransitionCompleted {
+  0% {
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.6);
+  }
+  50% {
+    box-shadow: 0 0 0 9px rgba(16, 185, 129, 0.14);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+  }
+}
+
+.order-dot-preparing {
+  animation: statusHaloPreparing 2s ease-in-out infinite;
+}
+
+.order-dot-completed {
+  animation: statusHaloCompleted 1.9s ease-in-out infinite;
+}
+
+.order-bar-pulse {
+  animation: statusBarSoftPulse 2.1s ease-in-out infinite;
+}
+
+.order-badge-pulse-preparing {
+  animation: statusHaloPreparing 2.2s ease-in-out infinite;
+}
+
+.order-badge-pulse-completed {
+  animation: statusHaloCompleted 2s ease-in-out infinite;
+}
+
+.order-transition-preparing {
+  animation: statusCardTransitionPreparing 1.6s ease-out 2;
+}
+
+.order-transition-completed {
+  animation: statusCardTransitionCompleted 1.6s ease-out 2;
+}
+
+/* Shift Management Table Assignment card subtle lift & scale animations */
+@keyframes shiftAssignmentCardLift {
+  0% {
+    transform: translateY(0) scale(1);
+    box-shadow: 0 0 0 0 rgba(244, 194, 43, 0.65);
+  }
+  28% {
+    transform: translateY(-4px) scale(1.045);
+    box-shadow: 0 10px 22px -4px rgba(244, 194, 43, 0.42), 0 0 0 4px rgba(244, 194, 43, 0.28);
+  }
+  65% {
+    transform: translateY(-2px) scale(1.02);
+    box-shadow: 0 6px 14px -4px rgba(244, 194, 43, 0.22), 0 0 0 8px rgba(244, 194, 43, 0);
+  }
+  100% {
+    transform: translateY(0) scale(1);
+    box-shadow: 0 0 0 0 rgba(244, 194, 43, 0);
+  }
+}
+
+@keyframes shiftAssignmentRowPop {
+  0% {
+    background-color: rgba(244, 194, 43, 0.26);
+    transform: scale(1);
+  }
+  30% {
+    background-color: rgba(244, 194, 43, 0.18);
+    transform: scale(1.008);
+  }
+  100% {
+    background-color: transparent;
+    transform: scale(1);
+  }
+}
+
+.shift-table-card {
+  transition:
+    transform 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 220ms ease,
+    border-color 220ms ease,
+    background-color 220ms ease;
+  will-change: transform;
+}
+
+.shift-table-card:hover {
+  transform: translateY(-2px) scale(1.015);
+  box-shadow: 0 6px 14px rgba(244, 194, 43, 0.22);
+}
+
+.shift-table-card:active {
+  transform: translateY(0) scale(0.985);
+}
+
+.shift-table-card-selected {
+  transform: translateY(-1px) scale(1.015);
+  box-shadow: 0 5px 14px rgba(244, 194, 43, 0.32);
+}
+
+.shift-table-card-assigned {
+  animation: shiftAssignmentCardLift 1.3s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.shift-row-assigned {
+  animation: shiftAssignmentRowPop 1.4s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .order-dot-preparing,
+  .order-dot-completed,
+  .order-bar-pulse,
+  .order-badge-pulse-preparing,
+  .order-badge-pulse-completed,
+  .order-transition-preparing,
+  .order-transition-completed,
+  .shift-table-card-assigned,
+  .shift-row-assigned {
+    animation: none !important;
+  }
+  .shift-table-card,
+  .shift-table-card:hover,
+  .shift-table-card:active,
+  .shift-table-card-selected {
+    transition: none !important;
+    transform: none !important;
+  }
 }
 
 /* 3D Tactile Elements & Neon Neo-Brutalist Styling */
@@ -305,69 +497,69 @@ html {
 
 /* Beautiful 3D cards with color-coded tactile shadow depth */
 .tactile-3d-card-lime {
-  background-color: #121214;
-  border: 2px solid #C1FF00;
-  box-shadow: 8px 8px 0px 0px #C1FF00;
+  background-color: #991B1B;
+  border: 2px solid #F4C22B;
+  box-shadow: 8px 8px 0px 0px #F4C22B;
   transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 .tactile-3d-card-lime:hover {
   transform: translate(-2px, -2px);
-  box-shadow: 10px 10px 0px 0px #C1FF00;
+  box-shadow: 10px 10px 0px 0px #F4C22B;
 }
 
 .tactile-3d-card-pink {
-  background-color: #121214;
-  border: 2px solid #ff007f;
-  box-shadow: 8px 8px 0px 0px #ff007f;
+  background-color: #991B1B;
+  border: 2px solid #F4C22B;
+  box-shadow: 8px 8px 0px 0px #F4C22B;
   transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 .tactile-3d-card-pink:hover {
   transform: translate(-2px, -2px);
-  box-shadow: 10px 10px 0px 0px #ff007f;
+  box-shadow: 10px 10px 0px 0px #F4C22B;
 }
 
 .tactile-3d-card-orange {
-  background-color: #121214;
-  border: 2px solid #ff8c00;
-  box-shadow: 8px 8px 0px 0px #ff8c00;
+  background-color: #991B1B;
+  border: 2px solid #F59E0B;
+  box-shadow: 8px 8px 0px 0px #F59E0B;
   transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 .tactile-3d-card-orange:hover {
   transform: translate(-2px, -2px);
-  box-shadow: 10px 10px 0px 0px #ff8c00;
+  box-shadow: 10px 10px 0px 0px #F59E0B;
 }
 
 .tactile-3d-card-purple {
-  background-color: #121214;
-  border: 2px solid #a124fe;
-  box-shadow: 8px 8px 0px 0px #a124fe;
+  background-color: #991B1B;
+  border: 2px solid #F4C22B;
+  box-shadow: 8px 8px 0px 0px #F4C22B;
   transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 .tactile-3d-card-purple:hover {
   transform: translate(-2px, -2px);
-  box-shadow: 10px 10px 0px 0px #a124fe;
+  box-shadow: 10px 10px 0px 0px #F4C22B;
 }
 
 .tactile-3d-card-sky {
-  background-color: #121214;
-  border: 2px solid #00f5ff;
-  box-shadow: 8px 8px 0px 0px #00f5ff;
+  background-color: #991B1B;
+  border: 2px solid #F4C22B;
+  box-shadow: 8px 8px 0px 0px #F4C22B;
   transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 .tactile-3d-card-sky:hover {
   transform: translate(-2px, -2px);
-  box-shadow: 10px 10px 0px 0px #00f5ff;
+  box-shadow: 10px 10px 0px 0px #F4C22B;
 }
 
 .tactile-3d-card-neutral {
-  background-color: #121214;
-  border: 2px solid rgba(255, 255, 255, 0.15);
-  box-shadow: 8px 8px 0px 0px rgba(255, 255, 255, 0.1);
+  background-color: #991B1B;
+  border: 2px solid rgba(244, 194, 43, 0.45);
+  box-shadow: 8px 8px 0px 0px rgba(244, 194, 43, 0.25);
   transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 .tactile-3d-card-neutral:hover {
   transform: translate(-2px, -2px);
-  box-shadow: 10px 10px 0px 0px rgba(255, 255, 255, 0.15);
+  box-shadow: 10px 10px 0px 0px rgba(244, 194, 43, 0.45);
 }
 
 /* Beautiful Claymorphic Emojis or Elements representing 3D depth */
@@ -403,175 +595,537 @@ html {
    Contrast Colors: White (#FFFFFF) & Pure Black (#000000)
    ========================================================================== */
 
-/* Force dark panels to align with brand charcoal #1F1F1F when not in light mode */
-:not(.light-mode).bg-\[\#0b0c10\],
-:not(.light-mode) .bg-\[\#0b0c10\],
-:not(.light-mode).bg-\[\#121214\],
-:not(.light-mode) .bg-\[\#121214\],
-:not(.light-mode).bg-\[\#121212\],
-:not(.light-mode) .bg-\[\#121212\],
-:not(.light-mode).bg-\[\#101010\],
-:not(.light-mode) .bg-\[\#101010\],
-:not(.light-mode).bg-\[\#111111\],
-:not(.light-mode) .bg-\[\#111111\],
-:not(.light-mode).bg-\[\#141414\],
-:not(.light-mode) .bg-\[\#141414\],
-:not(.light-mode).bg-\[\#181818\],
-:not(.light-mode) .bg-\[\#181818\],
-:not(.light-mode).bg-\[\#151515\],
-:not(.light-mode) .bg-\[\#151515\],
-:not(.light-mode).bg-black\/95,
-:not(.light-mode) .bg-black\/95,
-:not(.light-mode).bg-black\/90,
-:not(.light-mode) .bg-black\/90,
-:not(.light-mode).bg-black\/80,
-:not(.light-mode) .bg-black\/80,
-:not(.light-mode).bg-black\/50,
-:not(.light-mode) .bg-black\/50,
-:not(.light-mode).bg-\[\#10151f\],
-:not(.light-mode) .bg-\[\#10151f\],
-:not(.light-mode).bg-\[\#0b141d\],
-:not(.light-mode) .bg-\[\#0b141d\],
-:not(.light-mode).bg-\[\#070D18\],
-:not(.light-mode) .bg-\[\#070D18\],
-:not(.light-mode).bg-\[\#0b1319\],
-:not(.light-mode) .bg-\[\#0b1319\] {
-  background-color: #1F1F1F !important;
+/* Brand Crimson Red panel overrides outside light-mode and staff-menu-theme */
+body:not(.light-mode) :not(.staff-menu-theme) .bg-\[\#0b0c10\],
+body:not(.light-mode) :not(.staff-menu-theme) .bg-\[\#121214\],
+body:not(.light-mode) :not(.staff-menu-theme) .bg-\[\#121212\],
+body:not(.light-mode) :not(.staff-menu-theme) .bg-\[\#101010\],
+body:not(.light-mode) :not(.staff-menu-theme) .bg-\[\#111111\],
+body:not(.light-mode) :not(.staff-menu-theme) .bg-\[\#141414\],
+body:not(.light-mode) :not(.staff-menu-theme) .bg-\[\#181818\],
+body:not(.light-mode) :not(.staff-menu-theme) .bg-\[\#151515\],
+body:not(.light-mode) :not(.staff-menu-theme) .bg-\[\#10151f\],
+body:not(.light-mode) :not(.staff-menu-theme) .bg-\[\#0b141d\],
+body:not(.light-mode) :not(.staff-menu-theme) .bg-\[\#070D18\],
+body:not(.light-mode) :not(.staff-menu-theme) .bg-\[\#0b1319\] {
+  background-color: #991B1B !important;
 }
 
-/* Brand Orange Text Overrides */
-.text-\[\#00f5ff\],
-.text-\[\#C1FF00\],
-.text-\[\#ff007f\],
-.text-cyan-400,
-.text-\[\#0aeffa\],
-.text-\[\#00f5ff\]\/70,
-.text-pink-500,
-.text-lime-400 {
-  color: #EB5D1B !important;
+/* Brand Gold Text Overrides (legacy non-staff views) */
+:not(.staff-menu-theme) > .text-\[\#00f5ff\],
+:not(.staff-menu-theme) .text-\[\#00f5ff\]:not(.staff-menu-theme *),
+:not(.staff-menu-theme) .text-\[\#C1FF00\]:not(.staff-menu-theme *),
+:not(.staff-menu-theme) .text-\[\#ff007f\]:not(.staff-menu-theme *) {
+  color: #F4C22B !important;
 }
 
-/* Brand Orange Background Overrides */
-.bg-\[\#00f5ff\],
-.bg-\[\#C1FF00\],
-.bg-\[\#ff007f\],
-.bg-cyan-500,
-.bg-pink-600,
-.bg-lime-500,
-.from-\[\#00f5ff\],
-.to-\[\#C1FF00\],
-.from-pink-600,
-.to-red-600,
-.from-pink-500,
-.to-red-500 {
-  background-color: #EB5D1B !important;
-  background-image: none !important; /* overrides gradients */
-  color: #ffffff !important;
+/* ==========================================================================
+   STAFF PORTALS MENU COLOR COMBINATION (.staff-menu-theme)
+   Matches Hawassa Papyrus Digital Menu (Zero Black — Crimson Red & Gold):
+   - Canvas: Warm Ivory (#FAF6F0)
+   - Signature Crimson Cards: #991B1B / #B21F1F (sub-wells #7A1212)
+   - Signature Warm Gold: #F4C22B (border #CF9D12)
+   - High-Contrast Ink: Crisp #FFFFFF & #F4C22B on Red; #1C1917 on Gold/White
+   ========================================================================== */
+
+.staff-menu-theme {
+  background-color: #FAF6F0 !important;
+  color: #1C1917;
+  color-scheme: light;
 }
 
-/* Handle light elements inside buttons */
-.bg-\[\#00f5ff\]:hover,
-.bg-\[\#C1FF00\]:hover,
-.bg-\[\#ff007f\]:hover {
-  background-color: #ff7433 !important; /* brighter orange for hover state */
-  color: #ffffff !important;
+/* ALL black / dark / charcoal card & container backgrounds -> Rich Menu Crimson Red (#991B1B) */
+.staff-menu-theme .bg-\[\#070707\],
+.staff-menu-theme .bg-\[\#070b0e\],
+.staff-menu-theme .bg-\[\#070D18\],
+.staff-menu-theme .bg-\[\#0A0A0A\],
+.staff-menu-theme .bg-\[\#0a0a0a\],
+.staff-menu-theme .bg-\[\#0b0b0b\],
+.staff-menu-theme .bg-\[\#0b0c10\],
+.staff-menu-theme .bg-\[\#0b100b\],
+.staff-menu-theme .bg-\[\#0b1216\],
+.staff-menu-theme .bg-\[\#0b1319\],
+.staff-menu-theme .bg-\[\#0b131a\],
+.staff-menu-theme .bg-\[\#0b141d\],
+.staff-menu-theme .bg-\[\#0c141d\],
+.staff-menu-theme .bg-\[\#0d0d0d\],
+.staff-menu-theme .bg-\[\#0e0e0e\],
+.staff-menu-theme .bg-\[\#0E1726\],
+.staff-menu-theme .bg-\[\#0F0F0F\],
+.staff-menu-theme .bg-\[\#0F0F0F\]\/95,
+.staff-menu-theme .bg-\[\#101010\],
+.staff-menu-theme .bg-\[\#10151f\],
+.staff-menu-theme .bg-\[\#101920\],
+.staff-menu-theme .bg-\[\#111\],
+.staff-menu-theme .bg-\[\#111111\],
+.staff-menu-theme .bg-\[\#121212\],
+.staff-menu-theme .bg-\[\#121212\]\/30,
+.staff-menu-theme .bg-\[\#121212\]\/80,
+.staff-menu-theme .bg-\[\#121214\],
+.staff-menu-theme .bg-\[\#141414\],
+.staff-menu-theme .bg-\[\#151515\],
+.staff-menu-theme .bg-\[\#161210\],
+.staff-menu-theme .bg-\[\#161616\],
+.staff-menu-theme .bg-\[\#181818\],
+.staff-menu-theme .bg-\[\#181818\]\/50,
+.staff-menu-theme .bg-\[\#1a1810\],
+.staff-menu-theme .bg-\[\#1A1813\],
+.staff-menu-theme .bg-\[\#1a1a1a\],
+.staff-menu-theme .bg-\[\#1A1A1A\],
+.staff-menu-theme .bg-\[\#1b1b1b\],
+.staff-menu-theme .bg-\[\#1B1B1B\],
+.staff-menu-theme .bg-\[\#1C0606\],
+.staff-menu-theme .bg-\[\#1C1917\],
+.staff-menu-theme .bg-\[\#1C1C13\],
+.staff-menu-theme .bg-\[\#1C1D13\],
+.staff-menu-theme .bg-\[\#1D1216\],
+.staff-menu-theme .bg-\[\#1D1D16\],
+.staff-menu-theme .bg-\[\#1D1E16\],
+.staff-menu-theme .bg-\[\#1e1e1e\],
+.staff-menu-theme .bg-\[\#1F1F1F\],
+.staff-menu-theme .bg-\[\#202020\],
+.staff-menu-theme .bg-\[\#252525\],
+.staff-menu-theme .bg-\[\#2a0a0a\],
+.staff-menu-theme .bg-\[\#091518\]\/60,
+.staff-menu-theme .bg-stone-900,
+.staff-menu-theme .bg-stone-900\/75,
+.staff-menu-theme .bg-stone-900\/95,
+.staff-menu-theme .bg-stone-950,
+.staff-menu-theme .bg-stone-950\/15,
+.staff-menu-theme .bg-neutral-900,
+.staff-menu-theme .bg-neutral-950,
+.staff-menu-theme .bg-zinc-900,
+.staff-menu-theme .bg-zinc-950,
+.staff-menu-theme .bg-slate-900,
+.staff-menu-theme .bg-slate-950 {
+  background-color: #991B1B !important;
+  background-image: none !important;
+  border-color: rgba(244, 194, 43, 0.45) !important;
+  color: #FFFFFF;
+  box-shadow: 0 4px 16px rgba(140, 20, 20, 0.14);
 }
 
-/* Brand Orange Border Overrides */
-.border-\[\#00f5ff\],
-.border-\[\#C1FF00\],
-.border-\[\#ff007f\],
-.border-cyan-500,
-.border-pink-500,
-.border-lime-500,
-.border-pink-400,
-.border-cyan-500\/20,
-.border-\[\#00f5ff\]\/15,
-.border-\[\#00f5ff\]\/20,
-.border-\[\#00f5ff\]\/30,
-.border-\[\#00f5ff\]\/40,
-.border-\[\#00f5ff\]\/45 {
-  border-color: #EB5D1B !important;
+.staff-menu-theme .bg-stone-800,
+.staff-menu-theme .bg-stone-700,
+.staff-menu-theme .bg-stone-700\/40,
+.staff-menu-theme .bg-zinc-800,
+.staff-menu-theme .bg-slate-800,
+.staff-menu-theme .bg-slate-700 {
+  background-color: #B21F1F !important;
+  border-color: rgba(244, 194, 43, 0.5) !important;
+  color: #FFFFFF !important;
 }
 
-/* Alpha background overlays for subtle notifications/badges */
-.bg-\[\#00f5ff\]\/5,
-.bg-\[\#00f5ff\]\/10,
-.bg-\[\#C1FF00\]\/10,
-.bg-\[\#ff007f\]\/10,
-.bg-cyan-500\/10,
-.bg-pink-600\/10,
-.bg-\[\#00f5ff\]\/10,
-.bg-emerald-500\/10,
-.bg-pink-950\/20 {
-  background-color: rgba(235, 93, 27, 0.12) !important;
+.staff-menu-theme .bg-\[\#ff007f\] {
+  background-color: #B21F1F !important;
+  border-color: #F4C22B !important;
+  color: #FFFFFF !important;
 }
 
-/* Text overrides in those alpha backgrounds */
-.bg-\[\#00f5ff\]\/10 *,
-.bg-\[\#C1FF00\]\/10 *,
-.bg-\[\#ff007f\]\/10 * {
-  color: #EB5D1B !important;
+.staff-menu-theme .bg-\[\#ff007f\]:hover {
+  background-color: #F4C22B !important;
+  color: #1C1917 !important;
 }
 
-/* Hover text states and selection mappings */
-.hover\:text-\[\#00f5ff\]:hover,
-.hover\:text-\[\#C1FF00\]:hover {
-  color: #EB5D1B !important;
+/* Dark gradients on cards inside staff portals -> Rich Menu Crimson Red */
+.staff-menu-theme .from-\[\#0f2229\],
+.staff-menu-theme .from-\[\#111\],
+.staff-menu-theme .from-\[\#121212\],
+.staff-menu-theme .from-\[\#141414\],
+.staff-menu-theme .from-\[\#161616\],
+.staff-menu-theme .from-\[\#1a1010\],
+.staff-menu-theme .from-\[\#1E1C10\],
+.staff-menu-theme .from-\[\#1f1510\],
+.staff-menu-theme .from-\[\#18120e\],
+.staff-menu-theme .from-\[\#23190c\],
+.staff-menu-theme .from-\[\#241108\]\/95,
+.staff-menu-theme .from-\[\#290e0e\],
+.staff-menu-theme .from-stone-900\/90,
+.staff-menu-theme .from-red-950\/70,
+.staff-menu-theme .from-black\/50,
+.staff-menu-theme .from-black\/75,
+.staff-menu-theme .from-black\/80,
+.staff-menu-theme .from-black\/90 {
+  background-color: #991B1B !important;
+  background-image: linear-gradient(135deg, #B21F1F 0%, #8C1414 100%) !important;
+  border-color: rgba(244, 194, 43, 0.45) !important;
+  color: #FFFFFF;
 }
 
-/* Modern 3D Tactile elements mapping */
-.tactile-3d-btn-lime,
-.tactile-3d-btn-pink,
-.tactile-3d-btn-orange,
-.tactile-3d-btn-purple,
-.tactile-3d-btn-amber,
-.tactile-3d-btn-sky {
-  background-color: #EB5D1B !important;
-  color: #ffffff !important;
-  border: 2px solid #000000 !important;
-  box-shadow: 4px 4px 0px 0px #000000 !important;
-  transition: all 0.1s ease !important;
+/* Nested black/translucent sub-boxes / table rows / inner wells -> Deep Crimson (#7A1212) */
+.staff-menu-theme :not(.papyrus-menu-hero) .bg-black:not(.papyrus-menu-hero *):not(header *),
+.staff-menu-theme :not(.papyrus-menu-hero) .bg-black\/10:not(.papyrus-menu-hero *):not(header *),
+.staff-menu-theme :not(.papyrus-menu-hero) .bg-black\/20:not(.papyrus-menu-hero *):not(header *),
+.staff-menu-theme :not(.papyrus-menu-hero) .bg-black\/25:not(.papyrus-menu-hero *):not(header *),
+.staff-menu-theme :not(.papyrus-menu-hero) .bg-black\/30:not(.papyrus-menu-hero *):not(header *),
+.staff-menu-theme :not(.papyrus-menu-hero) .bg-black\/35:not(.papyrus-menu-hero *):not(header *),
+.staff-menu-theme :not(.papyrus-menu-hero) .bg-black\/40:not(.papyrus-menu-hero *):not(header *),
+.staff-menu-theme :not(.papyrus-menu-hero) .bg-black\/45:not(.papyrus-menu-hero *):not(header *),
+.staff-menu-theme :not(.papyrus-menu-hero) .bg-black\/50:not(.papyrus-menu-hero *):not(header *),
+.staff-menu-theme :not(.papyrus-menu-hero) .bg-black\/55:not(.papyrus-menu-hero *):not(header *),
+.staff-menu-theme :not(.papyrus-menu-hero) .bg-black\/60:not(.papyrus-menu-hero *):not(header *),
+.staff-menu-theme :not(.papyrus-menu-hero) .bg-black\/65:not(.papyrus-menu-hero *):not(header *),
+.staff-menu-theme :not(.papyrus-menu-hero) .bg-black\/70:not(.papyrus-menu-hero *):not(header *),
+.staff-menu-theme :not(.papyrus-menu-hero) .bg-black\/75:not(.papyrus-menu-hero *):not(header *),
+.staff-menu-theme :not(.papyrus-menu-hero) .bg-black\/80:not(.papyrus-menu-hero *):not(header *),
+.staff-menu-theme :not(.papyrus-menu-hero) .bg-black\/85:not(.papyrus-menu-hero *):not(header *),
+.staff-menu-theme :not(.papyrus-menu-hero) .bg-black\/90:not(.papyrus-menu-hero *):not(header *),
+.staff-menu-theme :not(.papyrus-menu-hero) .bg-black\/95:not(.papyrus-menu-hero *):not(header *) {
+  background-color: #7A1212 !important;
+  border-color: rgba(244, 194, 43, 0.35) !important;
+  color: #FFFFFF;
 }
 
-.tactile-3d-btn-lime:hover,
-.tactile-3d-btn-pink:hover,
-.tactile-3d-btn-orange:hover,
-.tactile-3d-btn-purple:hover,
-.tactile-3d-btn-amber:hover,
-.tactile-3d-btn-sky:hover {
-  transform: translate(-1px, -1px) !important;
-  box-shadow: 5px 5px 0px 0px #000000 !important;
+.staff-menu-theme :not(.papyrus-menu-hero) .bg-white\/5:not(.papyrus-menu-hero *):not(.bg-white *),
+.staff-menu-theme :not(.papyrus-menu-hero) .bg-white\/10:not(.papyrus-menu-hero *):not(.bg-white *),
+.staff-menu-theme :not(.papyrus-menu-hero) .bg-white\/\[0\.02\]:not(.papyrus-menu-hero *) {
+  background-color: #821414 !important;
+  border-color: rgba(244, 194, 43, 0.32) !important;
+  color: #FFFFFF;
 }
 
-.tactile-3d-btn-lime:active,
-.tactile-3d-btn-pink:active,
-.tactile-3d-btn-orange:active,
-.tactile-3d-btn-purple:active,
-.tactile-3d-btn-amber:active,
-.tactile-3d-btn-sky:active {
-  transform: translate(3px, 3px) !important;
-  box-shadow: 1px 1px 0px 0px #000000 !important;
+/* Dark tinted alert boxes -> Deep Crimson / Rich Forest Emerald / Warm Amber (high-contrast white/gold ink) */
+.staff-menu-theme .bg-red-950,
+.staff-menu-theme .bg-red-950\/20,
+.staff-menu-theme .bg-red-950\/25,
+.staff-menu-theme .bg-red-950\/30,
+.staff-menu-theme .bg-red-950\/35,
+.staff-menu-theme .bg-red-950\/40,
+.staff-menu-theme .bg-red-950\/60,
+.staff-menu-theme .bg-red-950\/65,
+.staff-menu-theme .bg-red-950\/70,
+.staff-menu-theme .bg-red-950\/75,
+.staff-menu-theme .bg-red-950\/80,
+.staff-menu-theme .bg-red-950\/90,
+.staff-menu-theme .bg-pink-950,
+.staff-menu-theme .bg-pink-950\/20,
+.staff-menu-theme .bg-cyan-950\/45 {
+  background-color: #7F1D1D !important;
+  background-image: none !important;
+  border-color: #F4C22B !important;
+  color: #FFFFFF !important;
 }
 
-.tactile-3d-card-lime,
-.tactile-3d-card-pink,
-.tactile-3d-card-orange,
-.tactile-3d-card-purple,
-.tactile-3d-card-sky {
-  background-color: #1F1F1F !important;
-  border: 2px solid #EB5D1B !important;
-  box-shadow: 8px 8px 0px 0px #EB5D1B !important;
-  transition: transform 0.2s ease, box-shadow 0.2s ease !important;
+.staff-menu-theme .bg-amber-950,
+.staff-menu-theme .bg-amber-950\/10,
+.staff-menu-theme .bg-amber-950\/20,
+.staff-menu-theme .bg-amber-950\/60,
+.staff-menu-theme .bg-amber-950\/70 {
+  background-color: #92400E !important;
+  background-image: none !important;
+  border-color: #F4C22B !important;
+  color: #FFFBEB !important;
 }
 
-.tactile-3d-card-lime:hover,
-.tactile-3d-card-pink:hover,
-.tactile-3d-card-orange:hover,
-.tactile-3d-card-purple:hover,
-.tactile-3d-card-sky:hover {
-  transform: translate(-2px, -2px) !important;
-  box-shadow: 10px 10px 0px 0px #EB5D1B !important;
+.staff-menu-theme .bg-emerald-950,
+.staff-menu-theme .bg-emerald-950\/5,
+.staff-menu-theme .bg-emerald-950\/10,
+.staff-menu-theme .bg-emerald-950\/20,
+.staff-menu-theme .bg-emerald-950\/30,
+.staff-menu-theme .bg-emerald-950\/40,
+.staff-menu-theme .bg-emerald-950\/50,
+.staff-menu-theme .bg-emerald-950\/60,
+.staff-menu-theme .bg-emerald-950\/70 {
+  background-color: #065F46 !important;
+  background-image: none !important;
+  border-color: #34D399 !important;
+  color: #ECFDF5 !important;
+}
+
+/* Menu Gold Highlights inside staff portals (replaces neon lime/cyan CTAs) */
+.staff-menu-theme .bg-\[\#C1FF00\],
+.staff-menu-theme .bg-\[\#00f5ff\],
+.staff-menu-theme .bg-\[\#00F5FF\],
+.staff-menu-theme .bg-\[\#f4c22b\],
+.staff-menu-theme .bg-yellow-400,
+.staff-menu-theme .bg-yellow-300,
+.staff-menu-theme .bg-amber-400 {
+  background-color: #F4C22B !important;
+  background-image: none !important;
+  color: #1C1917 !important;
+  border-color: #CF9D12 !important;
+}
+
+.staff-menu-theme .bg-\[\#C1FF00\]:hover,
+.staff-menu-theme .bg-\[\#00f5ff\]:hover,
+.staff-menu-theme .bg-\[\#00F5FF\]:hover {
+  background-color: #FFFFFF !important;
+  color: #B21F1F !important;
+  border-color: #F4C22B !important;
+}
+
+.staff-menu-theme .bg-\[\#C1FF00\] *,
+.staff-menu-theme .bg-\[\#00f5ff\] *,
+.staff-menu-theme .bg-\[\#00F5FF\] *,
+.staff-menu-theme .bg-\[\#f4c22b\] *,
+.staff-menu-theme .bg-yellow-400 *,
+.staff-menu-theme .bg-yellow-300 *,
+.staff-menu-theme .bg-amber-400 * {
+  color: #1C1917 !important;
+}
+
+.staff-menu-theme .bg-\[\#C1FF00\]:hover *,
+.staff-menu-theme .bg-\[\#00f5ff\]:hover *,
+.staff-menu-theme .bg-\[\#00F5FF\]:hover * {
+  color: #B21F1F !important;
+}
+
+/* Soft tinted stat boxes & badges on Red cards -> Deep Red/Emerald/Amber pills with bright readable text */
+.staff-menu-theme .bg-\[\#C1FF00\]\/10,
+.staff-menu-theme .bg-\[\#C1FF00\]\/15,
+.staff-menu-theme .bg-\[\#C1FF00\]\/20,
+.staff-menu-theme .bg-\[\#00f5ff\]\/10,
+.staff-menu-theme .bg-cyan-500\/10,
+.staff-menu-theme .bg-yellow-400\/5,
+.staff-menu-theme .bg-yellow-400\/10,
+.staff-menu-theme .bg-yellow-400\/20,
+.staff-menu-theme .bg-yellow-500\/10,
+.staff-menu-theme .bg-amber-400\/10,
+.staff-menu-theme .bg-amber-500\/10,
+.staff-menu-theme .bg-orange-500\/10 {
+  background-color: #7A1212 !important;
+  border-color: rgba(244, 194, 43, 0.55) !important;
+  color: #FEF3C7 !important;
+}
+
+.staff-menu-theme .bg-sky-500\/10,
+.staff-menu-theme .bg-sky-500\/15,
+.staff-menu-theme .bg-blue-400\/10,
+.staff-menu-theme .bg-purple-400\/10 {
+  background-color: #7A1212 !important;
+  border-color: rgba(255, 255, 255, 0.4) !important;
+  color: #FFFFFF !important;
+}
+
+.staff-menu-theme .bg-emerald-500\/10,
+.staff-menu-theme .bg-emerald-500\/15,
+.staff-menu-theme .bg-emerald-400\/10,
+.staff-menu-theme .bg-emerald-400\/15,
+.staff-menu-theme .bg-emerald-500\/20 {
+  background-color: #065F46 !important;
+  border-color: #34D399 !important;
+  color: #ECFDF5 !important;
+}
+
+.staff-menu-theme .bg-red-600\/10,
+.staff-menu-theme .bg-red-600\/15,
+.staff-menu-theme .bg-red-600\/20,
+.staff-menu-theme .bg-red-500\/10,
+.staff-menu-theme .bg-red-500\/20,
+.staff-menu-theme .bg-rose-500\/10 {
+  background-color: #7F1D1D !important;
+  border-color: #F4C22B !important;
+  color: #FEF08A !important;
+}
+
+/* Progress bars: Menu Gold on Red */
+.staff-menu-theme .from-amber-500.to-\[\#C1FF00\],
+.staff-menu-theme .from-cyan-600.to-\[\#00F5FF\] {
+  background-image: linear-gradient(to right, #F4C22B, #FDE047) !important;
+}
+
+/* ==========================================================================
+   BULLETPROOF TEXT VISIBILITY INSIDE CRIMSON CARDS vs WHITE/LIGHT CARDS
+   ========================================================================== */
+
+/* 1. White & Light Text stays BRIGHT WHITE everywhere inside Red cards */
+.staff-menu-theme .text-white:not(header *):not(.bg-white):not(.bg-white *):not(.bg-stone-50):not(.bg-stone-50 *):not(.bg-stone-100 *):not(.bg-amber-50 *):not(.bg-emerald-50 *):not(.bg-red-50 *):not(.bg-\[\#f4c22b\] *):not(.bg-yellow-400 *):not(.bg-yellow-300 *):not(.bg-amber-400 *):not(.bg-\[\#C1FF00\] *):not(.bg-\[\#00f5ff\] *),
+.staff-menu-theme .text-white\/95:not(.bg-white *):not(.bg-stone-50 *),
+.staff-menu-theme .text-white\/90:not(.bg-white *):not(.bg-stone-50 *),
+.staff-menu-theme .text-white\/85:not(.bg-white *):not(.bg-stone-50 *),
+.staff-menu-theme .text-white\/80:not(.bg-white *):not(.bg-stone-50 *) {
+  color: #FFFFFF !important;
+}
+
+.staff-menu-theme .text-white\/75:not(.bg-white *),
+.staff-menu-theme .text-white\/70:not(.bg-white *),
+.staff-menu-theme .text-white\/60:not(.bg-white *),
+.staff-menu-theme .text-stone-100:not(.bg-white *),
+.staff-menu-theme .text-stone-200:not(.bg-white *),
+.staff-menu-theme .text-stone-300:not(.bg-white *),
+.staff-menu-theme .text-slate-200:not(.bg-white *),
+.staff-menu-theme .text-slate-300:not(.bg-white *),
+.staff-menu-theme .text-zinc-200:not(.bg-white *),
+.staff-menu-theme .text-zinc-300:not(.bg-white *) {
+  color: #F5F5F4 !important;
+}
+
+/* Muted white/gray text on Crimson Red cards -> Bright Warm Cream (7:1+ contrast, never dim!) */
+.staff-menu-theme .text-white\/50:not(.bg-white *):not(.bg-stone-50 *),
+.staff-menu-theme .text-white\/45:not(.bg-white *):not(.bg-stone-50 *),
+.staff-menu-theme .text-white\/40:not(.bg-white *):not(.bg-stone-50 *),
+.staff-menu-theme .text-white\/30:not(.bg-white *):not(.bg-stone-50 *),
+.staff-menu-theme .text-white\/20:not(.bg-white *):not(.bg-stone-50 *),
+.staff-menu-theme .text-stone-400:not(header *):not(.bg-white):not(.bg-white *):not(.bg-stone-50 *):not(.bg-stone-100 *):not(.bg-amber-50 *):not(.bg-emerald-50 *):not(.bg-red-50 *):not(#printable-area *):not(#printable-parking-cards *),
+.staff-menu-theme .text-stone-500:not(header *):not(.bg-white):not(.bg-white *):not(.bg-stone-50 *):not(.bg-stone-100 *):not(.bg-amber-50 *):not(.bg-emerald-50 *):not(.bg-red-50 *):not(#printable-area *):not(#printable-parking-cards *),
+.staff-menu-theme .text-stone-600:not(header *):not(.bg-white):not(.bg-white *):not(.bg-stone-50 *):not(.bg-stone-100 *):not(.bg-amber-50 *):not(.bg-emerald-50 *):not(.bg-red-50 *):not(#printable-area *):not(#printable-parking-cards *),
+.staff-menu-theme .text-slate-400:not(.bg-white *),
+.staff-menu-theme .text-zinc-400:not(.bg-white *),
+.staff-menu-theme .text-zinc-500:not(.bg-white *) {
+  color: #FDE68A !important;
+}
+
+/* Semantic Accent Text on Red cards -> Bright Gold / Crisp White / Light Mint / Ice Sky */
+.staff-menu-theme .text-\[\#C1FF00\]:not(.bg-white *):not(.bg-\[\#f4c22b\] *):not(.bg-yellow-400 *),
+.staff-menu-theme .text-yellow-400:not(.bg-white *):not(.bg-amber-50 *):not(.bg-yellow-400 *),
+.staff-menu-theme .text-yellow-300:not(.bg-white *):not(.bg-amber-50 *),
+.staff-menu-theme .text-yellow-200:not(.bg-white *):not(.bg-amber-50 *),
+.staff-menu-theme .text-amber-300:not(.bg-white *):not(.bg-amber-50 *),
+.staff-menu-theme .text-amber-400:not(.bg-white *):not(.bg-amber-50 *),
+.staff-menu-theme .text-orange-400:not(.bg-white *):not(.bg-amber-50 *) {
+  color: #F4C22B !important;
+}
+
+/* Red text inside Red cards would vanish -> Turn into Crisp Warm Gold-Yellow (#FEF08A) */
+.staff-menu-theme .text-red-200:not(.bg-white *):not(.bg-red-50 *):not(.bg-amber-50 *),
+.staff-menu-theme .text-red-300:not(.bg-white *):not(.bg-red-50 *):not(.bg-amber-50 *),
+.staff-menu-theme .text-red-400:not(.bg-white *):not(.bg-red-50 *):not(.bg-amber-50 *),
+.staff-menu-theme .text-red-500:not(.bg-white *):not(.bg-red-50 *):not(.bg-amber-50 *),
+.staff-menu-theme .text-rose-400:not(.bg-white *):not(.bg-red-50 *):not(.bg-amber-50 *),
+.staff-menu-theme .text-\[\#ff007f\]:not(.bg-white *),
+.staff-menu-theme .text-\[\#FF5D5D\]:not(.bg-white *) {
+  color: #FEF08A !important;
+}
+
+.staff-menu-theme .text-\[\#00f5ff\]:not(.bg-white *),
+.staff-menu-theme .text-\[\#00F5FF\]:not(.bg-white *),
+.staff-menu-theme .text-cyan-300:not(.bg-white *),
+.staff-menu-theme .text-cyan-400:not(.bg-white *),
+.staff-menu-theme .text-sky-300:not(.bg-white *),
+.staff-menu-theme .text-sky-400:not(.bg-white *),
+.staff-menu-theme .text-blue-400:not(.bg-white *) {
+  color: #E0F2FE !important;
+}
+
+.staff-menu-theme .text-emerald-200:not(.bg-white *):not(.bg-emerald-50 *),
+.staff-menu-theme .text-emerald-300:not(.bg-white *):not(.bg-emerald-50 *),
+.staff-menu-theme .text-emerald-400:not(.bg-white *):not(.bg-emerald-50 *) {
+  color: #A7F3D0 !important;
+}
+
+.staff-menu-theme .text-purple-300:not(.bg-white *),
+.staff-menu-theme .text-purple-400:not(.bg-white *),
+.staff-menu-theme .text-pink-300:not(.bg-white *),
+.staff-menu-theme .text-pink-400:not(.bg-white *) {
+  color: #FCE7F3 !important;
+}
+
+/* 2. Dark ink inside explicitly White / Light / Print surfaces stays Dark Charcoal (#1C1917),
+   while colored/dark buttons nested inside white wrappers keep crisp White ink */
+.staff-menu-theme .bg-white .text-white:not([class*="bg-red-"]):not([class*="bg-[#"]):not([class*="bg-emerald-"]):not([class*="bg-blue-"]):not([class*="bg-sky-"]):not([class*="bg-amber-"]):not([class*="bg-orange-"]):not([class*="bg-stone-9"]):not([class*="bg-black"]):not(.bg-red-600 *):not(.bg-emerald-600 *):not(.bg-\[\#b21f1f\] *),
+.staff-menu-theme .bg-stone-50 .text-white:not([class*="bg-red-"]):not([class*="bg-[#"]):not([class*="bg-emerald-"]):not([class*="bg-blue-"]):not(.bg-red-600 *):not(.bg-\[\#b21f1f\] *),
+.staff-menu-theme .bg-amber-50 .text-white:not([class*="bg-red-"]):not([class*="bg-[#"]):not([class*="bg-emerald-"]):not(.bg-red-600 *):not(.bg-\[\#b21f1f\] *),
+.staff-menu-theme .bg-emerald-50 .text-white:not([class*="bg-emerald-"]):not([class*="bg-red-"]):not([class*="bg-[#"]) {
+  color: #1C1917 !important;
+}
+
+.staff-menu-theme .bg-white:not(.hero-logout-btn):not([class*="bg-[#b21f1f]"]),
+.staff-menu-theme .bg-stone-50,
+.staff-menu-theme .bg-stone-100,
+.staff-menu-theme .bg-amber-50,
+.staff-menu-theme .bg-emerald-50,
+.staff-menu-theme .bg-red-50,
+.staff-menu-theme #printable-area,
+.staff-menu-theme #printable-parking-cards {
+  color: #1C1917;
+}
+
+/* Warm gold borders replacing faint white/5..30 & black hairlines on crimson surfaces */
+.staff-menu-theme .border-white\/5:not(.papyrus-menu-hero *),
+.staff-menu-theme .border-white\/10:not(.papyrus-menu-hero *),
+.staff-menu-theme .border-white\/15:not(.papyrus-menu-hero *),
+.staff-menu-theme .border-white\/20:not(.papyrus-menu-hero *),
+.staff-menu-theme .border-white\/30:not(.papyrus-menu-hero *),
+.staff-menu-theme .border-black:not(#printable-area):not(#printable-area *):not(#printable-parking-cards):not(#printable-parking-cards *) {
+  border-color: rgba(244, 194, 43, 0.38) !important;
+}
+
+/* Crisp white inputs, selects & textareas inside staff portals for crystal-clear typing */
+.staff-menu-theme input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+.staff-menu-theme select:not(header select),
+.staff-menu-theme textarea {
+  background-color: #FFFFFF !important;
+  color: #1C1917 !important;
+  border-color: #F4C22B !important;
+  color-scheme: light;
+}
+
+.staff-menu-theme select option {
+  background-color: #FFFFFF !important;
+  color: #1C1917 !important;
+}
+
+.staff-menu-theme input:focus,
+.staff-menu-theme select:focus,
+.staff-menu-theme textarea:focus {
+  border-color: #CF9D12 !important;
+}
+
+.staff-menu-theme input::placeholder,
+.staff-menu-theme textarea::placeholder {
+  color: #78716C !important;
+}
+
+/* Preserve vibrant Crimson Red & Gold Hero Banners inside Staff Portals */
+.staff-menu-theme .papyrus-menu-hero {
+  background-image: linear-gradient(125deg, #8C1414 0%, #B21F1F 55%, #991B1B 100%) !important;
+  background-color: #B21F1F !important;
+  border-color: #F4C22B !important;
+  color: #FFFFFF !important;
+  box-shadow: 0 12px 28px rgba(140, 20, 20, 0.22) !important;
+}
+
+.staff-menu-theme .papyrus-menu-hero .hero-gold-badge {
+  background-color: #F4C22B !important;
+  color: #1C1917 !important;
+  border-color: #CF9D12 !important;
+}
+
+.staff-menu-theme .papyrus-menu-hero .hero-gold-badge * {
+  color: #1C1917 !important;
+}
+
+.staff-menu-theme .papyrus-menu-hero .hero-subglass {
+  background-color: #7A1212 !important;
+  border-color: rgba(244, 194, 43, 0.55) !important;
+  color: #FFFFFF !important;
+}
+
+.staff-menu-theme .papyrus-menu-hero .hero-logout-btn {
+  background-color: #FFFFFF !important;
+  color: #B21F1F !important;
+  border-color: #F4C22B !important;
+}
+
+.staff-menu-theme .papyrus-menu-hero .hero-logout-btn * {
+  color: #B21F1F !important;
+}
+
+.staff-menu-theme .papyrus-menu-hero .hero-logout-btn:hover {
+  background-color: #F4C22B !important;
+  color: #1C1917 !important;
+}
+
+.staff-menu-theme .papyrus-menu-hero .hero-logout-btn:hover * {
+  color: #1C1917 !important;
+}
+
+/* Footer inside staff menu theme */
+.staff-menu-theme footer {
+  background-color: #8C1414 !important;
+  border-top: 4px solid #F4C22B !important;
+  color: #FFFFFF !important;
+}
+.staff-menu-theme footer * {
+  color: #FFFFFF !important;
+}
+.staff-menu-theme footer .footer-powered-pill {
+  background-color: #F4C22B !important;
+  color: #1C1917 !important;
+  border-color: #CF9D12 !important;
+}
+.staff-menu-theme footer .footer-powered-pill * {
+  color: #1C1917 !important;
 }
 
 

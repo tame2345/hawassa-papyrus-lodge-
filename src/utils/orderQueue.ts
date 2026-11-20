@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Order } from '../types';
+import { AssistanceCall, Order } from '../types';
 
 export type EffectiveOrderStage = 'Pending' | 'Preparing' | 'Completed' | 'Served' | 'Inactive';
 
@@ -175,3 +175,360 @@ export function computeLiveOrderQueue(orders: Order[]): LiveQueueSnapshot {
     getMetrics,
   };
 }
+
+const COOKING_RANK: Record<'Pending' | 'Preparing' | 'Completed', number> = {
+  Pending: 0,
+  Preparing: 1,
+  Completed: 2,
+};
+
+function resolveOrderCookingStage(order: Order): 'Pending' | 'Preparing' | 'Completed' {
+  if (order.cookingStatus === 'Completed' || order.status === 'Completed' || order.servedByWaiter) {
+    return 'Completed';
+  }
+  if (order.cookingStatus === 'Preparing' || order.status === 'Preparing') {
+    return 'Preparing';
+  }
+  return 'Pending';
+}
+
+export function mergeSingleOrder(localOrd: Order, remoteOrd: Order): Order {
+  const localUpdated = typeof localOrd.updatedAt === 'number' ? localOrd.updatedAt : getOrderSortTimestamp(localOrd);
+  const remoteUpdated = typeof remoteOrd.updatedAt === 'number' ? remoteOrd.updatedAt : getOrderSortTimestamp(remoteOrd);
+  const preferRemote = remoteUpdated >= localUpdated;
+  const base = preferRemote ? remoteOrd : localOrd;
+  const secondary = preferRemote ? localOrd : remoteOrd;
+
+  const isCancelled =
+    String(localOrd.status) === 'Cancelled' || String(remoteOrd.status) === 'Cancelled';
+  const isPaid =
+    localOrd.status === 'Paid' ||
+    remoteOrd.status === 'Paid' ||
+    Boolean(localOrd.paymentVerified) ||
+    Boolean(remoteOrd.paymentVerified);
+
+  const localCook = resolveOrderCookingStage(localOrd);
+  const remoteCook = resolveOrderCookingStage(remoteOrd);
+  const mergedCook =
+    COOKING_RANK[remoteCook] >= COOKING_RANK[localCook] ? remoteCook : localCook;
+
+  const servedByWaiter = Boolean(localOrd.servedByWaiter || remoteOrd.servedByWaiter);
+  const checkedByWaiter = Boolean(localOrd.checkedByWaiter || remoteOrd.checkedByWaiter || servedByWaiter);
+
+  let mergedStatus: Order['status'] = base.status;
+  if (isCancelled) {
+    mergedStatus = 'Cancelled';
+  } else if (isPaid) {
+    mergedStatus = 'Paid';
+  } else if (mergedCook === 'Completed' || servedByWaiter) {
+    mergedStatus = 'Completed';
+  } else if (mergedCook === 'Preparing') {
+    mergedStatus = 'Preparing';
+  } else {
+    mergedStatus = 'Pending';
+  }
+
+  return {
+    ...secondary,
+    ...base,
+    status: mergedStatus,
+    cookingStatus: mergedCook,
+    servedByWaiter,
+    checkedByWaiter,
+    paymentVerified: Boolean(localOrd.paymentVerified || remoteOrd.paymentVerified || isPaid),
+    waiter: base.waiter || secondary.waiter,
+    chefName: base.chefName || secondary.chefName,
+    cashierName: base.cashierName || secondary.cashierName,
+    readyAt: base.readyAt || secondary.readyAt,
+    servedAt: base.servedAt || secondary.servedAt,
+    updatedAt: Math.max(localUpdated, remoteUpdated) || undefined,
+  };
+}
+
+/**
+ * Merges two order snapshots by `order.id` without losing new orders from either
+ * client/tab and advancing lifecycle stages monotonically.
+ */
+export function mergeOrdersByLifecycle(localOrders: Order[], incomingOrders: Order[]): Order[] {
+  const byId = new Map<string, Order>();
+  const orderedIds: string[] = [];
+
+  for (const ord of incomingOrders) {
+    if (!ord || !ord.id) continue;
+    byId.set(ord.id, ord);
+    orderedIds.push(ord.id);
+  }
+
+  for (const ord of localOrders) {
+    if (!ord || !ord.id) continue;
+    const existing = byId.get(ord.id);
+    if (existing) {
+      byId.set(ord.id, mergeSingleOrder(ord, existing));
+    } else {
+      byId.set(ord.id, ord);
+      orderedIds.unshift(ord.id);
+    }
+  }
+
+  const seen = new Set<string>();
+  const result: Order[] = [];
+  for (const id of orderedIds) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const merged = byId.get(id);
+    if (merged) result.push(merged);
+  }
+  return result;
+}
+
+export function getAssistanceCallDedupKey(call: AssistanceCall): string {
+  const typeKey = call.type || 'call';
+  if ((typeKey === 'pickup' || typeKey === 'new_order') && call.orderId) {
+    const bareOrder = call.orderId.replace(/^#/, '').trim().toLowerCase();
+    return `${typeKey}:order:${bareOrder}`;
+  }
+  const normLoc = (call.location || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  return `${typeKey}:loc:${normLoc}`;
+}
+
+function getCallTimestamp(call: AssistanceCall, fallbackIdx: number): number {
+  if (typeof call.createdAt === 'number' && Number.isFinite(call.createdAt)) {
+    return call.createdAt;
+  }
+  const match = call.id.match(/(\d{10,13})/);
+  if (match) {
+    const parsed = Number(match[1]);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return fallbackIdx;
+}
+
+export function deduplicateAssistanceCalls(calls: AssistanceCall[]): AssistanceCall[] {
+  const activeByKey = new Map<string, { call: AssistanceCall; ts: number; orderIdx: number }>();
+  const inactiveCalls: AssistanceCall[] = [];
+
+  calls.forEach((call, idx) => {
+    if (!call || !call.id) return;
+    if (call.active === false) {
+      inactiveCalls.push(call);
+      return;
+    }
+
+    const key = getAssistanceCallDedupKey(call);
+    const ts = getCallTimestamp(call, calls.length - idx);
+    const existing = activeByKey.get(key);
+
+    if (!existing) {
+      activeByKey.set(key, { call, ts, orderIdx: idx });
+      return;
+    }
+
+    const combinedCount = Math.max(
+      existing.call.repeatCount || 1,
+      call.repeatCount || 1,
+      (existing.call.id !== call.id ? 2 : 1),
+    );
+
+    if (ts > existing.ts) {
+      activeByKey.set(key, {
+        call: {
+          ...existing.call,
+          ...call,
+          repeatCount: combinedCount,
+        },
+        ts,
+        orderIdx: Math.min(existing.orderIdx, idx),
+      });
+    } else {
+      activeByKey.set(key, {
+        ...existing,
+        call: {
+          ...existing.call,
+          repeatCount: combinedCount,
+        },
+      });
+    }
+  });
+
+  const activeList = Array.from(activeByKey.values())
+    .sort((a, b) => b.ts - a.ts || a.orderIdx - b.orderIdx)
+    .map((entry) => entry.call);
+
+  return [...activeList, ...inactiveCalls].slice(0, 80);
+}
+
+export function upsertDeduplicatedAssistanceCall(
+  list: AssistanceCall[],
+  newCall: AssistanceCall,
+): AssistanceCall[] {
+  const normalizedNew: AssistanceCall = {
+    ...newCall,
+    createdAt: newCall.createdAt || Date.now(),
+  };
+  const targetKey = getAssistanceCallDedupKey(normalizedNew);
+
+  if (normalizedNew.active === false) {
+    const exists = list.some((c) => c.id === normalizedNew.id);
+    const updated = exists
+      ? list.map((c) => (c.id === normalizedNew.id ? normalizedNew : c))
+      : [normalizedNew, ...list];
+    return deduplicateAssistanceCalls(updated);
+  }
+
+  let matchedExisting: AssistanceCall | undefined;
+  const remaining = list.filter((c) => {
+    if (c.id === normalizedNew.id) {
+      matchedExisting = c;
+      return false;
+    }
+    if (c.active !== false && getAssistanceCallDedupKey(c) === targetKey) {
+      if (!matchedExisting) matchedExisting = c;
+      return false;
+    }
+    return true;
+  });
+
+  const mergedCall: AssistanceCall = matchedExisting
+    ? {
+        ...matchedExisting,
+        ...normalizedNew,
+        // Keep the existing card ID when updating in-place for the same call/order so alerts don't re-spam
+        id: matchedExisting.id,
+        repeatCount:
+          matchedExisting.id === normalizedNew.id
+            ? Math.max(matchedExisting.repeatCount || 1, normalizedNew.repeatCount || 1)
+            : (matchedExisting.repeatCount || 1) + 1,
+      }
+    : normalizedNew;
+
+  return deduplicateAssistanceCalls([mergedCall, ...remaining]);
+}
+
+export function mergeAssistanceCalls(
+  localCalls: AssistanceCall[],
+  incomingCalls: AssistanceCall[],
+): AssistanceCall[] {
+  const byId = new Map<string, AssistanceCall>();
+  const orderedIds: string[] = [];
+
+  for (const call of incomingCalls) {
+    if (!call || !call.id) continue;
+    byId.set(call.id, call);
+    orderedIds.push(call.id);
+  }
+
+  for (const call of localCalls) {
+    if (!call || !call.id) continue;
+    const existing = byId.get(call.id);
+    if (existing) {
+      byId.set(call.id, {
+        ...call,
+        ...existing,
+        // Resolving/deactivating an alert in either snapshot stays resolved
+        active: Boolean(call.active && existing.active),
+        handledBy: existing.handledBy || call.handledBy,
+        repeatCount: Math.max(call.repeatCount || 1, existing.repeatCount || 1) > 1
+          ? Math.max(call.repeatCount || 1, existing.repeatCount || 1)
+          : undefined,
+      });
+    } else {
+      byId.set(call.id, call);
+      orderedIds.unshift(call.id);
+    }
+  }
+
+  // Track latest resolved timestamp per semantic key so stale active duplicates never resurrect
+  const latestResolvedTsByKey = new Map<string, number>();
+  byId.forEach((call) => {
+    if (call.active === false) {
+      const key = getAssistanceCallDedupKey(call);
+      const ts = getCallTimestamp(call, 0);
+      const prevTs = latestResolvedTsByKey.get(key) ?? -1;
+      if (ts > prevTs) latestResolvedTsByKey.set(key, ts);
+    }
+  });
+
+  const seen = new Set<string>();
+  const mergedList: AssistanceCall[] = [];
+  for (const id of orderedIds) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const merged = byId.get(id);
+    if (!merged) continue;
+    if (merged.active !== false) {
+      const key = getAssistanceCallDedupKey(merged);
+      const resolvedTs = latestResolvedTsByKey.get(key);
+      const myTs = getCallTimestamp(merged, 0);
+      if (resolvedTs !== undefined && resolvedTs >= myTs) {
+        mergedList.push({ ...merged, active: false });
+        continue;
+      }
+    }
+    mergedList.push(merged);
+  }
+  return deduplicateAssistanceCalls(mergedList);
+}
+
+const SYNC_CHANNEL_NAME = 'papyrus-pos-realtime-sync';
+const TAB_INSTANCE_ID = `tab-${Math.random().toString(36).slice(2, 10)}`;
+
+export function broadcastSettingSync(key: string, value: unknown): void {
+  if (typeof window === 'undefined' || typeof BroadcastChannel === 'undefined') return;
+  try {
+    const channel = new BroadcastChannel(SYNC_CHANNEL_NAME);
+    channel.postMessage({
+      senderId: TAB_INSTANCE_ID,
+      key,
+      value,
+      ts: Date.now(),
+    });
+    channel.close();
+  } catch {
+    // Ignore BroadcastChannel errors in restricted contexts
+  }
+}
+
+export function subscribeSettingSync(
+  onMessage: (key: string, value: unknown) => void,
+): () => void {
+  if (typeof window === 'undefined') return () => {};
+
+  let channel: BroadcastChannel | null = null;
+  if (typeof BroadcastChannel !== 'undefined') {
+    try {
+      channel = new BroadcastChannel(SYNC_CHANNEL_NAME);
+      channel.onmessage = (ev) => {
+        const msg = ev.data as { senderId?: string; key?: string; value?: unknown } | null;
+        if (!msg || msg.senderId === TAB_INSTANCE_ID || !msg.key) return;
+        onMessage(msg.key, msg.value);
+      };
+    } catch {
+      channel = null;
+    }
+  }
+
+  const handleStorage = (ev: StorageEvent) => {
+    if (ev.key !== 'papyrus_settings_cache' || !ev.newValue) return;
+    try {
+      const parsed = JSON.parse(ev.newValue) as Record<string, unknown>;
+      if (parsed.orders) onMessage('orders', parsed.orders);
+      if (parsed.assistanceCalls) onMessage('assistanceCalls', parsed.assistanceCalls);
+      if (parsed.shift_assignments) onMessage('shift_assignments', parsed.shift_assignments);
+      if (parsed.table_assignments) onMessage('table_assignments', parsed.table_assignments);
+    } catch {
+      // ignore malformed storage cache
+    }
+  };
+
+  window.addEventListener('storage', handleStorage);
+
+  return () => {
+    window.removeEventListener('storage', handleStorage);
+    if (channel) {
+      try {
+        channel.close();
+      } catch {}
+    }
+  };
+}
+

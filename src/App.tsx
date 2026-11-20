@@ -10,10 +10,18 @@ import {
   Bell, ShoppingCart, CheckCircle2, Printer, Share2, LogOut, 
   MapPin, Sparkles, Phone, Map, RefreshCw, AlertCircle, Unlock, 
   Lock, Send, Check, Heart, ExternalLink, Shield, Facebook, Instagram, Youtube, Globe,
-  Search
+  Search, ArrowRight, ArrowLeft, Eye, EyeOff, KeyRound, ShoppingBag, Menu, X, Volume2, VolumeX, Mic, MicOff, Loader2
 } from 'lucide-react';
+import {
+  PapyrusChefClocheCrest,
+  PapyrusBrushUnderline,
+  HeadingBurstDashes,
+  PapyrusChefDivider,
+  PapyrusOrangeBackdropLayer,
+  PapyrusCardCulinaryAccents,
+} from './components/PapyrusEntryDecor';
 
-import { MenuItem, StaffMember, BankAccount, Order, OrderStatus, OrderType, PaymentMethod, OrderItem, AssistanceCall, Feedback, PromoBanner, AttendanceRecord, BonusRecord, RoomBooking, Expense, VisitorLog } from './types';
+import { MenuItem, StaffMember, BankAccount, Order, OrderStatus, OrderType, PaymentMethod, OrderItem, AssistanceCall, Feedback, PromoBanner, AttendanceRecord, BonusRecord, RoomBooking, Expense, VisitorLog, LeadershipContacts, LeadershipMessage, ShiftAssignment, StockAlertLogEntry, StockAlertSettings, QrPrintLogEntry } from './types';
 import { INITIAL_MENU_ITEMS, INITIAL_STAFF, INITIAL_BANKS, PROMO_BANNERS } from './data';
 
 import SidebarRail from './components/SidebarRail';
@@ -25,11 +33,62 @@ import PrintableCertificateModal from './components/PrintableCertificateModal';
 import OrderAdjustmentModal from './components/OrderAdjustmentModal';
 import LiveOrderTracker from './components/LiveOrderTracker';
 import MenuAiAssistant from './components/MenuAiAssistant';
+import { GuestConciergeModal } from './components/GuestConciergeModal';
+import { LeadershipInboxPanel } from './components/LeadershipInboxPanel';
+import ShiftManagementModule from './components/ShiftManagementModule';
+import ManagerStockAlertPanel from './components/ManagerStockAlertPanel';
 import HeroDemo from './components/ui/demo';
 import AdminRevenueReports from './components/AdminRevenueReports';
+import MenuAudioAccessibilityBar from './components/MenuAudioAccessibilityBar';
 import { SupabaseLogin } from './components/SupabaseLogin';
-import { getEffectiveCookingStatus, computeLiveOrderQueue } from './utils/orderQueue';
+import { useLanguage } from './context/LanguageContext';
+import { LanguageSelector } from './components/LanguageSelector';
+import {
+  broadcastSettingSync,
+  computeLiveOrderQueue,
+  deduplicateAssistanceCalls,
+  getAssistanceCallDedupKey,
+  getEffectiveCookingStatus,
+  mergeAssistanceCalls,
+  mergeOrdersByLifecycle,
+  subscribeSettingSync,
+  upsertDeduplicatedAssistanceCall,
+} from './utils/orderQueue';
 import { downloadOrderReceiptPdf } from './utils/receiptPdf';
+import {
+  buildCategorySpeechPayload,
+  buildDishSpeechPayload,
+  getAccessibleString,
+  playAccessibleChime,
+  speakAccessibleText,
+  stopAccessibleSpeech,
+} from './utils/menuVoiceReader';
+import {
+  BrowserSpeechRecognition,
+  getRecognitionLocale,
+  getSpeechRecognitionCtor,
+  supportsMediaRecording,
+  transcribeRecordedAudio,
+  VoiceOrderResponse,
+} from './utils/voiceOrderEngine';
+import {
+  initAudioUnlock,
+  playChefNewOrderAlertSound,
+  playKitchenReadyForWaiterAlertSound,
+  playStockOutAlertSound,
+  playWaiterCallAlertSound,
+  sendBrowserPushNotification,
+} from './utils/alertEngine';
+import {
+  canStaffAccessOrder,
+  getAssignedStaffNameForLocation,
+  getStaffAssignedLocations,
+  inferLocationType,
+  isGenericWaiterLabel,
+  isSupervisorRole,
+  locationsMatch,
+  normalizeLocationKey,
+} from './utils/shiftAccess';
 
 // Gourmet Restaurant Paradise Background Assets
 // @ts-ignore
@@ -40,6 +99,8 @@ import signatureDish from './assets/images/signature_dish_1782327059310.jpg';
 import deliveryChef from './assets/images/delivery_chef_premium_1782328035316.jpg';
 // @ts-ignore
 import deliveryScooterIllustration from './assets/images/delivery_scooter_illustration_1782328361225.jpg';
+// @ts-ignore
+import ethiopianCuisineHero from './assets/images/ethiopian_cuisine_hero_1784995007669.jpg';
 
 // Supabase Connection Import
 import { supabase } from './supabaseClient';
@@ -246,7 +307,7 @@ export default function App() {
   ]);
 
   const [assistanceCalls, setAssistanceCalls] = useState<AssistanceCall[]>([
-    { id: 'c1', location: 'Table 05', time: '11:15', active: true }
+    { id: 'c1', location: 'Table 05', time: '11:15', active: true, type: 'call', createdAt: 1 }
   ]);
 
   const [feedback, setFeedback] = useState<Feedback[]>([
@@ -298,9 +359,32 @@ export default function App() {
   const [hasLoadedCloudSettings, setHasLoadedCloudSettings] = useState(false);
   const cloudHydratedAtRef = useRef<number>(0);
   const invalidateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const remoteSyncSkipRef = useRef<Record<string, boolean>>({});
   const [syncError, setSyncError] = useState<string | null>(null);
   const [rlsBlockedKeys, setRlsBlockedKeys] = useState<string[]>([]);
   const [isRlsBannerDismissed, setIsRlsBannerDismissed] = useState(false);
+
+  const applyRemoteOrders = (incoming: Order[]) => {
+    setOrders((prev) => {
+      const merged = mergeOrdersByLifecycle(prev, incoming);
+      try {
+        if (JSON.stringify(merged) === JSON.stringify(prev)) return prev;
+      } catch {}
+      remoteSyncSkipRef.current['orders'] = true;
+      return merged;
+    });
+  };
+
+  const applyRemoteAssistanceCalls = (incoming: AssistanceCall[]) => {
+    setAssistanceCalls((prev) => {
+      const merged = mergeAssistanceCalls(prev, incoming);
+      try {
+        if (JSON.stringify(merged) === JSON.stringify(prev)) return prev;
+      } catch {}
+      remoteSyncSkipRef.current['assistanceCalls'] = true;
+      return merged;
+    });
+  };
 
   const scheduleServerCacheInvalidation = (key: string) => {
     if (Date.now() - cloudHydratedAtRef.current < 1500) return;
@@ -317,8 +401,13 @@ export default function App() {
     }, 350);
   };
 
-  // Sync state helper with explicit error checking
+  // Sync state helper with explicit error checking + instant cross-tab broadcast
   const syncKeyToCloud = async (key: string, value: any) => {
+    const isEchoFromRemote = Boolean(remoteSyncSkipRef.current[key]);
+    if (isEchoFromRemote) {
+      remoteSyncSkipRef.current[key] = false;
+    }
+
     // Write to local cache first if enabled, for instant UI responsiveness
     try {
       if (localStorage.getItem('papyrus_cache_enabled') !== 'false') {
@@ -330,6 +419,10 @@ export default function App() {
     } catch (e) {
       console.warn('Error writing local cache:', e);
     }
+
+    if (isEchoFromRemote) return;
+
+    broadcastSettingSync(key, value);
 
     if (!hasLoadedCloudSettings) return;
     try {
@@ -366,7 +459,6 @@ export default function App() {
     } catch {}
     return 'entry';
   });
-  const [isVideoModalOpen, setIsVideoModalOpen] = useState(false);
   const [isFromQr, setIsFromQr] = useState<boolean>(() => {
     try {
       const params = new URLSearchParams(window.location.search);
@@ -382,9 +474,43 @@ export default function App() {
     } catch {}
     return null;
   });
-  const [activeAdminTab, setActiveAdminTab] = useState<'sales' | 'staff' | 'menu' | 'banks' | 'qrprint' | 'promo' | 'lodgeinfo' | 'reception' | 'branding' | 'gallery' | 'table_assignment'>('sales');
+  const [activeAdminTab, setActiveAdminTab] = useState<'sales' | 'staff_audit' | 'staff' | 'menu' | 'banks' | 'qrprint' | 'promo' | 'lodgeinfo' | 'reception' | 'branding' | 'gallery' | 'table_assignment' | 'leadership'>('sales');
   const [ledgerFilterTab, setLedgerFilterTab] = useState<'daily' | 'monthly' | 'yearly'>('daily');
-  const [managerTab, setManagerTab] = useState<'bono' | 'attendance' | 'sales_review' | 'vault' | 'menu_availability' | 'table_assignment' | 'cleaner' | 'cache'>('bono');
+  const [managerTab, setManagerTab] = useState<'bono' | 'attendance' | 'sales_review' | 'vault' | 'menu_availability' | 'table_assignment' | 'leadership' | 'cleaner' | 'cache'>('bono');
+  const [conciergeModalTab, setConciergeModalTab] = useState<'waiter' | 'leadership' | null>(null);
+  const [leadershipContacts, setLeadershipContacts] = useState<LeadershipContacts>({
+    managerName: 'ኪያ ማሞ (Manager)',
+    managerPhone: '+251 919 629 347',
+    managerTelegram: 'papyrus_lodge',
+    managerWhatsapp: '+251919629347',
+    managerAvailable: true,
+    gmName: 'ሄኖክ ወርቁ (General Manager)',
+    gmPhone: '+251 911 223 344',
+    gmTelegram: 'papyrus_lodge',
+    gmWhatsapp: '+251911223344',
+    gmAvailable: true,
+    supportName: 'Papyrus Guest Support Team',
+    supportPhone: '+251 919 629 347',
+    supportTelegram: 'papyrus_lodge',
+    supportWhatsapp: '+251919629347',
+    supportAvailable: true,
+  });
+  const [leadershipMessages, setLeadershipMessages] = useState<LeadershipMessage[]>([]);
+  const [stockAlertLogs, setStockAlertLogs] = useState<StockAlertLogEntry[]>([]);
+  const [stockAlertSettings, setStockAlertSettings] = useState<StockAlertSettings>({
+    audioEnabled: true,
+    pushEnabled: true,
+    smsEnabled: false,
+    managerPhone: '+251 919 629 347',
+    customerSoldOutMode: 'show_sold_out',
+  });
+  const [chefStockSearch, setChefStockSearch] = useState('');
+  const [chefStockCategory, setChefStockCategory] = useState('all');
+  const [chefStockToast, setChefStockToast] = useState<string | null>(null);
+  const [managerWaiterCallTarget, setManagerWaiterCallTarget] = useState('');
+  const [managerWaiterCallLocation, setManagerWaiterCallLocation] = useState('Table 01');
+  const [managerWaiterCallNote, setManagerWaiterCallNote] = useState('');
+  const [managerWaiterCallFeedback, setManagerWaiterCallFeedback] = useState<string | null>(null);
   const [isCacheEnabled, setIsCacheEnabled] = useState<boolean>(() => {
     try {
       return localStorage.getItem('papyrus_cache_enabled') !== 'false';
@@ -393,6 +519,8 @@ export default function App() {
     }
   });
   const [showMyReadyDeliveriesOnly, setShowMyReadyDeliveriesOnly] = useState<boolean>(false);
+  const [waiterCheckedItems, setWaiterCheckedItems] = useState<Record<string, Record<number, boolean>>>({});
+  const [chefNewOrderToast, setChefNewOrderToast] = useState<string | null>(null);
   
   // RECEPTION / BEDROOM BOOKINGS STATE
   const [bookingGuestCount, setBookingGuestCount] = useState<number>(1);
@@ -425,6 +553,9 @@ export default function App() {
   const [receiptDownloadedId, setReceiptDownloadedId] = useState<string | null>(null);
   const [selectedManagerAuditStaff, setSelectedManagerAuditStaff] = useState<string>('all');
   const [selectedManagerAuditRole, setSelectedManagerAuditRole] = useState<string>('all');
+  const [staffAuditDatePreset, setStaffAuditDatePreset] = useState<'today' | 'this_week' | 'last_week' | 'last_7_days' | 'last_30_days' | 'all' | 'custom'>('today');
+  const [staffAuditStartDate, setStaffAuditStartDate] = useState<string>(() => new Date().toLocaleDateString('en-CA'));
+  const [staffAuditEndDate, setStaffAuditEndDate] = useState<string>(() => new Date().toLocaleDateString('en-CA'));
 
   // UNIFIED PORTAL LOGIN STATE
   const [unifiedRole, setUnifiedRole] = useState<'waiter' | 'chef' | 'admin' | 'manager' | 'receptionist' | 'cashier' | 'guard'>('waiter');
@@ -437,6 +568,7 @@ export default function App() {
 
   // BEAUTIFUL STAFF AUTH PORTAL MODES & INTERACTIVE STATE (Based on user-uploaded mockup)
   const [staffPortalState, setStaffPortalState] = useState<'welcome' | 'login' | 'signup'>('welcome');
+  const [isStaffAuthModalOpen, setIsStaffAuthModalOpen] = useState(false);
   const [signupName, setSignupName] = useState('');
   const [signupUsername, setSignupUsername] = useState('');
   const [signupPassword, setSignupPassword] = useState('');
@@ -452,48 +584,52 @@ export default function App() {
   const [logoUrl, setLogoUrl] = useState<string>(DEFAULT_LOGO);
   const [tempLogoFile, setTempLogoFile] = useState<string | null>(null);
 
-  const [bgVideoUrl, setBgVideoUrl] = useState<string>('https://www.youtube.com/watch?v=EvwYOmxaxdA');
-
-  const [bgVideoType, setBgVideoType] = useState<'youtube' | 'direct' | 'local' | 'mango-paradise' | 'gourmet-paradise'>('youtube');
-
-  const [isBgVideoEnabled, setIsBgVideoEnabled] = useState<boolean>(true);
-  const [showQuickVideoModal, setShowQuickVideoModal] = useState<boolean>(false);
-
-  const [mediaPreviewPaused, setMediaPreviewPaused] = useState(false);
-  const [mediaPreviewMuted, setMediaPreviewMuted] = useState(true);
+  useEffect(() => {
+    // Preload compressed entry hero images immediately on mount so they appear instantaneously
+    const preloadSources = [ethiopianCuisineHero, signatureDish, deliveryChef, deliveryScooterIllustration];
+    const addedLinks: HTMLLinkElement[] = [];
+    preloadSources.forEach((src) => {
+      if (!src) return;
+      const link = document.createElement('link');
+      link.rel = 'preload';
+      link.as = 'image';
+      link.href = src;
+      document.head.appendChild(link);
+      addedLinks.push(link);
+    });
+    return () => {
+      addedLinks.forEach((link) => link.remove());
+    };
+  }, []);
 
   const [liteMode, setLiteMode] = useState<boolean>(false);
 
-  // Mouse position tracking for interactive 3D parallax background
-  const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
+  // Active chef showcase dish & report filters (removed global mousemove re-render loop for buttery settled scrolling)
   const [activeChefAnimationDish, setActiveChefAnimationDish] = useState<'tibs' | 'shiro' | 'injera' | 'coffee'>('tibs');
   const [hoveredMonthIndex, setHoveredMonthIndex] = useState<number | null>(null);
   const [activeReportTimeframe, setActiveReportTimeframe] = useState<'all' | 'q1' | 'q2' | 'this-month'>('all');
   const [selectedReportMetric, setSelectedReportMetric] = useState<'revenue' | 'expenses' | 'net'>('revenue');
-  useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
-      const x = (e.clientX / window.innerWidth) * 2 - 1;
-      const y = (e.clientY / window.innerHeight) * 2 - 1;
-      setMousePos({ x, y });
-    };
-    window.addEventListener('mousemove', handleMouseMove);
-    return () => window.removeEventListener('mousemove', handleMouseMove);
-  }, []);
 
-  // MULTILANGUAGE STATES (3 LOCAL LANGUAGES, 4 FOREIGN LANGUAGES, PLUS SIDAAMU AFOO)
-  const [appLang, setAppLang] = useState<'am' | 'en' | 'or' | 'ti' | 'fr' | 'de' | 'it' | 'sid'>(() => {
-    try {
-      const stored = sessionStorage.getItem('papyrus_app_lang');
-      if (stored && ['am', 'en', 'or', 'ti', 'fr', 'de', 'it', 'sid'].includes(stored)) {
-        return stored as 'am' | 'en' | 'or' | 'ti' | 'fr' | 'de' | 'it' | 'sid';
-      }
-    } catch {}
-    return 'am';
-  });
+  // CENTRALIZED MULTILANGUAGE CONTEXT (ALL NATIVE & FOREIGN LANGUAGES + RTL + CURRENCY)
+  const { appLang, t, tText, tRole, currency, isRtl } = useLanguage();
 
-  const [isVoiceOverEnabled, setIsVoiceOverEnabled] = useState<boolean>(true);
+  const [isVoiceOverEnabled, setIsVoiceOverEnabled] = useState<boolean>(false);
+  const [voiceSpeed, setVoiceSpeed] = useState<number>(1.0);
+  const [lastSpokenTranscript, setLastSpokenTranscript] = useState<string>('');
+  const [accessibleToast, setAccessibleToast] = useState<string>('');
 
-  // Dynamic localization maps for all 5 core categories across 8 languages
+  // Entry-page Blind / Visually Impaired Voice Menu & Ordering Launcher state
+  const [pendingEntryVoiceCommand, setPendingEntryVoiceCommand] = useState<string | null>(null);
+  const [entryVoiceOpen, setEntryVoiceOpen] = useState<boolean>(false);
+  const [entryVoiceStatus, setEntryVoiceStatus] = useState<'idle' | 'listening' | 'transcribing'>('idle');
+  const [entryVoiceTranscript, setEntryVoiceTranscript] = useState<string>('');
+  const [entryVoiceError, setEntryVoiceError] = useState<string>('');
+  const entryRecognitionRef = useRef<BrowserSpeechRecognition | null>(null);
+  const entryMediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const entryMediaStreamRef = useRef<MediaStream | null>(null);
+  const entryAudioChunksRef = useRef<BlobPart[]>([]);
+
+  // Dynamic localization maps for all 5 core categories across all supported languages
   const categoryTranslations: Record<string, Record<string, string>> = {
     food: {
       am: 'ምግቦች (Foods)',
@@ -503,7 +639,9 @@ export default function App() {
       fr: 'Nourriture',
       de: 'Speisen',
       it: 'Cibo',
-      sid: 'Sagale (Foods)'
+      sid: 'Sagale (Foods)',
+      zh: '美食餐点',
+      ar: 'المأكولات'
     },
     drinks: {
       am: 'መጠጦች (Drinks)',
@@ -513,7 +651,9 @@ export default function App() {
       fr: 'Boissons',
       de: 'Getränke',
       it: 'Bevande',
-      sid: 'Ago (Drinks)'
+      sid: 'Ago (Drinks)',
+      zh: '饮品',
+      ar: 'المشروبات'
     },
     traditional: {
       am: 'ባህላዊ (Traditional)',
@@ -523,7 +663,9 @@ export default function App() {
       fr: 'Traditionnel',
       de: 'Traditionell',
       it: 'Tradizionale',
-      sid: 'Budu (Traditional)'
+      sid: 'Budu (Traditional)',
+      zh: '传统特色',
+      ar: 'الأطباق التقليدية'
     },
     room: {
       am: 'ክፍሎች (Rooms)',
@@ -533,7 +675,9 @@ export default function App() {
       fr: 'Chambres',
       de: 'Zimmer',
       it: 'Camere',
-      sid: 'Kifile (Rooms)'
+      sid: 'Kifile (Rooms)',
+      zh: '客房住宿',
+      ar: 'الغرف'
     },
     venue: {
       am: 'ስብሰባ (Venues)',
@@ -543,11 +687,13 @@ export default function App() {
       fr: 'Salles',
       de: 'Veranstaltungsorte',
       it: 'Luoghi',
-      sid: 'Galma (Venues)'
+      sid: 'Galma (Venues)',
+      zh: '宴会场地',
+      ar: 'القاعات والفعاليات'
     }
   };
 
-  // Dynamic localization maps for all core food, drink, room & venue items across 8 languages
+  // Dynamic localization maps for all core food, drink, room & venue items across all supported languages
   const itemTranslations: Record<string, Record<string, { name: string; desc: string }>> = {
     m1: {
       am: { name: 'የሽከላ ጥብስ', desc: 'ጥሬ ስጋ, ቅቤ, ነጭ ሽንኩርት በተመረጡ ቅመማ ቅመሞች' },
@@ -557,7 +703,9 @@ export default function App() {
       fr: { name: 'Tibs de Shekla', desc: 'Bœuf frais mijoté avec du beurre éthiopien épicé et de l\'ail.' },
       de: { name: 'Shekla Tibs', desc: 'Frisches Rindfleisch, serviert auf einer erhitzten Tonschale.' },
       it: { name: 'Tibs in Argilla', desc: 'Carne di manzo cotta in una ciotola caldissima di terracotta.' },
-      sid: { name: 'Tibs Shakala', desc: 'Shonkorra, kibe, canano qajeela foon qorameena qopha\'e.' }
+      sid: { name: 'Tibs Shakala', desc: 'Shonkorra, kibe, canano qajeela foon qorameena qopha\'e.' },
+      zh: { name: '陶锅烤牛肉 (Shekla Tibs)', desc: '新鲜牛肉配埃塞俄比亚香料黄油与大蒜，陶锅热煎。' },
+      ar: { name: 'تيبس الفخار (Shekla Tibs)', desc: 'لحم بقري طازج مطهو بالزبدة الإثيوبية والثوم والتوابل المختارة.' }
     },
     m2: {
       am: { name: 'ልዩ ክትፎ', desc: 'ለስላሳ ስጋ, ሚጥሚጣ, አገር በቀል ቆንጆ ቅቤ, አይብ' },
@@ -567,7 +715,9 @@ export default function App() {
       fr: { name: 'Kitfo Spécial', desc: 'Bœuf haché assaisonné de piment mitmita et de kibe fondu chaud.' },
       de: { name: 'Spezial Kitfo', desc: 'Feinstes Rinderhackfleisch mit hausgemachter Gewürzbutter.' },
       it: { name: 'Kitfo Speciale', desc: 'Battuta di manzo finissima con burro speziato caldo e formaggio fresco.' },
-      sid: { name: 'Adda Kitfo', desc: 'Foon qorame, mitmita, kibe, ayibe wajjiin qophaa\'e.' }
+      sid: { name: 'Adda Kitfo', desc: 'Foon qorame, mitmita, kibe, ayibe wajjiin qophaa\'e.' },
+      zh: { name: '特制牛肉末 (Special Kitfo)', desc: '精选嫩牛肉末拌米特米塔辣椒、香料黄油和农家奶酪。' },
+      ar: { name: 'كتفو خاص (Special Kitfo)', desc: 'لحم بقري مفروم طري متبل بالمتميتا والزبدة المتبلة والجبن الطازج.' }
     },
     m8: {
       am: { name: 'የሀዋሳ ዓሳ ጥብስ', desc: 'ትኩስ ከሀይቁ የወጣ አሳ በጥብስ, በቃሪያና በሎሚ' },
@@ -577,7 +727,9 @@ export default function App() {
       fr: { name: 'Poisson Frit Hawassa', desc: 'Poisson tilapia frais du lac Hawassa croustillant avec piment frais.' },
       de: { name: 'Hawassa Brathering', desc: 'Frischer Tilapia-Fisch aus dem Hawassasee, knusprig frittiert.' },
       it: { name: 'Pesce Fritto di Hawassa', desc: 'Pesce tilapia fresco pescato dal lago Hawassa fritto con peperoncino.' },
-      sid: { name: 'Hawaasa Qorii Qurxumme', desc: 'Hawaasa qummeessine taje kessate fannoonni qaariya wajjiin.' }
+      sid: { name: 'Hawaasa Qorii Qurxumme', desc: 'Hawaasa qummeessine taje kessate fannoonni qaariya wajjiin.' },
+      zh: { name: '阿瓦萨湖香煎罗非鱼', desc: '阿瓦萨湖现捕新鲜罗非鱼，配青椒与柠檬香煎。' },
+      ar: { name: 'سمك بحيرة هواسا المقلي', desc: 'سمك البلطي الطازج من بحيرة هواسا مقلي مع الفلفل الأخضر والليمون.' }
     },
     m10: {
       am: { name: 'የበግ በረካ ጥብስ', desc: 'በሽንኩርት, በቅቤ እና በቃሪያ የተጠበሰ ምርጥ ስጋ' },
@@ -587,7 +739,9 @@ export default function App() {
       fr: { name: 'Tibs d\'Agneau', desc: 'Morsures d\'agneau rissolées aux oignons et herbes fraîches.' },
       de: { name: 'Lamm Tibs', desc: 'Zartes Lammfleisch, scharf angebraten mit Zwiebeln und grünem Paprika.' },
       it: { name: 'Tibs di Agnello', desc: 'Bocconcini d\'agnello saltati in padella con burro speziato e cipolla.' },
-      sid: { name: 'Tibs Re\'e', desc: 'Kibe, shonkorra, qaariya wajjiin qorame foon re\'e.' }
+      sid: { name: 'Tibs Re\'e', desc: 'Kibe, shonkorra, qaariya wajjiin qorame foon re\'e.' },
+      zh: { name: '香煎嫩羊肉 (Mutton Tibs)', desc: '鲜嫩羊肉块配洋葱、草本黄油与青椒大火炒制。' },
+      ar: { name: 'تيبس لحم الضأن', desc: 'قطع لحم ضأن طرية مقلية مع البصل والزبدة العشبية والفلفل الأخضر.' }
     },
     m9: {
       am: { name: 'የዓሳ ጉላሽ', desc: 'በተመረጡ ቅመማቅመሞች የተሰራ ዝነኛው የዓሳ ጉላሽ ከሩዝ ጋር' },
@@ -597,7 +751,9 @@ export default function App() {
       fr: { name: 'Goulache de Poisson', desc: 'Cubes de poisson marinés à la sauce tomate épicée, accompagnés de riz.' },
       de: { name: 'Fischgulasch', desc: 'Traditionelles würziges Fischgulasch mit weißem Beilage-Reis.' },
       it: { name: 'Gulasch di Pesce', desc: 'Gulasch di pesce cubettato in salsa ricca e profumata con riso.' },
-      sid: { name: 'Qurxumme Gulaashe', desc: 'Qurxumme rarra\'a, timatime, shonkorra ruuze wajjiin.' }
+      sid: { name: 'Qurxumme Gulaashe', desc: 'Qurxumme rarra\'a, timatime, shonkorra ruuze wajjiin.' },
+      zh: { name: '番茄香辣炖鱼块 (Fish Goulash)', desc: '鲜鱼块配番茄与传统香料炖煮，佐以米饭。' },
+      ar: { name: 'غولاش السمك', desc: 'مكعبات السمك الشهيرة مطهوة بالطماطم والتوابل وتقدم مع الأرز.' }
     },
     m11: {
       am: { name: 'የጾም በያይነቱ', desc: 'ምስር ክክ, ሽሮ ወጥ, ጥቅል ጎመን, ቀይ ስር ሰላጣ' },
@@ -607,7 +763,9 @@ export default function App() {
       fr: { name: 'Beyaynetu de Carême', desc: 'Grand assortiment végétalien de lentilles, chou, carottes et pois cassés.' },
       de: { name: 'Fasten Beyaynetu', desc: 'Eine vegane Platte mit verschiedenen Linsengerichten und Gemüse.' },
       it: { name: 'Beyaynetu Vegano', desc: 'Piatto vegano composto da lenticchie, verza, barbabietole e crema di ceci.' },
-      sid: { name: 'Beyaynetu Tsoome', desc: 'Misire, shiro, gomenna, beetroot salata wajjiin.' }
+      sid: { name: 'Beyaynetu Tsoome', desc: 'Misire, shiro, gomenna, beetroot salata wajjiin.' },
+      zh: { name: '埃塞俄比亚素食拼盘 (Beyaynetu)', desc: '色彩丰富的全素拼盘：红扁豆、豌豆泥、卷心菜与甜菜沙拉。' },
+      ar: { name: 'بيايينيتو النباتي', desc: 'طبق نباتي متنوع من العدس الأحمر والبازلاء والملفوف وصلصة الشيرو.' }
     },
     m3: {
       am: { name: 'ፓፒረስ ልዩ ጁስ', desc: 'ከሀገር በቀል ትኩስ ፍራፍሬዎች (አቮካዶ, ማንጎ, ፓፓያ) የተጨመቀ' },
@@ -617,7 +775,9 @@ export default function App() {
       fr: { name: 'Jus Maison Papyrus', desc: 'Jus de fruits frais pressés en couches (avocat, mangue, papaye).' },
       de: { name: 'Papyrus Spezialsaft', desc: 'Mehrschichtiger frischer Tropenfruchtsaft aus Avocado und Mango.' },
       it: { name: 'Succo Speciale', desc: 'Centrifugato fresco multi-strato di avocado, mango e papaia freschi.' },
-      sid: { name: 'Paappiras Adda Juuse', desc: 'Avocado, mango, paapaaya maccishshe juuse.' }
+      sid: { name: 'Paappiras Adda Juuse', desc: 'Avocado, mango, paapaaya maccishshe juuse.' },
+      zh: { name: 'Papyrus 招牌鲜榨多层果汁', desc: '新鲜牛油果、芒果与木瓜现场压榨调制的多层热带果汁。' },
+      ar: { name: 'عصير بابيروس المشكل الخاص', desc: 'عصير استوائي طازج بطبقات من الأفوكادو والمانجو والبابايا.' }
     },
     m4: {
       am: { name: 'የቀዝቃዛ ቢራ (Draft)', desc: 'ትኩስነቱ የተጠበቀ ምርጥ ድራፍት ቢራ ቀዝቃዛ' },
@@ -627,7 +787,9 @@ export default function App() {
       fr: { name: 'Bière Pression Fraîche', desc: 'Bière pression légère et rafraîchissante servie très fraîche.' },
       de: { name: 'Kaltes Zapfbier', desc: 'Frisch gezapftes, eisgekühltes Premium-Bier vom Fass.' },
       it: { name: 'Birra alla Spina', desc: 'Birra chiara alla spina spillata a temperatura glaciale.' },
-      sid: { name: 'Qabbana\'aa Draft Bira', desc: 'Qabbana\'aa draft bira lowo.' }
+      sid: { name: 'Qabbana\'aa Draft Bira', desc: 'Qabbana\'aa draft bira lowo.' },
+      zh: { name: '冰镇生啤 (Draft Beer)', desc: '清爽冰镇扎啤，口感绵密醇厚。' },
+      ar: { name: 'مشروب الشعير البارد (Draft)', desc: 'بيرة باردة ومنعشة مبردة بدرجة مثالية.' }
     },
     m12: {
       am: { name: 'የጀበና ቡና', desc: 'በባህላዊ መንገድ የተቆላና በጀበና የፈላ ምርጥ የይርጋጨፌ ቡና' },
@@ -637,7 +799,9 @@ export default function App() {
       fr: { name: 'Café Éthiopien Traditionnel', desc: 'Café organique torréfié sur place et infusé délicatement dans une jarre d\'argile.' },
       de: { name: 'Traditioneller Kaffee', desc: 'Traditioneller Yirgacheffe-Kaffee, frisch zubereitet in der Tonkanne.' },
       it: { name: 'Caffè in Jebena', desc: 'Caffè biologico arabica tostato a mano e preparato nella tipica caffettiera.' },
-      sid: { name: 'Buna Jebena', desc: 'Jebenatenni kibe shonkorra Buna Yirgacheffe.' }
+      sid: { name: 'Buna Jebena', desc: 'Jebenatenni kibe shonkorra Buna Yirgacheffe.' },
+      zh: { name: '埃塞传统陶壶咖啡 (Jebena)', desc: '本地烘焙耶加雪菲有机咖啡豆，用传统陶壶慢煮。' },
+      ar: { name: 'قهوة الجبنة الإثيوبية التقليدية', desc: 'بن يرجاشيفي عضوي محمص محلياً ومعد في إبريق الفخار التقليدي.' }
     },
     m13: {
       am: { name: 'የሀገር ባህል ጠጅ', desc: 'ከተፈጥሮ ንፁህ ማር የተዘጋጀ ልዩ የሀገር ባህል ጠጅ በብርሌ' },
@@ -647,7 +811,9 @@ export default function App() {
       fr: { name: 'Hydromel Maison (Tej)', desc: 'Vin de miel traditionnel éthiopien doux et parfumé servi en bouteille carafe.' },
       de: { name: 'Honigwein (Tej)', desc: 'Traditioneller hausgemachter äthiopischer Honigmet im Glaskolben.' },
       it: { name: 'Idromele Tipico (Tej)', desc: 'Bevanda alcolica fermentata di miele purissimo servita nel tipico boccale.' },
-      sid: { name: 'Buda Tejje', desc: 'Naxarame mada damma irraa qopha\'e tejje.' }
+      sid: { name: 'Buda Tejje', desc: 'Naxarame mada damma irraa qopha\'e tejje.' },
+      zh: { name: '传统蜂蜜酒 (Tej)', desc: '纯天然蜂蜜酿造的埃塞传统风味蜜酒，配玻璃小瓶呈上。' },
+      ar: { name: 'مشروب العسل التقليدي (Tej)', desc: 'نبيذ العسل التقليدي المصنوع من العسل الصافي ويُقدم في الإناء الزجاجي.' }
     },
     m5: {
       am: { name: 'ስታንዳርድ አልጋ (Lakeside)', desc: 'ምቹ አልጋ, ከነጻ የእንፋሎት መታጠቢያ, ቁርስ እና ፈጣን ኢንተርኔት ጋር' },
@@ -657,7 +823,9 @@ export default function App() {
       fr: { name: 'Chambre Standard Simple', desc: 'Lit confortable avec vue lac, hammam gratuit, petit déjeuner et Wi-Fi haut débit.' },
       de: { name: 'Standard Einzelzimmer', desc: 'Gemütliches Einzelzimmer mit Seeblick, kostenlosem Frühstück und WLAN.' },
       it: { name: 'Camera Standard Vista Lago', desc: 'Letto comodo, colazione inclusa, accesso sauna gratuito e bagno privato.' },
-      sid: { name: 'Standard Kifile', desc: 'Kifile single alga, lake view qajeela, breakfast & Wi-Fi.' }
+      sid: { name: 'Standard Kifile', desc: 'Kifile single alga, lake view qajeela, breakfast & Wi-Fi.' },
+      zh: { name: '标准湖景单人房', desc: '舒适单人床，湖景微风，含免费蒸汽浴、早餐及高速Wi-Fi。' },
+      ar: { name: 'غرفة مفردة قياسية مطلة على البحيرة', desc: 'سرير مريح وإطلالة على البحيرة مع غرفة بخار مجانية وإفطار وإنترنت سريع.' }
     },
     m6: {
       am: { name: 'ዴሉክስ ቪ አይ ፒ ሱዊት', desc: 'ትልቅ ሳሎን ያለውና ወደ ውቡ ሀይቅ የሚመለከት የቅንጦት ማረፊያ' },
@@ -667,7 +835,9 @@ export default function App() {
       fr: { name: 'Suite Deluxe VIP', desc: 'Chambre de maître spacieuse, salon séparé et vue panoramique majestueuse sur le lac.' },
       de: { name: 'Luxus VIP-Suite', desc: 'Exklusives Master-Schlafzimmer mit Salon und Panoramablick auf den See.' },
       it: { name: 'Master Suite VIP Deluxe', desc: 'Appartamento ultra-lussuoso con salotto privato e vista spettacolare sul lago.' },
-      sid: { name: 'Deluxe VIP Kifile', desc: 'VIP master kifile, living space, lake view breeze.' }
+      sid: { name: 'Deluxe VIP Kifile', desc: 'VIP master kifile, living space, lake view breeze.' },
+      zh: { name: '豪华 VIP 湖景套房', desc: '宽敞主卧与独立客厅，尽享壮丽阿瓦萨湖全景。' },
+      ar: { name: 'جناح ديلوكس VIP', desc: 'غرفة نوم رئيسية فاخرة وصالة واسعة وإطلالة خلابة على البحيرة.' }
     },
     m7: {
       am: { name: 'የባህር ዳርቻ አትክልት ቦታ', desc: 'ለሰርግ, መጠነኛ ስራዎች እና ለትልልቅ ስብሰባዎች የሚሆን ውብ መናፈሻ' },
@@ -677,12 +847,14 @@ export default function App() {
       fr: { name: 'Jardin du Lac', desc: 'Magnifique espace vert au bord du lac pour mariages et réceptions.' },
       de: { name: 'Lakeside Garten', desc: 'Wunderschöner Park am See für Hochzeiten und Tagungen.' },
       it: { name: 'Giardino sul Lago', desc: 'Splendido parco sul lago per matrimoni ed eventi.' },
-      sid: { name: 'Haaro Giddo', desc: 'Shonkorra babbaxxino looso qopha\'e.' }
+      sid: { name: 'Haaro Giddo', desc: 'Shonkorra babbaxxino looso qopha\'e.' },
+      zh: { name: '湖畔花园宴会场地', desc: '阿瓦萨湖畔风景如画的户外花园，适合婚礼、宴会及团队会议。' },
+      ar: { name: 'حديقة المناسبات على ضفاف البحيرة', desc: 'حديقة خلابة مطلة على بحيرة هواسا مثالية لحفلات الزفاف والمؤتمرات.' }
     }
   };
 
-  // Fallback text dictionary for all 8 languages
-  const entryTranslation = {
+  // Fallback text dictionary for all supported languages
+  const entryTranslation: Record<string, Record<string, string>> = {
     app_title: {
       am: heroTitleAm,
       en: heroTitleEn,
@@ -691,7 +863,9 @@ export default function App() {
       fr: 'Hawassa Papyrus',
       de: 'Hawassa Papyrus',
       it: 'Hawassa Papyrus',
-      sid: 'Hawassa Paappiras'
+      sid: 'Hawassa Paappiras',
+      zh: '阿瓦萨 Papyrus 度假村',
+      ar: 'هاواسا بابيروس'
     },
     app_subtitle: {
       am: heroSubtitleAm,
@@ -701,17 +875,21 @@ export default function App() {
       fr: 'ÉCO-PORTAIL NUMÉRIQUE v2',
       de: 'DIGITALES ÖKO-PORTAL v2',
       it: 'ECO-PORTALE DIGITALE v2',
-      sid: 'DIIJITAALE EKO-PORTAALE v2'
+      sid: 'DIIJITAALE EKO-PORTAALE v2',
+      zh: '数字生态门户 v2',
+      ar: 'البوابة الرقمية v2'
     },
     intro_para: {
       am: heroIntroAm,
       en: heroIntroEn,
       or: 'Tajaajila keenya argachuuf, maaloo portaalii sirrii ta\'e filannoowwan armaan gadii irraa filadhaa.',
       ti: 'አገልግሎትና ንምርካብ፡ በጃኹም ካብቶም ታሕቲ ዘለዉ ኣማራጺታት ዝምጥን መእተዊ ይምረጹ።',
-      fr: 'Pour accéder à nos services, veuillez sélectionner le portail approprié parmi os options ci-dessous.',
+      fr: 'Pour accéder à nos services, veuillez sélectionner le portail approprié parmi les options ci-dessous.',
       de: 'Um auf unsere Dienste zuzugreifen, wählen Sie bitte das entsprechende Portal aus den folgenden Optionen.',
       it: 'Per accedere ai nostri servizi, seleziona il portale opportuno tra le opzioni sottostanti.',
-      sid: 'Taje keenya afate, maaloo portaale babbaxxino doori.'
+      sid: 'Taje keenya afate, maaloo portaale babbaxxino doori.',
+      zh: '欢迎体验我们的餐饮与客房服务，请在下方选择您的入口。',
+      ar: 'للوصول إلى خدماتنا، يرجى اختيار البوابة المناسبة من الخيارات أدناه.'
     },
     guest_title: {
       am: 'የእንግዳ መግቢያ',
@@ -721,7 +899,9 @@ export default function App() {
       fr: 'Espace Client',
       de: 'Gäste-Portal',
       it: 'Accesso Ospiti',
-      sid: 'La\'ote Seena'
+      sid: 'La\'ote Seena',
+      zh: '宾客服务入口',
+      ar: 'بوابة الضيوف'
     },
     guest_desc: {
       am: 'የፓፒረስ ሎጅ ዲጂታል እንግዳ አገልግሎቶች እና የመመገቢያ ትዕዛዝ ማዘዣ። ምግቦችን ለማዘዝ፣ ክፍል ውስጥ አገልግሎቶችን ለመጠየቅ እና የአካባቢ ጉዞዎችን ለማሰስ ይጠቀሙ።',
@@ -731,7 +911,9 @@ export default function App() {
       fr: 'Bienvenue sur le portail des résidents du Papyrus Lodge. Commandez notre cuisine raffinée, demandez des services en chambre et réservez des excursions guidées sur le lac.',
       de: 'Willkommen im Papyrus Lodge Gästebereich. Bestellen Sie feine lokale & internationale Speisen, fordern Sie Zimmerservice an und buchen Sie Ausflüge auf dem Hawassa-See.',
       it: 'Benvenuto nel portale ospiti di Papyrus Lodge. Ordina piatti tradizionali e internazionali, richiedi servizi in camera e organizza escursioni sul lago Hawassa.',
-      sid: 'Hawaasa Paappiras Looje la\'ote taje doorshsha. Sagale hajajate, kifile taje xa\'mitate, qoleno haaro daawwatate.'
+      sid: 'Hawaasa Paappiras Looje la\'ote taje doorshsha. Sagale hajajate, kifile taje xa\'mitate, qoleno haaro daawwatate.',
+      zh: '欢迎来到阿瓦萨 Papyrus 度假村宾客门户。轻松点选当地及国际美食、申请客房服务及预订游览行程。',
+      ar: 'مرحباً بكم في بوابة ضيوف بابيروس لودج. اطلبوا أشهى المأكولات المحلية والعالمية وخدمات الغرف بسهولة.'
     },
     guest_btn: {
       am: 'ወደ እዚህ ይግቡ (እንግዳ) 🍽️',
@@ -741,7 +923,9 @@ export default function App() {
       fr: 'ENTRER CÔTÉ CLIENT 🍽️',
       de: 'ZUM GÄSTEBEREICH 🍽️',
       it: 'ENTRA COME OSPITE 🍽️',
-      sid: 'LA’OTE DOORSINNI SEENA 🍽️'
+      sid: 'LA’OTE DOORSINNI SEENA 🍽️',
+      zh: '进入电子菜单 🍽️',
+      ar: 'دخول القائمة الرقمية 🍽️'
     },
     staff_title: {
       am: 'Staff & Admin Secure Desk',
@@ -751,7 +935,9 @@ export default function App() {
       fr: 'Portail Privé Staff & Admin',
       de: 'Mitarbeiter & Admin Portal',
       it: 'Portale Pro Staff & Admin',
-      sid: 'Ogeeyyi & Admin Secure Desk'
+      sid: 'Ogeeyyi & Admin Secure Desk',
+      zh: '员工与管理安全台',
+      ar: 'مكتب الموظفين والإدارة الآمن'
     },
     staff_desc: {
       am: 'የፓፒረስ ሎጅ የሙያተኞች እና አስተዳዳሪዎች ማዕከላዊ የመግቢያ መግቢያ። አስተዳደር፣ ሽያጭ ሪፖርት፣ ሂሳብ አከፋፈል እና የክፍል መቆጣጠሪያ።',
@@ -761,7 +947,9 @@ export default function App() {
       fr: 'Espace sécurisé réservé aux serveurs, chefs, réceptionnistes et directeurs pour la gestion d\'établissement et les rapports en temps réel.',
       de: 'Gesichertes Administrationsportal für Kellner, Küche, Empfang und Finanzkontrolle der Papyrus Lodge.',
       it: 'Accesso sicuro riservato a camerieri, chef, reception e amministratori per la contabilità e il controllo camere.',
-      sid: 'Hawaasa Paappiras Looje handaara ogeeyyira qummeessa. Receptine kitchine, accounts canatano herrega taje.'
+      sid: 'Hawaasa Paappiras Looje handaara ogeeyyira qummeessa. Receptine kitchine, accounts canatano herrega taje.',
+      zh: '员工及管理人员专用安全工作台。处理厨房排班、服务调度、财务账目及前台客房登记。',
+      ar: 'بوابة آمنة للموظفين والمديرين لإدارة الطلبات والمطبخ والحسابات والغرف.'
     },
     staff_btn: {
       am: 'ወደ እዚህ ይግቡ (ሰራተኛ) 🔐',
@@ -771,7 +959,9 @@ export default function App() {
       fr: 'ACCÈS PROFESSIONNEL 🔐',
       de: 'ZUR MITARBEITER-DESK 🔐',
       it: 'ACCESSO PERSONALE 🔐',
-      sid: 'OGEEYYIRA SEENA 🔐'
+      sid: 'OGEEYYIRA SEENA 🔐',
+      zh: '员工登录 🔐',
+      ar: 'تسجيل دخول الموظفين 🔐'
     },
     voice_label: {
       am: 'የድምፅ ረዳት (ለአይነስውራን የሚሆን)',
@@ -781,7 +971,9 @@ export default function App() {
       fr: 'Lecteur Vocal d\'Accessibilité',
       de: 'Vorlese-Assistent',
       it: 'Sintesi Vocale per Ipovedenti',
-      sid: 'Taje Macciishshate Doorshsha'
+      sid: 'Taje Macciishshate Doorshsha',
+      zh: '无障碍语音朗读助手',
+      ar: 'قارئ الصوت للمساعدة'
     },
     voice_active: {
       am: 'የድምፅ ረዳት በርቷል 🔊 (ይናገራል)',
@@ -791,7 +983,9 @@ export default function App() {
       fr: 'Assistant Vocal Activé 🔊',
       de: 'Sprachausgabe Aktiviert 🔊',
       it: 'Sintesi Vocale Attiva 🔊',
-      sid: 'Macciishshate looso fannoonni 🔊'
+      sid: 'Macciishshate looso fannoonni 🔊',
+      zh: '语音播报已开启 🔊',
+      ar: 'المساعد الصوتي مفعّل 🔊'
     },
     voice_inactive: {
       am: 'የድምፅ ረዳት ጠፍቷል 🔇',
@@ -801,7 +995,9 @@ export default function App() {
       fr: 'Assistant Vocal Muet 🔇',
       de: 'Sprachausgabe Stumm 🔇',
       it: 'Sintesi Vocale Disattivata 🔇',
-      sid: 'Macciishshate looso cufnoonni 🔇'
+      sid: 'Macciishshate looso cufnoonni 🔇',
+      zh: '语音播报已静音 🔇',
+      ar: 'المساعد الصوتي مكتوم 🔇'
     },
     speak_welcome: {
       am: 'እንኳን ወደ ሃዋሳ ፓፒረስ ሎጅ በደህና መጡ። እባክዎ የእንግዳ ማዘዣ ገጽ ወይም የሰራተኞች መግቢያን ይምረጡ። ይህ መተግበሪያ ለአይነስውራን የድምፅ ረዳት አለው።',
@@ -811,7 +1007,9 @@ export default function App() {
       fr: 'Bienvenue au Hawassa Papyrus Lodge. Veuillez choisir la commande client ou le portail du personnel. Cet écran est configuré avec l\'assistance vocale.',
       de: 'Willkommen in der Hawassa Papyrus Lodge. Bitte wählen Sie Gästebereich oder Mitarbeiter-Portal. Dieser Bereich unterstützt Sprachausgabe für Sehbehinderte.',
       it: 'Benvenuto a Hawassa Papyrus Lodge. Scegli l\'ordinazione degli ospiti o l\'accesso dello staff. Il portale supporta la lettura vocale per ipovedenti.',
-      sid: 'Gara Hawassa Paappiras Looje keere dhu\'e. Maaloo la\'ote doorshsha yeyyi ogeeyyira doora.'
+      sid: 'Gara Hawassa Paappiras Looje keere dhu\'e. Maaloo la\'ote doorshsha yeyyi ogeeyyira doora.',
+      zh: '欢迎来到阿瓦萨 Papyrus 度假村。请选择进入宾客电子菜单或员工登录门户。',
+      ar: 'مرحباً بكم في منتجع هاواسا بابيروس. يرجى اختيار قائمة الضيوف أو بوابة الموظفين.'
     }
   };
 
@@ -825,7 +1023,9 @@ export default function App() {
       fr: 'Numéro de Chambre',
       de: 'Zimmernummer',
       it: 'Numero di Camera',
-      sid: 'Kifile Kiiro'
+      sid: 'Kifile Kiiro',
+      zh: '房间号 / 桌号',
+      ar: 'رقم الغرفة / الطاولة'
     },
     call_waiter: {
       am: 'አስተናጋጅ ጥራ',
@@ -835,7 +1035,9 @@ export default function App() {
       fr: 'Appeler Serveur',
       de: 'Kellner Rufen',
       it: 'Chiama Cameriere',
-      sid: 'Soolaancho Wixi'
+      sid: 'Soolaancho Wixi',
+      zh: '呼叫服务员',
+      ar: 'استدعاء النادل'
     },
     active_orders: {
       am: 'የእርስዎ ገቢር ትዕዛዞች ሁኔታ መከታተያ',
@@ -845,7 +1047,9 @@ export default function App() {
       fr: 'Suivi de Vos Commandes Actives',
       de: 'Status Ihrer Aktiven Bestellungen',
       it: 'Tracciamento Ordinazioni Attive',
-      sid: 'Hasa Hajajoota Worrinore tracking'
+      sid: 'Hasa Hajajoota Worrinore tracking',
+      zh: '您的进行中订单状态追踪',
+      ar: 'تتبع حالة طلباتك النشطة'
     },
     order_id: {
       am: 'ትዕዛዝ ቁጥር',
@@ -855,7 +1059,9 @@ export default function App() {
       fr: 'ID Commande',
       de: 'Bestellnummer',
       it: 'ID Ordinazione',
-      sid: 'Hajajo ID'
+      sid: 'Hajajo ID',
+      zh: '订单编号',
+      ar: 'رقم الطلب'
     },
     time: {
       am: 'ሰዓት',
@@ -865,7 +1071,9 @@ export default function App() {
       fr: 'Heure',
       de: 'Uhrzeit',
       it: 'Orario',
-      sid: 'Sa\'ate'
+      sid: 'Sa\'ate',
+      zh: '时间',
+      ar: 'الوقت'
     },
     status: {
       am: 'ሁኔታ',
@@ -875,7 +1083,9 @@ export default function App() {
       fr: 'Statut',
       de: 'Status',
       it: 'Stato',
-      sid: 'Gara'
+      sid: 'Gara',
+      zh: '状态',
+      ar: 'الحالة'
     },
     pending: {
       am: '⏱️ በመጠባበቅ ላይ',
@@ -885,7 +1095,9 @@ export default function App() {
       fr: '⏱️ En attente',
       de: '⏱️ Ausstehend',
       it: '⏱️ In attesa',
-      sid: '⏱️ Keerinnanni'
+      sid: '⏱️ Keerinnanni',
+      zh: '⏱️ 等待接单',
+      ar: '⏱️ قيد الانتظار'
     },
     preparing: {
       am: '🥘 እየተዘጋጀ ነው',
@@ -895,7 +1107,9 @@ export default function App() {
       fr: '🥘 En préparation',
       de: '🥘 Wird zubereitet',
       it: '🥘 In preparazione',
-      sid: '🥘 Qopheessarra jira'
+      sid: '🥘 Qopheessarra jira',
+      zh: '🥘 正在烹饪',
+      ar: '🥘 قيد التحضير'
     },
     bringing: {
       am: '🧑‍🍳 ምግብ ተዘጋጅቷል፤ አስተናጋጅ እያመጣልዎ ነው...',
@@ -905,7 +1119,9 @@ export default function App() {
       fr: '🧑‍🍳 Plat préparé! Le serveur vous l\'apporte...',
       de: '🧑‍🍳 Gericht fertig! Kellner bringt es Ihnen...',
       it: '🧑‍🍳 Piatto pronto! Il cameriere lo sta servendo...',
-      sid: '🧑‍🍳 Sagale qopha\'e; soolaancho fidadhe no...'
+      sid: '🧑‍🍳 Sagale qopha\'e; soolaancho fidadhe no...',
+      zh: '🧑‍🍳 菜品已做好！服务员正在为您送达...',
+      ar: '🧑‍🍳 الوجبة جاهزة! النادل في طريقه إليك...'
     },
     ready_collection: {
       am: '✅ ደርሷል / መውሰድ ይችላሉ',
@@ -915,7 +1131,9 @@ export default function App() {
       fr: '✅ Servie / Prêt pour la Collecte',
       de: '✅ Serviert / Abholbereit',
       it: '✅ Servito / Pronto per il Ritiro',
-      sid: '✅ Sarre / Adhate dandiineemmo'
+      sid: '✅ Sarre / Adhate dandiineemmo',
+      zh: '✅ 已送达 / 可取餐',
+      ar: '✅ تم التقديم / جاهز للاستلام'
     },
     total: {
       am: 'ጠቅላላ',
@@ -925,17 +1143,21 @@ export default function App() {
       fr: 'Total',
       de: 'Gesamt',
       it: 'Totale',
-      sid: 'Mulu guutuu'
+      sid: 'Mulu guutuu',
+      zh: '总计',
+      ar: 'الإجمالي'
     },
     confirm_handover: {
       am: 'ምግብ መረከብዎን ያረጋግጡ ✔️',
       en: 'Confirm Food Handover ✔️',
-      or: 'Nyaata fudhachuu keessan mirკaneessaa ✔️',
+      or: 'Nyaata fudhachuu keessan mirkaneessaa ✔️',
       ti: 'መግቢ ምርካብኩም አረጋግጹ ✔️',
       fr: 'Confirmer la Réception du Plat ✔️',
       de: 'Übergabe Bestätigen ✔️',
       it: 'Conferma Ricezione Piatto ✔️',
-      sid: 'Sagale adhate mirkaneessi ✔️'
+      sid: 'Sagale adhate mirkaneessi ✔️',
+      zh: '确认已收到餐品 ✔️',
+      ar: 'تأكيد استلام الطعام ✔️'
     },
     handover_alert: {
       am: '👍 ምግብ መረከብዎን ለአስተናጋጅ አሳውቀናል። እናመሰግናለን!',
@@ -945,7 +1167,9 @@ export default function App() {
       fr: '👍 Nous avons informé le serveur que vous avez reçu votre plat. Merci !',
       de: '👍 Wir haben dem Kellner mitgeteilt, dass Sie Ihr Essen erhalten haben. Vielen Dank!',
       it: '👍 Abbiamo informato il cameriere che hai ricevuto il piatto. Grazie!',
-      sid: '👍 Sagale adhate soolaancho riphphitinanni hawarenoommo. Galatteenye!'
+      sid: '👍 Sagale adhate soolaancho riphphitinanni hawarenoommo. Galatteenye!',
+      zh: '👍 我们已通知服务员您已收到餐品，祝您用餐愉快！',
+      ar: '👍 تم إبلاغ النادل بأنك استلمت طلبك. شكراً لك!'
     },
     about_lodge_heading: {
       am: 'ስለ ፓፒረስ ሎጅ',
@@ -955,7 +1179,9 @@ export default function App() {
       fr: 'À propos de Papyrus Lodge',
       de: 'Über die Papyrus Lodge',
       it: 'Informazioni su Papyrus Lodge',
-      sid: 'Paappiras Looje daafira'
+      sid: 'Paappiras Looje daafira',
+      zh: '关于 Papyrus 度假村',
+      ar: 'عن منتجع بابيروس'
     },
     feedbacks_heading: {
       am: 'አስተያየትዎን ያጋሩን',
@@ -965,7 +1191,9 @@ export default function App() {
       fr: 'Partager Votre Avis',
       de: 'Feedback Teilen',
       it: 'Invia Feedback',
-      sid: 'Asteeyatton qoodamme'
+      sid: 'Asteeyatton qoodamme',
+      zh: '分享您的宝贵意见',
+      ar: 'شاركنا رأيك'
     },
     feedback_placeholder: {
       am: 'እዚህ ላይ አስተያየትዎን ይጻፉ...',
@@ -975,7 +1203,9 @@ export default function App() {
       fr: 'Écrivez vos commentaires ici...',
       de: 'Schreiben Sie hier Ihre Meinung...',
       it: 'Scrivi qui le tue impressioni...',
-      sid: 'Asteeyatton asera xibe...'
+      sid: 'Asteeyatton asera xibe...',
+      zh: '请在此输入您的意见或建议...',
+      ar: 'اكتب ملاحظاتك هنا...'
     },
     submit_btn: {
       am: 'አስተያየት ላክ',
@@ -985,7 +1215,9 @@ export default function App() {
       fr: 'Envoyer les Commentaires',
       de: 'Feedback Absenden',
       it: 'Invia il Commento',
-      sid: 'Asteeyatton Soyye'
+      sid: 'Asteeyatton Soyye',
+      zh: '提交评价',
+      ar: 'إرسال الملاحظات'
     },
     past_feedbacks: {
       am: '💬 ያለፉ አስተያየቶች እና ምላሾች',
@@ -995,7 +1227,9 @@ export default function App() {
       fr: '💬 Avis Précédents & Réponses',
       de: '💬 Bisheriges Feedback & Antworten',
       it: '💬 Feedback Ricevuti e Risposte',
-      sid: '💬 Hunda asteeyattonna deebii'
+      sid: '💬 Hunda asteeyattonna deebii',
+      zh: '💬 历史评价与回复',
+      ar: '💬 التقييمات السابقة والردود'
     },
     response_from_lodge: {
       am: '👑 የሎጁ ምላሽ',
@@ -1005,7 +1239,9 @@ export default function App() {
       fr: '👑 Réponse du Lodge',
       de: '👑 Antwort der Lodge',
       it: '👑 Risposta del Lodge',
-      sid: '👑 Looje deebii'
+      sid: '👑 Looje deebii',
+      zh: '👑 度假村回复',
+      ar: '👑 رد المنتجع'
     },
     cart_order_now: {
       am: '🛒 እዘዝ',
@@ -1015,7 +1251,9 @@ export default function App() {
       fr: 'Commander 🛒',
       de: 'Jetzt Bestellen 🛒',
       it: 'Ordina Ora 🛒',
-      sid: '🛒 Ammalle Hajaje'
+      sid: '🛒 Ammalle Hajaje',
+      zh: '立即下单 🛒',
+      ar: 'اطلب الآن 🛒'
     },
     extra_bread: {
       am: '🥖 ተጨማሪ ዳቦ',
@@ -1025,7 +1263,9 @@ export default function App() {
       fr: '🥖 Pain Supplémentaire',
       de: '🥖 Extra Brot',
       it: '🥖 Pane Extra',
-      sid: '🥖 Daboo dabalata'
+      sid: '🥖 Daboo dabalata',
+      zh: '🥖 加份面包',
+      ar: '🥖 خبز إضافي'
     },
     green_pepper: {
       am: '🌶️ ቃሪያ',
@@ -1035,7 +1275,9 @@ export default function App() {
       fr: '🌶️ Piment Vert',
       de: '🌶️ Grüner Pfeffer',
       it: '🌶️ Peperoncino Verde',
-      sid: '🌶️ Qaariya'
+      sid: '🌶️ Qaariya',
+      zh: '🌶️ 青辣椒',
+      ar: '🌶️ فلفل أخضر'
     },
     injera: {
       am: '🌾 እንጀራ',
@@ -1045,7 +1287,9 @@ export default function App() {
       fr: '🌾 Injéra',
       de: '🌾 Injera',
       it: '🌾 Injera',
-      sid: '🌾 Injera'
+      sid: '🌾 Injera',
+      zh: '🌾 英吉拉 (Injera)',
+      ar: '🌾 إينجيرا'
     },
     bread: {
       am: '🥖 ዳቦ',
@@ -1055,7 +1299,9 @@ export default function App() {
       fr: '🥖 Pain',
       de: '🥖 Brot',
       it: '🥖 Pane',
-      sid: '🥖 Daboo'
+      sid: '🥖 Daboo',
+      zh: '🥖 面包',
+      ar: '🥖 خبز'
     },
     add_to_order_btn: {
       am: '🛒 እዘዝ',
@@ -1065,102 +1311,86 @@ export default function App() {
       fr: '🛒 Ajouter à la Commande',
       de: '🛒 In den Warenkorb',
       it: '🛒 Aggiungi all\'Ordine',
-      sid: '🛒 Hajaje'
+      sid: '🛒 Hajaje',
+      zh: '🛒 加入订单',
+      ar: '🛒 أضف للطلب'
     }
   };
 
-  // Speaks out loud utilizing JavaScript SpeechSynthesis API
-  const runVoiceOver = (text: string, force: boolean = false) => {
+  // Speaks out loud utilizing accessible multilingual speech engine with English fallback when native local voice is unavailable
+  const runVoiceOver = (text: string, force: boolean = false, fallbackEnText?: string) => {
+    setLastSpokenTranscript(text);
     if (!isVoiceOverEnabled && !force) return;
-    try {
-      if ('speechSynthesis' in window) {
-        window.speechSynthesis.cancel(); // Stop any pending spoken speech
-        const utterance = new SpeechSynthesisUtterance(text);
-        
-        // Match browser voice locales for standard/improved speech output
-        const langMap: { [key: string]: string } = {
-          am: 'am-ET',
-          en: 'en-US',
-          or: 'om-ET',
-          ti: 'ti-ET',
-          fr: 'fr-FR',
-          de: 'de-DE',
-          it: 'it-IT'
-        };
-        utterance.lang = langMap[appLang] || 'en-US';
-        utterance.rate = 1.0;
-        utterance.pitch = 1.0;
-        
-        // Find suitable voice if possible
-        const voices = window.speechSynthesis.getVoices();
-        const matchedVoice = voices.find(v => v.lang.startsWith(utterance.lang.split('-')[0]));
-        if (matchedVoice) {
-          utterance.voice = matchedVoice;
-        }
-
-        window.speechSynthesis.speak(utterance);
-      }
-    } catch (err) {
-      console.warn('Speech synthesis not fully supported or blocked by user frame permissions', err);
-    }
+    speakAccessibleText(text, appLang, {
+      rate: voiceSpeed,
+      fallbackEnText,
+    });
   };
 
   const getTranslatedModifierValue = (val: string) => {
     if (!val) return '';
     const clean = val.trim().toLowerCase();
-    
+
     if (clean === 'አለ' || clean === 'yes' || clean === 'with' || clean === 'available') {
-      const map: Record<string, string> = {
+      return tText({
         am: 'አለ',
         en: 'Yes / Available',
         or: 'Jira',
         ti: 'ኣሎ',
+        sid: 'No',
         fr: 'Oui / Dispo',
         de: 'Mit / Ja',
-        it: 'Sì / C\'è'
-      };
-      return map[appLang] || map.en;
+        it: 'Sì / C\'è',
+        zh: '有 / 加配',
+        ar: 'نعم / متوفر',
+      });
     }
-    
+
     if (clean === 'የለም' || clean === 'no' || clean === 'without' || clean === 'none') {
-      const map: Record<string, string> = {
+      return tText({
         am: 'የለም',
         en: 'No / None',
         or: 'Hin jiru',
         ti: 'የለን',
+        sid: 'Dino',
         fr: 'Non / Sans',
         de: 'Nein / Keine',
-        it: 'No / Senza'
-      };
-      return map[appLang] || map.en;
+        it: 'No / Senza',
+        zh: '无 / 不加',
+        ar: 'لا / بدون',
+      });
     }
-    
+
     if (clean === 'ግማሽ' || clean === 'half') {
-      const map: Record<string, string> = {
+      return tText({
         am: 'ግማሽ',
         en: 'Half',
         or: 'Walakkaa',
         ti: 'ፍርቂ',
+        sid: 'Bikkino',
         fr: 'Demi',
         de: 'Halb',
-        it: 'Metà'
-      };
-      return map[appLang] || map.en;
+        it: 'Metà',
+        zh: '半份',
+        ar: 'نصف',
+      });
     }
-    
+
     if (clean === 'ሙሉ' || clean === 'full' || clean === 'whole') {
-      const map: Record<string, string> = {
+      return tText({
         am: 'ሙሉ',
         en: 'Full',
         or: 'Guutuu',
         ti: 'ምሉእ',
+        sid: 'Wo\'ma',
         fr: 'Complet',
         de: 'Voll',
-        it: 'Intero'
-      };
-      return map[appLang] || map.en;
+        it: 'Intero',
+        zh: '整份',
+        ar: 'كامل',
+      });
     }
-    
+
     return val;
   };
 
@@ -1168,28 +1398,32 @@ export default function App() {
     if (!tag) return '';
     const clean = tag.trim();
     if (clean.includes('ልዩ ቅናሽ') || clean.includes('Lodge Specials')) {
-      const map: Record<string, string> = {
+      return tText({
         am: 'ልዩ ቅናሽ',
         en: 'Lodge Specials',
-        or: 'Kaffaltii Addaa (Lodge Specials)',
-        ti: 'ፍሉይ ቅናሽ (Lodge Specials)',
+        or: 'Kaffaltii Addaa',
+        ti: 'ፍሉይ ቅናሽ',
+        sid: 'Baxxino Hirro',
         fr: 'Offres Spéciales',
         de: 'Lodge-Sonderangebote',
-        it: 'Offerte Speciali'
-      };
-      return map[appLang] || map.en;
+        it: 'Offerte Speciali',
+        zh: '度假村特惠',
+        ar: 'عروض المنتجع الخاصة',
+      });
     }
     if (clean.includes('ምርጥ ምግቦች') || clean.includes('Tasty Delights')) {
-      const map: Record<string, string> = {
+      return tText({
         am: 'ምርጥ ምግቦች',
         en: 'Tasty Delights',
-        or: 'Nyaata Mi\'aawaa (Tasty Delights)',
+        or: 'Nyaata Mi\'aawaa',
         ti: 'ምሩጻት መግብታት',
+        sid: 'Xaa\'ma Sagale',
         fr: 'Délices Savoureux',
         de: 'Köstliche Gaumenfreuden',
-        it: 'Delizie Saporite'
-      };
-      return map[appLang] || map.en;
+        it: 'Delizie Saporite',
+        zh: '美味精选',
+        ar: 'أطباق شهية',
+      });
     }
     return tag;
   };
@@ -1198,28 +1432,32 @@ export default function App() {
     if (!title) return '';
     const clean = title.trim();
     if (clean.includes('ልዩ የሳምንቱ መጨረሻ ቅናሽ') || clean.includes('Weekend Offer')) {
-      const map: Record<string, string> = {
+      return tText({
         am: 'በፓፒረስ ሎጅ ልዩ የሳምንቱ መጨረሻ ቅናሽ!',
         en: 'Special Weekend Offer at Papyrus Lodge!',
         or: 'Kaffaltii Addaa dhuma torbee Paappiras Loojii!',
         ti: 'ፍሉይ ናይ ሰሙን መወዳእታ ቅናሽ ኣብ ፓፒረስ ሎጅ!',
-        fr: 'Offre Spéciale de Week-end au Papyrus Lodge!',
+        sid: 'Paappiras Loojera Lamalaanchu Baxxino Hirro!',
+        fr: 'Offre Spéciale de Week-end au Papyrus Lodge !',
         de: 'Besonderes Wochenendangebot in der Papyrus Lodge!',
-        it: 'Offerta Speciale del Fine Settimana al Papyrus Lodge!'
-      };
-      return map[appLang] || map.en;
+        it: 'Offerta Speciale del Fine Settimana al Papyrus Lodge!',
+        zh: 'Papyrus 度假村周末特惠！',
+        ar: 'عرض عطلة نهاية الأسبوع الخاص في منتجع بابيروس!',
+      });
     }
     if (clean.includes('የእንግዳ ማረፊያ እና የባህል ምግቦች') || clean.includes('Lodge Dining')) {
-      const map: Record<string, string> = {
+      return tText({
         am: 'የእንግዳ ማረፊያ እና የባህል ምግቦች',
         en: 'Lodge Dining & Traditional Dishes',
         or: 'Nyaata Aadaa fi Keessummeessaa',
         ti: 'መዕረፊ ጋሻን ባህላዊ መግብታትን',
+        sid: 'La\'ote Minenna Budu Sagale',
         fr: 'Restauration et Plats Traditionnels',
         de: 'Lodge-Gastronomie & Traditionelle Gerichte',
-        it: 'Ristorazione e Piatti Tradizionali'
-      };
-      return map[appLang] || map.en;
+        it: 'Ristorazione e Piatti Tradizionali',
+        zh: '度假村餐饮与地道传统美食',
+        ar: 'مطعم المنتجع والأطباق التقليدية',
+      });
     }
     return title;
   };
@@ -1228,28 +1466,32 @@ export default function App() {
     if (!desc) return '';
     const clean = desc.trim();
     if (clean.includes('የቪ አይ ፒ ክፍሎችን ሲይዙ') || clean.includes('15% discount when you book VIP')) {
-      const map: Record<string, string> = {
+      return tText({
         am: 'የቪ አይ ፒ ክፍሎችን ሲይዙ የ15% ቅናሽ ያገኛሉ፤ እንዲሁም ነጻ የሀይቅ ላይ የጀልባ ጉዞ ተዘጋጅቶልዎታል።',
         en: 'Get 15% discount when you book VIP rooms, plus a complimentary boat tour on the lake.',
         or: 'Kutaa VIP yoo qabattan 15% argattu, dabalataan doonii bilisaa jiru.',
         ti: 'ናይ VIP ክፍልታት ክትሕዙ ከለኹም 15% ቅናሽ ይረኽቡ፤ ከምኡ እውን ብናጻ ናይ ጀልባ ዑደት ተዳልዩልኩም ኣሎ።',
+        sid: 'VIP kifile amaddiniro 15% qinaashshe afidhinanni, qoleno haaro doonii woxe dino.',
         fr: 'Obtenez 15% de réduction sur les chambres VIP, plus une balade en bateau gratuite sur le lac.',
         de: 'Erhalten Sie 15% Rabatt bei der Buchung von VIP-Zimmern sowie eine kostenlose Bootstour auf dem See.',
-        it: 'Ottieni il 15% di sconto prenotando camere VIP, oltre a un tour in barca gratuito sul lago.'
-      };
-      return map[appLang] || map.en;
+        it: 'Ottieni il 15% di sconto prenotando camere VIP, oltre a un tour in barca gratuito sul lago.',
+        zh: '预订 VIP 客房立享 85 折优惠，并赠送阿瓦萨湖游船体验。',
+        ar: 'احصل على خصم 15٪ عند حجز غرف VIP مع جولة قارب مجانية في البحيرة.',
+      });
     }
     if (clean.includes('የሀዋሳን ትኩስ ዓሳ') || clean.includes('Enjoy Hawassa\'s fresh fish')) {
-      const map: Record<string, string> = {
+      return tText({
         am: 'የሀዋሳን ትኩስ ዓሳ እና ባህላዊ የሽከላ ጥብስ በቅናሽ ዋጋ እየተዝናኑ ይመገቡ።',
         en: 'Enjoy Hawassa\'s fresh fish and traditional charcoal-grilled beef ribs (Shekla Tibs) at discounted rates.',
         or: 'Qurxummii Hawaasaa fi foon aadaa (Shekla Tibs) gatii salphaan nyaadhaa taphadhaa.',
         ti: 'ናይ ሃዋሳ ሓድሽ ዓሳን ባህላዊ ሽከላ ጥብስን ብዝተማረረ ዋጋ እናተዘናጋዕኹም ተመገቡ።',
+        sid: 'Hawaasa haaro qulxummeenna shekla tibsi shiima woxinni itte hagiidhi.',
         fr: 'Dégustez le poisson frais d\'Hawassa et le bœuf grillé traditionnel (Shekla Tibs) à prix réduit.',
         de: 'Genießen Sie Hawassas frischen Fisch und traditionelle gegrillte Rinderrippen (Shekla Tibs) zu ermäßigten Preisen.',
-        it: 'Gusta il pesce fresco di Hawassa e le tradizionali costolette alla brace (Shekla Tibs) a prezzi scontati.'
-      };
-      return map[appLang] || map.en;
+        it: 'Gusta il pesce fresco di Hawassa e le tradizionali costolette alla brace (Shekla Tibs) a prezzi scontati.',
+        zh: '优惠品尝新鲜阿瓦萨湖烤鱼及特色炭烤牛肉（Shekla Tibs）。',
+        ar: 'استمتع بسمك هاواسا الطازج واللحم المشوي التقليدي (شيكلا تيبس) بأسعار مخفضة.',
+      });
     }
     return desc;
   };
@@ -1258,29 +1500,311 @@ export default function App() {
     if (!text) return '';
     const clean = text.trim();
     if (clean.startsWith('ሀዋሳ ፓፒረስ ሎጅ በተፈጥሮ የታደለች') || clean.includes('Papyrus Lodge is a cozy') || clean.includes('ሀዋሳ ፓፒረስ ሎጅ')) {
-      const map: Record<string, string> = {
+      return tText({
         am: 'ሀዋሳ ፓፒረስ ሎጅ በተፈጥሮ የታደለች ውቧ የሀዋሳ ከተማ ውስጥ፣ ከታዋቂው የሀዋሳ ሃይቅ ዳርቻ አቅራቢያ የሚገኝ ምቹ፣ ሰላማዊ እና አስደሳች ማረፊያ ነው። ጥራት ባላቸው አገልግሎቶቻችን፣ በአገር በቀል ጣፋጭ ምግቦች፣ እንዲሁም ለተለያዩ ክብረ በዓላት የሚሆኑ ውብ አዳራሾቻችን አስተማማኝ ምርጫ እንድንሆን ያደርገናል።',
         en: 'Hawassa Papyrus Lodge is a cozy, peaceful, and exciting resort located near the shores of the famous Lake Hawassa, in the naturally blessed and beautiful city of Hawassa. Our high-quality services, delicious local dishes, and beautiful venues for various celebrations make us a reliable choice.',
         or: 'Paappiras Loojii Hawaasaa magaalaa bareedduu fi uumamaan badhaate Hawaasa keessatti, qarqara garba Hawaasaa beekamaa biratti kan argamu, iddoo boqonnaa mijataa, nagaa fi gammachiisaadha. Tajaajila qulqullina qabu, nyaata aadaa mi\'aawaa, fi dabalataan galmoota babbareedoo qophii adda addaaf ta\'aniin filannoo keessan amansiisaadha.',
         ti: 'ሃዋሳ ፓፒረስ ሎጅ በተፈጥሮ ዝተዓደለት ውብ ከተማ ሃዋሳ ውሽጢ፡ ካብቲ ፍሉጥ ቀላይ ሃዋሳ ጥቓ ገማግም ዝርከብ ምቹው፡ ሰላማዊን ዘሐጉስን መዕረፊ እዩ። ብሉጽ ኣገልግሎትና፡ ብባህላዊ መግቢታትና፡ ከምኡ እውን ንተፈላለዩ ጽንብላት ዝኾኑ ውቁባት ኣዳራሻትና እሙን መማረጺ ይገብረና።',
+        sid: 'Hawaasa Paappiras Looje Hawaasa qarqara haaro bira afamanno keerenna xaa\'ma sagale ikkino maarefi minete. Dancho tajeenna budu sagalenni, hattono ayyaannara babbaxino adaraashshi afino.',
         fr: 'Le Papyrus Lodge d\'Hawassa est un complexe confortable, paisible et chaleureux situé près des rives du célèbre lac d\'Hawassa, dans la magnifique ville d\'Hawassa. Nos services de haute qualité, nos délicieux plats locaux et nos superbes salles pour divers événements font de nous un choix de confiance.',
         de: 'Die Hawassa Papyrus Lodge ist ein gemütliches, friedliches und einladendes Resort in der Nähe des Ufers des berühmten Hawassa-Sees in der wunderschönen Stadt Hawassa. Unsere erstklassigen Dienstleistungen, köstlichen lokalen Gerichte und schönen Veranstaltungsräume machen uns zu einer verlässlichen Wahl.',
-        it: 'Il Papyrus Lodge di Hawassa è un resort accogliente, tranquillo e piacevole situato vicino alle rive del famoso lago di Hawassa, nella splendida città di Hawassa. I nostri servizi di alta qualità, i deliziosi piatti locali e le splendide sale per vari eventi ci rendono una scelta affidabile.'
-      };
-      return map[appLang] || map.en;
+        it: 'Il Papyrus Lodge di Hawassa è un resort accogliente, tranquillo e piacevole situato vicino alle rive del famoso lago di Hawassa, nella splendida città di Hawassa. I nostri servizi di alta qualità, i deliziosi piatti locali e le splendide sale per vari eventi ci rendono una scelta affidabile.',
+        zh: '阿瓦萨 Papyrus 度假村坐落于风景如画的阿瓦萨湖畔，提供舒适宁静的住宿、地道美味佳肴以及优雅的宴会活动场地。',
+        ar: 'يقع منتجع هاواسا بابيروس بالقرب من ضفاف بحيرة هاواسا الشهيرة، ويوفر إقامة هادئة وخدمات راقية وأشهى الأطباق المحلية والعالمية.',
+      });
     }
     return text;
   };
 
-  useEffect(() => {
-    if (activeRole === 'entry') {
-      const welcomeMsg = entryTranslation.speak_welcome[appLang];
-      const timer = setTimeout(() => {
-        runVoiceOver(welcomeMsg);
-      }, 400);
-      return () => clearTimeout(timer);
+  // Voice stays quiet unless the guest turns Audio Guide ON or activates Voice Menu & Ordering.
+  const cleanupEntryMicCapture = () => {
+    if (entryRecognitionRef.current) {
+      try {
+        entryRecognitionRef.current.onresult = null;
+        entryRecognitionRef.current.onerror = null;
+        entryRecognitionRef.current.onend = null;
+        entryRecognitionRef.current.abort();
+      } catch {
+        // Ignore cleanup errors
+      }
+      entryRecognitionRef.current = null;
     }
-  }, [appLang, activeRole]);
+    if (entryMediaRecorderRef.current && entryMediaRecorderRef.current.state !== 'inactive') {
+      try {
+        entryMediaRecorderRef.current.stop();
+      } catch {
+        // Ignore cleanup errors
+      }
+    }
+    entryMediaRecorderRef.current = null;
+    if (entryMediaStreamRef.current) {
+      entryMediaStreamRef.current.getTracks().forEach((tr) => tr.stop());
+      entryMediaStreamRef.current = null;
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      cleanupEntryMicCapture();
+    };
+  }, []);
+
+  const launchCustomerVoiceMenu = (spokenOrTypedCommand?: string) => {
+    cleanupEntryMicCapture();
+    setEntryVoiceStatus('idle');
+    setEntryVoiceError('');
+    setIsVoiceOverEnabled(true);
+    const commandToRun = (spokenOrTypedCommand || '').trim() || '__OPEN_MENU_VOICE_MODE__';
+    setPendingEntryVoiceCommand(commandToRun);
+    setEntryVoiceOpen(false);
+    setActiveRole('customer');
+    window.setTimeout(() => {
+      document.getElementById('voice-ordering-standalone-section')?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      });
+    }, 220);
+  };
+
+  const stopEntryRecordingAndSend = () => {
+    if (entryRecognitionRef.current) {
+      try {
+        entryRecognitionRef.current.stop();
+      } catch {
+        cleanupEntryMicCapture();
+        setEntryVoiceStatus('idle');
+      }
+      return;
+    }
+    if (entryMediaRecorderRef.current && entryMediaRecorderRef.current.state !== 'inactive') {
+      try {
+        entryMediaRecorderRef.current.stop();
+      } catch {
+        cleanupEntryMicCapture();
+        setEntryVoiceStatus('idle');
+      }
+    }
+  };
+
+  const startEntryMediaRecorderCapture = async () => {
+    if (!supportsMediaRecording()) {
+      setEntryVoiceStatus('idle');
+      setEntryVoiceError(
+        tText({
+          am: 'ቀጥታ ማይክሮፎን አልተገኘም። ከታች በጽሑፍ ወይም በ"ሜኑ ክፈት" ቁልፍ ይጀምሩ።',
+          or: 'Maayikiroofooniin hin argamne. Gadiitti barreessi ykn qabduu "Meenuu Bani" tuqi.',
+          ti: 'ማይክሮፎን ኣይተረኽበን። ኣብ ታሕቲ ጽሓፉ ወይ "ሜኑ ክፈት" ጠውቑ።',
+          sid: 'Mayikiroofone dino. Woroonni borreessi woy "Meenuu Fani" ganni.',
+          en: 'Live microphone is unavailable. Type below or press Open Menu in Voice Mode.',
+          fr: 'Microphone indisponible. Saisissez ci-dessous ou ouvrez le menu vocal.',
+          de: 'Mikrofon nicht verfügbar. Unten eingeben oder Sprachmenü öffnen.',
+          it: 'Microfono non disponibile. Scrivi sotto o apri il menu vocale.',
+          zh: '麦克风不可用，请在下方输入或点击打开语音菜单。',
+          ar: 'الميكروفون غير متوفر. اكتب أدناه أو اضغط لفتح القائمة الصوتية.',
+        }),
+      );
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      entryMediaStreamRef.current = stream;
+      entryAudioChunksRef.current = [];
+      const recorder = new MediaRecorder(stream);
+      entryMediaRecorderRef.current = recorder;
+
+      recorder.ondataavailable = (ev: BlobEvent) => {
+        if (ev.data && ev.data.size > 0) {
+          entryAudioChunksRef.current.push(ev.data);
+        }
+      };
+
+      recorder.onstop = async () => {
+        const mime = recorder.mimeType || 'audio/webm';
+        const chunks = [...entryAudioChunksRef.current];
+        entryAudioChunksRef.current = [];
+        if (entryMediaStreamRef.current) {
+          entryMediaStreamRef.current.getTracks().forEach((tr) => tr.stop());
+          entryMediaStreamRef.current = null;
+        }
+        entryMediaRecorderRef.current = null;
+        if (chunks.length === 0) {
+          setEntryVoiceStatus('idle');
+          return;
+        }
+
+        setEntryVoiceStatus('transcribing');
+        try {
+          const text = await transcribeRecordedAudio(new Blob(chunks, { type: mime }), appLang);
+          if (text) {
+            setEntryVoiceTranscript(text);
+            launchCustomerVoiceMenu(text);
+          } else {
+            setEntryVoiceStatus('idle');
+            setEntryVoiceError(
+              tText({
+                am: 'ድምፅ አልተሰማም። እባክዎ ደግመው ይሞክሩ ወይም "ሜኑ ክፈት" ይጫኑ።',
+                or: 'Sagaleen hin dhaga’amne. Irra deebi’ii yaali ykn "Meenuu Bani" cuqaasi.',
+                ti: 'ድምጺ ኣይተሰምዐን። ደጊምኩም ፈትኑ ወይ "ሜኑ ክፈት" ጠውቑ።',
+                sid: 'Huurro di-macciishshantino. Marro woʼnaali.',
+                en: 'No speech detected. Try again or press Open Menu.',
+                fr: 'Aucune voix détectée. Réessayez ou ouvrez le menu.',
+                de: 'Keine Sprache erkannt. Erneut versuchen oder Menü öffnen.',
+                it: 'Nessuna voce rilevata. Riprova o apri il menu.',
+                zh: '未检测到语音，请重试或直接打开菜单。',
+                ar: 'لم يتم التقاط صوت. حاول مرة أخرى أو افتح القائمة.',
+              }),
+            );
+          }
+        } catch {
+          setEntryVoiceStatus('idle');
+          setEntryVoiceError(
+            tText({
+              am: 'ድምፅን መተርጎም አልተቻለም። ከታች ባለው ሳጥን ይጻፉ ወይም "ሜኑ ክፈት" ይጫኑ።',
+              or: 'Sagalee hiikuun hin danda’amne. Gadiitti barreessi ykn "Meenuu Bani" tuqi.',
+              ti: 'ድምጺ ምትርጓም ኣይተኻእለን። ኣብ ታሕቲ ጽሓፉ ወይ "ሜኑ ክፈት" ጠውቑ።',
+              sid: 'Huurro tirtira di-dandiinoonni. Woroonni borreessi.',
+              en: 'Could not transcribe audio. Type your request or press Open Menu.',
+              fr: 'Transcription impossible. Tapez votre demande ou ouvrez le menu.',
+              de: 'Transkription fehlgeschlagen. Eingeben oder Menü öffnen.',
+              it: 'Trascrizione non riuscita. Scrivi o apri il menu.',
+              zh: '语音识别失败，请输入或点击打开菜单。',
+              ar: 'تعذر تحويل الصوت إلى نص. اكتب طلبك أو افتح القائمة.',
+            }),
+          );
+        }
+      };
+
+      setEntryVoiceStatus('listening');
+      recorder.start();
+    } catch {
+      cleanupEntryMicCapture();
+      setEntryVoiceStatus('idle');
+      setEntryVoiceError(
+        tText({
+          am: 'ማይክሮፎን አልተፈቀደም። ከታች ባለው "ሜኑ በድምፅ ክፈት" ቁልፍ ቀጥታ መግባት ይችላሉ።',
+          or: 'Eeyyamni maayikiroofoonii hin jiru. Qabduu "Meenuu Sagaleedhaan Bani" jedhuun kallattiin seeni.',
+          ti: 'ማይክሮፎን ኣይተፈቐደን። ብ"ሜኑ ብድምጺ ክፈት" ቀጥታ ክትኣትዉ ትኽእሉ ኢኹም።',
+          sid: 'Mayikiroofonera hayyo dino. "Meenuu Huurranni Fani" ganni.',
+          en: 'Microphone permission was blocked. Tap Open Menu in Voice Mode to enter right away.',
+          fr: 'Microphone bloqué. Appuyez sur Ouvrir le Menu Vocal pour continuer.',
+          de: 'Mikrofon blockiert. Tippen Sie auf Sprachmenü öffnen.',
+          it: 'Microfono bloccato. Tocca Apri Menu Vocale per continuare.',
+          zh: '麦克风权限受限，可直接点击“打开语音菜单”进入点餐。',
+          ar: 'تم منع الميكروفون. اضغط على فتح القائمة الصوتية للمتابعة فوراً.',
+        }),
+      );
+    }
+  };
+
+  const startEntryVoiceCapture = () => {
+    setEntryVoiceOpen(true);
+    setEntryVoiceError('');
+    setEntryVoiceTranscript('');
+    setIsVoiceOverEnabled(true);
+    cleanupEntryMicCapture();
+    playAccessibleChime('select');
+
+    const promptNative = tText({
+      am: 'እየሰማሁ ነው። ለምሳሌ "ሜኑውን ከፍተው ምግብ ማዘዝ ፈልጌ ነበር" ወይም የሚፈልጉትን ምግብ ይናገሩ።',
+      or: 'Dhaggeeffachaa jira. Fakkeenyaaf "Meenuu baniiti nyaata naaf ajaji" jedhaa dubbadhaa.',
+      ti: 'እሰምዕ ኣለኹ። "ሜኑ ከፊተይ ምግቢ ክእዝዝ ደልየ ነይረ" ወይ ዝደለኹምዎ ምግቢ ተዛረቡ።',
+      sid: 'Macciishshanni noommo. "Meenuu fante sagale hajaja hasiʼroommo" yii.',
+      en: 'Listening. Say "Open the menu to order food" or tell me what dish you want.',
+      fr: 'À l’écoute. Dites « Ouvrir le menu pour commander » ou le plat souhaité.',
+      de: 'Ich höre zu. Sagen Sie „Menü öffnen und bestellen“ oder nennen Sie ein Gericht.',
+      it: 'In ascolto. Di’ «Apri il menu per ordinare» o il piatto che desideri.',
+      zh: '正在聆听。请说“打开菜单点餐”或直接说出您想点的菜品。',
+      ar: 'أنا أستمع. قل "افتح القائمة لطلب الطعام" أو اسم الطبق الذي تريده.',
+    });
+    speakAccessibleText(promptNative, appLang, {
+      rate: voiceSpeed,
+      fallbackEnText: 'Listening. Say open menu to order food, or tell me what dish you want.',
+    });
+
+    const RecognitionCtor = getSpeechRecognitionCtor();
+    if (!RecognitionCtor) {
+      void startEntryMediaRecorderCapture();
+      return;
+    }
+
+    try {
+      const recognition = new RecognitionCtor();
+      entryRecognitionRef.current = recognition;
+      recognition.lang = getRecognitionLocale(appLang);
+      recognition.continuous = false;
+      recognition.interimResults = true;
+      recognition.maxAlternatives = 1;
+
+      let latestText = '';
+      let handled = false;
+
+      recognition.onstart = () => {
+        setEntryVoiceStatus('listening');
+      };
+
+      recognition.onresult = (event) => {
+        let combined = '';
+        let hasFinal = false;
+        for (let i = 0; i < event.results.length; i++) {
+          combined += event.results[i][0]?.transcript || '';
+          if (event.results[i].isFinal) hasFinal = true;
+        }
+        latestText = combined.trim();
+        setEntryVoiceTranscript(latestText);
+        if (hasFinal && latestText && !handled) {
+          handled = true;
+          launchCustomerVoiceMenu(latestText);
+        }
+      };
+
+      recognition.onerror = (event) => {
+        entryRecognitionRef.current = null;
+        if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+          void startEntryMediaRecorderCapture();
+          return;
+        }
+        if (latestText && !handled) {
+          handled = true;
+          launchCustomerVoiceMenu(latestText);
+          return;
+        }
+        if (supportsMediaRecording()) {
+          void startEntryMediaRecorderCapture();
+        } else {
+          setEntryVoiceStatus('idle');
+        }
+      };
+
+      recognition.onend = () => {
+        entryRecognitionRef.current = null;
+        if (latestText && !handled) {
+          handled = true;
+          launchCustomerVoiceMenu(latestText);
+        } else if (!handled) {
+          setEntryVoiceStatus('idle');
+        }
+      };
+
+      setEntryVoiceStatus('listening');
+      recognition.start();
+    } catch {
+      void startEntryMediaRecorderCapture();
+    }
+  };
+
+  useEffect(() => {
+    if (activeRole !== 'entry') return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.altKey && (e.key === 'v' || e.key === 'V')) {
+        e.preventDefault();
+        startEntryVoiceCapture();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeRole, appLang]);
 
   // WIFI CLOCK-IN REQUESTS WITH MANAGER APPROVALS
   const [pendingAttendanceRequests, setPendingAttendanceRequests] = useState<{
@@ -1307,6 +1831,41 @@ export default function App() {
   // ATTENDANCE & BONUSES STATE FOR STAFF PERSISTENCE
   const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
   const [tableAssignments, setTableAssignments] = useState<TableAssignment[]>([]);
+  const [shiftAssignments, setShiftAssignments] = useState<ShiftAssignment[]>([]);
+
+  const handleSaveShiftAssignments: React.Dispatch<React.SetStateAction<ShiftAssignment[]>> = (updater) => {
+    setShiftAssignments((prev) => {
+      const next = typeof updater === 'function' ? updater(prev) : updater;
+      // Keep legacy tableAssignments synchronized for active waiter assignments
+      const mirroredWaiters: TableAssignment[] = next
+        .filter((a) => a.active && a.staffRole === 'waiter')
+        .map((a) => ({
+          id: a.id,
+          waiterName: a.staffName,
+          tableNumber: a.location,
+          date: a.date,
+        }));
+      setTableAssignments(mirroredWaiters);
+      return next;
+    });
+  };
+
+  // One-time migration if legacy tableAssignments exist without shiftAssignments
+  useEffect(() => {
+    if (shiftAssignments.length === 0 && tableAssignments.length > 0) {
+      const migrated: ShiftAssignment[] = tableAssignments.map((ta) => ({
+        id: ta.id,
+        staffName: ta.waiterName,
+        staffRole: 'waiter',
+        location: ta.tableNumber,
+        locationType: inferLocationType(ta.tableNumber),
+        shiftPeriod: 'Full Day',
+        date: ta.date,
+        active: true,
+      }));
+      setShiftAssignments(migrated);
+    }
+  }, [tableAssignments, shiftAssignments.length]);
 
   const [attFilterStaff, setAttFilterStaff] = useState<string>('all');
   const [attFilterYear, setAttFilterYear] = useState<string>('all');
@@ -1321,28 +1880,21 @@ export default function App() {
     onGo: () => void;
   } | null>(null);
 
-  // Helper to find the assigned waiter for a given table location
+  // Helpers to find the assigned waiter or chef for a given table or room location
   const getAssignedWaiterForTable = (tableLocation: string): string => {
-    if (!tableLocation) return '';
-    const cleanTable = tableLocation.trim().toLowerCase();
-    
-    // Normalize function to strip "table ", spaces, and leading zeroes
-    const normalize = (str: string) => {
-      return str
-        .toLowerCase()
-        .replace(/^table\s*/i, '') // strip "table" prefix
-        .trim()
-        .replace(/^0+/, '');       // strip leading zeroes (e.g. "05" -> "5")
-    };
+    return getAssignedStaffNameForLocation(shiftAssignments, tableAssignments, tableLocation, 'waiter');
+  };
 
-    const normTable = normalize(cleanTable);
+  const getAssignedChefForTable = (tableLocation: string): string => {
+    return getAssignedStaffNameForLocation(shiftAssignments, tableAssignments, tableLocation, 'chef');
+  };
 
-    const assignment = tableAssignments.find(ta => {
-      const cleanAssignTable = ta.tableNumber.trim().toLowerCase();
-      const normAssign = normalize(cleanAssignTable);
-      return cleanAssignTable === cleanTable || (normAssign && normAssign === normTable);
-    });
-    return assignment ? assignment.waiterName : '';
+  const getAssignedWaiterDetails = (location: string): { waiterName: string; staffMember?: StaffMember } => {
+    const waiterName = getAssignedWaiterForTable(location);
+    if (!waiterName) return { waiterName: '' };
+    const cleanName = waiterName.trim().toLowerCase();
+    const staffMember = staff.find((s) => (s.name || '').trim().toLowerCase() === cleanName);
+    return { waiterName, staffMember };
   };
 
   // Helper to replace standard confirm across components
@@ -1485,13 +2037,23 @@ export default function App() {
 
   const handleRefreshLiveOrders = async () => {
     try {
-      const { data, error } = await supabase
-        .from('system_settings')
-        .select('value')
-        .eq('key', 'orders')
-        .maybeSingle();
-      if (!error && data?.value && Array.isArray(data.value.list)) {
-        setOrders(data.value.list);
+      const [{ data: ordersRes, error: ordersErr }, { data: callsRes, error: callsErr }] = await Promise.all([
+        supabase
+          .from('system_settings')
+          .select('value')
+          .eq('key', 'orders')
+          .maybeSingle(),
+        supabase
+          .from('system_settings')
+          .select('value')
+          .eq('key', 'assistanceCalls')
+          .maybeSingle(),
+      ]);
+      if (!ordersErr && ordersRes?.value && Array.isArray(ordersRes.value.list)) {
+        applyRemoteOrders(ordersRes.value.list);
+      }
+      if (!callsErr && callsRes?.value && Array.isArray(callsRes.value.list)) {
+        applyRemoteAssistanceCalls(callsRes.value.list);
       }
     } catch (err) {
       console.warn('Live orders refresh failed:', err);
@@ -1513,21 +2075,9 @@ export default function App() {
   const [addMenuImage, setAddMenuImage] = useState('');
   const [addStaffPhoto, setAddStaffPhoto] = useState('');
   const [addPromoPoster, setAddPromoPoster] = useState('');
-  const [addPromoVideo, setAddPromoVideo] = useState('');
   const [galleryNewImgUrl, setGalleryNewImgUrl] = useState('');
 
   const processFileWithCompression = (file: File, callback: (url: string) => void) => {
-    // Check if video file
-    if (file.type.startsWith('video/')) {
-      if (file.size > 100 * 1024 * 1024) { // 100MB Limit
-        alert('⚠️ ቪዲዮው ከ 100MB በላይ ነው! እባክዎ አነስተኛ ቪዲዮ ይምረጡ።');
-        return;
-      }
-      const blobUrl = URL.createObjectURL(file);
-      callback(blobUrl);
-      return;
-    }
-
     if (file.type.startsWith('image/')) {
       const reader = new FileReader();
       reader.onloadend = () => {
@@ -1650,6 +2200,7 @@ export default function App() {
   // QR GENERATOR
   const [qrLocation, setQrLocation] = useState('Room 101');
   const [qrGeneratedUrl, setQrGeneratedUrl] = useState('');
+  const [qrPrintLogs, setQrPrintLogs] = useState<QrPrintLogEntry[]>([]);
 
 
 
@@ -1706,14 +2257,12 @@ export default function App() {
             if (Array.isArray(cachedData.visitorLog?.list)) setVisitorLog(cachedData.visitorLog.list);
             if (Array.isArray(cachedData.promos?.list)) setPromos(cachedData.promos.list);
             if (cachedData.aboutLodgeText?.text !== undefined) setAboutLodgeText(cachedData.aboutLodgeText.text);
-            if (cachedData.bgVideoUrl?.url !== undefined) setBgVideoUrl(cachedData.bgVideoUrl.url);
-            if (cachedData.bgVideoType?.type !== undefined) setBgVideoType(cachedData.bgVideoType.type);
-            if (cachedData.isBgVideoEnabled?.enabled !== undefined) setIsBgVideoEnabled(cachedData.isBgVideoEnabled.enabled);
-            if (Array.isArray(cachedData.assistanceCalls?.list)) setAssistanceCalls(cachedData.assistanceCalls.list);
+            if (Array.isArray(cachedData.assistanceCalls?.list)) setAssistanceCalls(deduplicateAssistanceCalls(cachedData.assistanceCalls.list));
             if (Array.isArray(cachedData.feedback?.list)) setFeedback(cachedData.feedback.list);
             if (Array.isArray(cachedData.expenses?.list)) setExpenses(cachedData.expenses.list);
             if (Array.isArray(cachedData.bonuses?.list)) setBonuses(cachedData.bonuses.list);
             if (Array.isArray(cachedData.table_assignments?.list)) setTableAssignments(cachedData.table_assignments.list);
+            if (Array.isArray(cachedData.shift_assignments?.list)) setShiftAssignments(cachedData.shift_assignments.list);
             if (typeof cachedData.serviceChargeRate?.rate === 'number') setServiceChargeRate(cachedData.serviceChargeRate.rate);
             if (typeof cachedData.vatRate?.rate === 'number') setVatRate(cachedData.vatRate.rate);
             if (cachedData.chapa) {
@@ -1724,6 +2273,13 @@ export default function App() {
             if (Array.isArray(cachedData.custom_roles?.list)) setCustomRoles(cachedData.custom_roles.list);
             if (Array.isArray(cachedData.custom_privileges?.list)) setCustomPrivileges(cachedData.custom_privileges.list);
             if (Array.isArray(cachedData.pending_attendance?.list)) setPendingAttendanceRequests(cachedData.pending_attendance.list);
+            if (cachedData.leadership_contacts) setLeadershipContacts((prev) => ({ ...prev, ...cachedData.leadership_contacts }));
+            if (Array.isArray(cachedData.leadership_messages?.list)) setLeadershipMessages(cachedData.leadership_messages.list);
+            if (cachedData.stock_alerts) {
+              if (Array.isArray(cachedData.stock_alerts.logs)) setStockAlertLogs(cachedData.stock_alerts.logs);
+              if (cachedData.stock_alerts.settings) setStockAlertSettings((prev) => ({ ...prev, ...cachedData.stock_alerts.settings }));
+            }
+            if (Array.isArray(cachedData.qr_print_logs?.list)) setQrPrintLogs(cachedData.qr_print_logs.list);
             if (cachedData.hero_title_am?.text !== undefined) setHeroTitleAm(cachedData.hero_title_am.text);
             if (cachedData.hero_title_en?.text !== undefined) setHeroTitleEn(cachedData.hero_title_en.text);
             if (cachedData.hero_subtitle_am?.text !== undefined) setHeroSubtitleAm(cachedData.hero_subtitle_am.text);
@@ -1817,31 +2373,17 @@ export default function App() {
               if (s.categories && Array.isArray(s.categories.list)) setCategories(s.categories.list);
               if (s.banks && Array.isArray(s.banks.accounts)) setBanks(s.banks.accounts);
               if (s.staff && Array.isArray(s.staff.list)) setStaff(s.staff.list);
-              if (s.orders && Array.isArray(s.orders.list)) setOrders(s.orders.list);
+              if (s.orders && Array.isArray(s.orders.list)) applyRemoteOrders(s.orders.list);
               if (s.roomBookings && Array.isArray(s.roomBookings.list)) setRoomBookings(s.roomBookings.list);
               if (s.visitorLog && Array.isArray(s.visitorLog.list)) setVisitorLog(s.visitorLog.list);
               if (s.promos && Array.isArray(s.promos.list)) setPromos(s.promos.list);
               if (s.aboutLodgeText && s.aboutLodgeText.text !== undefined) setAboutLodgeText(s.aboutLodgeText.text);
-              if (s.bgVideoUrl && s.bgVideoUrl.url !== undefined && s.bgVideoUrl.url && !s.bgVideoUrl.url.includes('pixabay.com') && !s.bgVideoUrl.url.includes('202004')) {
-                setBgVideoUrl(s.bgVideoUrl.url);
-              } else {
-                setBgVideoUrl('https://www.youtube.com/watch?v=EvwYOmxaxdA');
-              }
-              if (s.bgVideoType && s.bgVideoType.type !== undefined && s.bgVideoType.type !== 'gourmet-paradise' && s.bgVideoType.type !== 'mango-paradise') {
-                setBgVideoType(s.bgVideoType.type);
-              } else {
-                setBgVideoType('youtube');
-              }
-              if (s.isBgVideoEnabled && s.isBgVideoEnabled.enabled !== undefined) {
-                setIsBgVideoEnabled(s.isBgVideoEnabled.enabled);
-              } else {
-                setIsBgVideoEnabled(true);
-              }
-              if (s.assistanceCalls && Array.isArray(s.assistanceCalls.list)) setAssistanceCalls(s.assistanceCalls.list);
+              if (s.assistanceCalls && Array.isArray(s.assistanceCalls.list)) applyRemoteAssistanceCalls(s.assistanceCalls.list);
               if (s.feedback && Array.isArray(s.feedback.list)) setFeedback(s.feedback.list);
               if (s.expenses && Array.isArray(s.expenses.list)) setExpenses(s.expenses.list);
               if (s.bonuses && Array.isArray(s.bonuses.list)) setBonuses(s.bonuses.list);
               if (s.table_assignments && Array.isArray(s.table_assignments.list)) setTableAssignments(s.table_assignments.list);
+              if (s.shift_assignments && Array.isArray(s.shift_assignments.list)) setShiftAssignments(s.shift_assignments.list);
               if (s.serviceChargeRate && typeof s.serviceChargeRate.rate === 'number') setServiceChargeRate(s.serviceChargeRate.rate);
               if (s.vatRate && typeof s.vatRate.rate === 'number') setVatRate(s.vatRate.rate);
               if (s.chapa) {
@@ -1853,6 +2395,13 @@ export default function App() {
               if (s.custom_roles && Array.isArray(s.custom_roles.list)) setCustomRoles(s.custom_roles.list);
               if (s.custom_privileges && Array.isArray(s.custom_privileges.list)) setCustomPrivileges(s.custom_privileges.list);
               if (s.pending_attendance && Array.isArray(s.pending_attendance.list)) setPendingAttendanceRequests(s.pending_attendance.list);
+              if (s.leadership_contacts) setLeadershipContacts((prev) => ({ ...prev, ...s.leadership_contacts }));
+              if (s.leadership_messages && Array.isArray(s.leadership_messages.list)) setLeadershipMessages(s.leadership_messages.list);
+              if (s.stock_alerts) {
+                if (Array.isArray(s.stock_alerts.logs)) setStockAlertLogs(s.stock_alerts.logs);
+                if (s.stock_alerts.settings) setStockAlertSettings((prev) => ({ ...prev, ...s.stock_alerts.settings }));
+              }
+              if (s.qr_print_logs && Array.isArray(s.qr_print_logs.list)) setQrPrintLogs(s.qr_print_logs.list);
               if (s.hero_title_am?.text !== undefined) setHeroTitleAm(s.hero_title_am.text);
               if (s.hero_title_en?.text !== undefined) setHeroTitleEn(s.hero_title_en.text);
               if (s.hero_subtitle_am?.text !== undefined) setHeroSubtitleAm(s.hero_subtitle_am.text);
@@ -1919,7 +2468,7 @@ export default function App() {
 
         // 7. Fetch orders
         const ordersVal = await fetchKeyAndCache('orders');
-        if (ordersVal && Array.isArray(ordersVal.list)) setOrders(ordersVal.list);
+        if (ordersVal && Array.isArray(ordersVal.list)) applyRemoteOrders(ordersVal.list);
 
         // 8. Fetch roomBookings
         const bookingsVal = await fetchKeyAndCache('roomBookings');
@@ -1937,33 +2486,9 @@ export default function App() {
         const aboutVal = await fetchKeyAndCache('aboutLodgeText');
         if (aboutVal && aboutVal.text !== undefined) setAboutLodgeText(aboutVal.text);
 
-        // 12. Fetch bgVideoUrl
-        const bgUrlVal = await fetchKeyAndCache('bgVideoUrl');
-        if (bgUrlVal && bgUrlVal.url !== undefined && bgUrlVal.url && !bgUrlVal.url.includes('pixabay.com') && !bgUrlVal.url.includes('202004')) {
-          setBgVideoUrl(bgUrlVal.url);
-        } else {
-          setBgVideoUrl('https://www.youtube.com/watch?v=EvwYOmxaxdA');
-        }
-
-        // 13. Fetch bgVideoType
-        const bgTypeVal = await fetchKeyAndCache('bgVideoType');
-        if (bgTypeVal && bgTypeVal.type !== undefined && bgTypeVal.type !== 'gourmet-paradise' && bgTypeVal.type !== 'mango-paradise') {
-          setBgVideoType(bgTypeVal.type);
-        } else {
-          setBgVideoType('youtube');
-        }
-
-        // 14. Fetch isBgVideoEnabled
-        const bgEnabledVal = await fetchKeyAndCache('isBgVideoEnabled');
-        if (bgEnabledVal && bgEnabledVal.enabled !== undefined) {
-          setIsBgVideoEnabled(bgEnabledVal.enabled);
-        } else {
-          setIsBgVideoEnabled(true);
-        }
-
-        // 15. Fetch assistanceCalls
+        // 12. Fetch assistanceCalls
         const callsVal = await fetchKeyAndCache('assistanceCalls');
-        if (callsVal && Array.isArray(callsVal.list)) setAssistanceCalls(callsVal.list);
+        if (callsVal && Array.isArray(callsVal.list)) applyRemoteAssistanceCalls(callsVal.list);
 
         // 16. Fetch feedback
         const feedbackVal = await fetchKeyAndCache('feedback');
@@ -1977,9 +2502,11 @@ export default function App() {
         const bonusesVal = await fetchKeyAndCache('bonuses');
         if (bonusesVal && Array.isArray(bonusesVal.list)) setBonuses(bonusesVal.list);
 
-        // 18.5 Fetch table assignments
+        // 18.5 Fetch table & shift assignments
         const taVal = await fetchKeyAndCache('table_assignments');
         if (taVal && Array.isArray(taVal.list)) setTableAssignments(taVal.list);
+        const saVal = await fetchKeyAndCache('shift_assignments');
+        if (saVal && Array.isArray(saVal.list)) setShiftAssignments(saVal.list);
 
         // 19. Fetch serviceChargeRate
         const scVal = await fetchKeyAndCache('serviceChargeRate');
@@ -2023,6 +2550,21 @@ export default function App() {
 
         const pendingAttVal = await fetchKeyAndCache('pending_attendance');
         if (pendingAttVal && Array.isArray(pendingAttVal.list)) setPendingAttendanceRequests(pendingAttVal.list);
+
+        const lcVal = await fetchKeyAndCache('leadership_contacts');
+        if (lcVal) setLeadershipContacts((prev) => ({ ...prev, ...lcVal }));
+
+        const lmVal = await fetchKeyAndCache('leadership_messages');
+        if (lmVal && Array.isArray(lmVal.list)) setLeadershipMessages(lmVal.list);
+
+        const saAlertsVal = await fetchKeyAndCache('stock_alerts');
+        if (saAlertsVal) {
+          if (Array.isArray(saAlertsVal.logs)) setStockAlertLogs(saAlertsVal.logs);
+          if (saAlertsVal.settings) setStockAlertSettings((prev) => ({ ...prev, ...saAlertsVal.settings }));
+        }
+
+        const qrPrintVal = await fetchKeyAndCache('qr_print_logs');
+        if (qrPrintVal && Array.isArray(qrPrintVal.list)) setQrPrintLogs(qrPrintVal.list);
 
         // Load Hero Title & Contact values
         const hta = await fetchKeyAndCache('hero_title_am');
@@ -2104,6 +2646,9 @@ export default function App() {
               case 'table_assignments':
                 if (Array.isArray(val.list)) setTableAssignments(val.list);
                 break;
+              case 'shift_assignments':
+                if (Array.isArray(val.list)) setShiftAssignments(val.list);
+                break;
               case 'menu':
                 if (Array.isArray(val.items)) setMenuItems(val.items);
                 break;
@@ -2117,7 +2662,7 @@ export default function App() {
                 if (Array.isArray(val.list)) setStaff(val.list);
                 break;
               case 'orders':
-                if (Array.isArray(val.list)) setOrders(val.list);
+                if (Array.isArray(val.list)) applyRemoteOrders(val.list);
                 break;
               case 'roomBookings':
                 if (Array.isArray(val.list)) setRoomBookings(val.list);
@@ -2131,17 +2676,8 @@ export default function App() {
               case 'aboutLodgeText':
                 if (val.text !== undefined) setAboutLodgeText(val.text);
                 break;
-              case 'bgVideoUrl':
-                if (val.url !== undefined) setBgVideoUrl(val.url);
-                break;
-              case 'bgVideoType':
-                if (val.type !== undefined) setBgVideoType(val.type);
-                break;
-              case 'isBgVideoEnabled':
-                if (val.enabled !== undefined) setIsBgVideoEnabled(val.enabled);
-                break;
               case 'assistanceCalls':
-                if (Array.isArray(val.list)) setAssistanceCalls(val.list);
+                if (Array.isArray(val.list)) applyRemoteAssistanceCalls(val.list);
                 break;
               case 'feedback':
                 if (Array.isArray(val.list)) setFeedback(val.list);
@@ -2171,6 +2707,19 @@ export default function App() {
                 break;
               case 'pending_attendance':
                 if (Array.isArray(val.list)) setPendingAttendanceRequests(val.list);
+                break;
+              case 'leadership_contacts':
+                setLeadershipContacts((prev) => ({ ...prev, ...val }));
+                break;
+              case 'leadership_messages':
+                if (Array.isArray(val.list)) setLeadershipMessages(val.list);
+                break;
+              case 'stock_alerts':
+                if (Array.isArray(val.logs)) setStockAlertLogs(val.logs);
+                if (val.settings) setStockAlertSettings((prev) => ({ ...prev, ...val.settings }));
+                break;
+              case 'qr_print_logs':
+                if (Array.isArray(val.list)) setQrPrintLogs(val.list);
                 break;
               case 'hero_title_am':
                 if (val.text !== undefined) setHeroTitleAm(val.text);
@@ -2252,6 +2801,10 @@ export default function App() {
   }, [tableAssignments, hasLoadedCloudSettings]);
 
   useEffect(() => {
+    syncKeyToCloud('shift_assignments', { list: shiftAssignments });
+  }, [shiftAssignments, hasLoadedCloudSettings]);
+
+  useEffect(() => {
     syncKeyToCloud('menu', { items: menuItems });
   }, [menuItems, hasLoadedCloudSettings]);
 
@@ -2270,6 +2823,53 @@ export default function App() {
   useEffect(() => {
     syncKeyToCloud('orders', { list: orders });
   }, [orders, hasLoadedCloudSettings]);
+
+  useEffect(() => {
+    syncKeyToCloud('assistanceCalls', { list: assistanceCalls });
+  }, [assistanceCalls, hasLoadedCloudSettings]);
+
+  // Instant cross-tab synchronization via BroadcastChannel & localStorage events
+  useEffect(() => {
+    const unsubscribe = subscribeSettingSync((key, val: any) => {
+      if (!val) return;
+      if (key === 'orders' && Array.isArray(val.list)) {
+        applyRemoteOrders(val.list);
+      } else if (key === 'assistanceCalls' && Array.isArray(val.list)) {
+        applyRemoteAssistanceCalls(val.list);
+      } else if (key === 'shift_assignments' && Array.isArray(val.list)) {
+        remoteSyncSkipRef.current['shift_assignments'] = true;
+        setShiftAssignments(val.list);
+      } else if (key === 'table_assignments' && Array.isArray(val.list)) {
+        remoteSyncSkipRef.current['table_assignments'] = true;
+        setTableAssignments(val.list);
+      } else if (key === 'menu' && Array.isArray(val.items)) {
+        remoteSyncSkipRef.current['menu'] = true;
+        setMenuItems(val.items);
+      }
+    });
+    return unsubscribe;
+  }, []);
+
+  // Periodic background cloud refresh (every 4s) for Customer live tracker & active Staff portals
+  useEffect(() => {
+    if (!hasLoadedCloudSettings) return;
+    const shouldPoll =
+      activeRole === 'chef' ||
+      activeRole === 'waiter' ||
+      activeRole === 'cashier' ||
+      activeRole === 'manager' ||
+      activeRole === 'admin' ||
+      activeRole === 'customer';
+    if (!shouldPoll) return;
+
+    const timer = window.setInterval(() => {
+      if (document.visibilityState !== 'hidden') {
+        handleRefreshLiveOrders();
+      }
+    }, 4500);
+
+    return () => window.clearInterval(timer);
+  }, [hasLoadedCloudSettings, activeRole]);
 
   useEffect(() => {
     syncKeyToCloud('roomBookings', { list: roomBookings });
@@ -2364,16 +2964,20 @@ export default function App() {
   }, [receptionEmergency, hasLoadedCloudSettings]);
 
   useEffect(() => {
-    syncKeyToCloud('bgVideoUrl', { url: bgVideoUrl });
-  }, [bgVideoUrl, hasLoadedCloudSettings]);
+    syncKeyToCloud('leadership_contacts', leadershipContacts);
+  }, [leadershipContacts, hasLoadedCloudSettings]);
 
   useEffect(() => {
-    syncKeyToCloud('bgVideoType', { type: bgVideoType });
-  }, [bgVideoType, hasLoadedCloudSettings]);
+    syncKeyToCloud('leadership_messages', { list: leadershipMessages });
+  }, [leadershipMessages, hasLoadedCloudSettings]);
 
   useEffect(() => {
-    syncKeyToCloud('isBgVideoEnabled', { enabled: isBgVideoEnabled });
-  }, [isBgVideoEnabled, hasLoadedCloudSettings]);
+    syncKeyToCloud('stock_alerts', { logs: stockAlertLogs, settings: stockAlertSettings });
+  }, [stockAlertLogs, stockAlertSettings, hasLoadedCloudSettings]);
+
+  useEffect(() => {
+    syncKeyToCloud('qr_print_logs', { list: qrPrintLogs });
+  }, [qrPrintLogs, hasLoadedCloudSettings]);
 
   // Removed automatic sync to prevent overwriting cloud state with stale/initial local state
 
@@ -2400,19 +3004,6 @@ export default function App() {
   useEffect(() => {
     syncKeyToCloud('chapa', { key: chapaKey, active: chapaActive, mode: chapaMode });
   }, [chapaKey, chapaActive, chapaMode, hasLoadedCloudSettings]);
-
-  // One-time migration to force-default background video to Chef Cooking Loop
-  useEffect(() => {
-    try {
-      const migrated = sessionStorage.getItem('papyrus_lodge_chef_video_migrated_v8');
-      if (!migrated) {
-        setBgVideoType('youtube');
-        setBgVideoUrl('https://www.youtube.com/watch?v=EvwYOmxaxdA');
-        setIsBgVideoEnabled(true);
-        sessionStorage.setItem('papyrus_lodge_chef_video_migrated_v8', 'true');
-      }
-    } catch {}
-  }, []);
 
   // Theme support - Default to false (Dark mode) so mobile devices load the stunning premium theme!
   const [isLightTheme, setIsLightTheme] = useState<boolean>(() => {
@@ -2628,10 +3219,14 @@ export default function App() {
     syncWithSupabase();
   }, [fbUser]);
 
+  // Unlock Web Audio on first user interaction for instant staff/manager alert sounds
+  useEffect(() => {
+    initAudioUnlock();
+  }, []);
+
   // HANDLERS FOR STAFF KEYPAD VERIFICATIONS
   const playVoiceAlert = (message: string) => {
     try {
-      // Play a synthesized electronic notification sound first
       const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
       const oscillator = audioCtx.createOscillator();
       const gainNode = audioCtx.createGain();
@@ -2649,7 +3244,6 @@ export default function App() {
         audioCtx.close();
       }, 250);
 
-      // Synthesize clean audio notification speech
       if ('speechSynthesis' in window) {
         window.speechSynthesis.cancel();
         const utterance = new SpeechSynthesisUtterance(message);
@@ -2663,32 +3257,201 @@ export default function App() {
     }
   };
 
-  // Ref to track seen active assistance call IDs so we don't alert repeatedly for existing ones
+  // Ref to track seen active assistance call IDs, Chef Pending orders, and triggered Kitchen pickup alert IDs
   const seenActiveCallIdsRef = useRef<string[]>([]);
+  const seenChefOrderIdsRef = useRef<Set<string> | null>(null);
+  const triggeredPickupAlertIdsRef = useRef<Set<string> | null>(null);
 
-  // Trigger sound/voice alert ONLY on staff/waiter devices when a new assistance call is received
+  const getKitchenPickupAlertId = (orderId: string) =>
+    `pickup-${orderId.replace(/^#/, '').trim()}`;
+
+  // Trigger Chef new-order alert immediately when a new Pending order arrives in Kitchen Queue
+  useEffect(() => {
+    if (!hasLoadedCloudSettings) return;
+
+    const pendingOrders = orders.filter((o) => {
+      const stage = getEffectiveCookingStatus(o);
+      return stage === 'Pending';
+    });
+
+    if (seenChefOrderIdsRef.current === null) {
+      seenChefOrderIdsRef.current = new Set(pendingOrders.map((o) => o.id));
+      return;
+    }
+
+    const newlyArrived = pendingOrders.filter((o) => !seenChefOrderIdsRef.current!.has(o.id));
+    pendingOrders.forEach((o) => seenChefOrderIdsRef.current!.add(o.id));
+
+    if (newlyArrived.length === 0 || activeRole !== 'chef') return;
+
+    const accessibleNew = newlyArrived.filter((o) =>
+      isSupervisorRole(currentUser)
+        ? true
+        : canStaffAccessOrder(currentUser, o, shiftAssignments, tableAssignments).allowed
+    );
+    if (accessibleNew.length === 0) return;
+
+    const latest = accessibleNew[0];
+    playChefNewOrderAlertSound(latest.id, latest.location);
+    setChefNewOrderToast(
+      `🛎️ ${latest.id} · ${latest.location} (${latest.items.length} items) — ${
+        latest.status === 'Paid' ? 'PAID ✓' : latest.payment.toUpperCase()
+      }`
+    );
+    window.setTimeout(() => {
+      setChefNewOrderToast((curr) => (curr && curr.includes(latest.id) ? null : curr));
+    }, 8000);
+  }, [orders, activeRole, hasLoadedCloudSettings, currentUser, shiftAssignments, tableAssignments]);
+
+  // Trigger audio + voice alert immediately on Waiter Portal (or staff portals) when a customer calls or kitchen completes food
   useEffect(() => {
     if (!hasLoadedCloudSettings) return;
 
     const currentActiveIds = assistanceCalls.filter(c => c.active).map(c => c.id);
-    
-    // Find newly added active calls
     const newActiveCalls = assistanceCalls.filter(
       c => c.active && !seenActiveCallIdsRef.current.includes(c.id)
     );
-    
-    // Update the ref to store all known active call IDs
     seenActiveCallIdsRef.current = Array.from(new Set([...seenActiveCallIdsRef.current, ...currentActiveIds]));
-    
-    // Check if the user is currently on a staff role (waiter dashboard, manager, chef, cashier, etc.)
+
     const isStaffRole = ['waiter', 'chef', 'admin', 'manager', 'receptionist', 'cashier', 'guard'].includes(activeRole);
-    
-    if (newActiveCalls.length > 0 && isStaffRole) {
-      newActiveCalls.forEach(call => {
-        playVoiceAlert(`Notification! Assistance requests received from ${call.location}! Please serve room.`);
+    if (newActiveCalls.length === 0 || !isStaffRole) return;
+
+    const myName = (currentUser?.name || '').trim().toLowerCase();
+    const isSup = isSupervisorRole(currentUser);
+
+    newActiveCalls.forEach(call => {
+      if (activeRole === 'waiter') {
+        if (call.type === 'new_order' || call.targetRole === 'chef') return;
+        const assignedTarget = (call.targetWaiter || getAssignedWaiterForTable(call.location) || '').trim().toLowerCase();
+        const shouldAlertThisWaiter = isSup || !assignedTarget || !myName || assignedTarget === myName;
+        if (shouldAlertThisWaiter) {
+          if (call.type === 'pickup') {
+            playKitchenReadyForWaiterAlertSound(
+              call.orderId || call.id,
+              call.location,
+              call.targetWaiter || undefined
+            );
+          } else {
+            playWaiterCallAlertSound(call.location, call.targetWaiter, call.reason || call.message);
+          }
+        }
+      } else if (activeRole === 'chef') {
+        // Chef order alerts are handled cleanly by the pending-orders effect above
+        return;
+      } else if (call.type !== 'call' && call.type !== 'new_order') {
+        playVoiceAlert(`Notification! Kitchen pickup or assistance alert from ${call.location}!`);
+      }
+    });
+  }, [assistanceCalls, activeRole, hasLoadedCloudSettings, currentUser, shiftAssignments, tableAssignments]);
+
+  // Automatically trigger a unique 'pickup' notification to the assigned waiter whenever any dish order transitions to 'Completed'
+  useEffect(() => {
+    if (!hasLoadedCloudSettings) return;
+
+    if (triggeredPickupAlertIdsRef.current === null) {
+      const initialIds = new Set<string>();
+      orders.forEach((o) => {
+        const stage = getEffectiveCookingStatus(o);
+        if (stage === 'Completed' || stage === 'Served') {
+          initialIds.add(getKitchenPickupAlertId(o.id));
+        }
       });
+      assistanceCalls.forEach((c) => {
+        if (c.type === 'pickup') {
+          initialIds.add(c.id);
+          if (c.orderId) initialIds.add(getKitchenPickupAlertId(c.orderId));
+        }
+      });
+      triggeredPickupAlertIdsRef.current = initialIds;
+      return;
     }
-  }, [assistanceCalls, activeRole, hasLoadedCloudSettings]);
+
+    const activePickupIds = new Set(
+      assistanceCalls
+        .filter((c) => c.active !== false && c.type === 'pickup')
+        .flatMap((c) => [c.id, ...(c.orderId ? [getKitchenPickupAlertId(c.orderId)] : [])])
+    );
+
+    const nowMs = Date.now();
+    const timeNow = new Date(nowMs).toLocaleTimeString('en-US', {
+      hour12: false,
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+
+    orders.forEach((ord) => {
+      const stage = getEffectiveCookingStatus(ord);
+      const pickupId = getKitchenPickupAlertId(ord.id);
+
+      if (stage === 'Pending' || stage === 'Preparing') {
+        triggeredPickupAlertIdsRef.current!.delete(pickupId);
+        return;
+      }
+
+      if (stage === 'Completed' && !ord.servedByWaiter) {
+        if (activePickupIds.has(pickupId) || triggeredPickupAlertIdsRef.current!.has(pickupId)) {
+          return;
+        }
+
+        triggeredPickupAlertIdsRef.current!.add(pickupId);
+        const resolvedWaiter =
+          (!isGenericWaiterLabel(ord.waiter) ? ord.waiter : '') ||
+          getAssignedWaiterForTable(ord.location) ||
+          undefined;
+
+        resolveOrderAssistanceCalls(ord.id, currentUser?.name, ['new_order']);
+        addAssistanceCall({
+          id: pickupId,
+          orderId: ord.id,
+          location: ord.location,
+          time: timeNow,
+          active: true,
+          type: 'pickup',
+          targetRole: 'waiter',
+          targetWaiter: resolvedWaiter,
+          createdAt: nowMs,
+          message: resolvedWaiter
+            ? `🍲 ${resolvedWaiter} — ${ord.location} (${ord.id}) ተሰርቶ አልቋል! እባክዎ ቼክ አድርገው ለደንበኛው ያድርሱ! (Ready for Pickup)`
+            : `🍲 ${ord.id} (${ord.location}) ተሰርቶ አልቋል — ቼክ አድርገው ለደንበኛው ያድርሱ! (Ready from Kitchen)`,
+        });
+      }
+    });
+  }, [orders, assistanceCalls, hasLoadedCloudSettings, shiftAssignments, tableAssignments]);
+
+  // Ref to track seen stock alert log IDs so Manager gets immediate Audio + Push notifications only for NEW out-of-stock events
+  const seenStockAlertIdsRef = useRef<Set<string> | null>(null);
+
+  useEffect(() => {
+    if (!hasLoadedCloudSettings) return;
+
+    if (seenStockAlertIdsRef.current === null) {
+      seenStockAlertIdsRef.current = new Set(stockAlertLogs.map((l) => l.id));
+      return;
+    }
+
+    const newOutEvents = stockAlertLogs.filter(
+      (l) => !seenStockAlertIdsRef.current!.has(l.id) && !l.newAvailable
+    );
+    stockAlertLogs.forEach((l) => seenStockAlertIdsRef.current!.add(l.id));
+
+    if (newOutEvents.length === 0) return;
+    const isManagerPortal = activeRole === 'manager' || activeRole === 'admin';
+    if (!isManagerPortal) return;
+
+    newOutEvents.forEach((ev) => {
+      const displayName = appLang === 'am' || appLang === 'ti' ? ev.itemNameAm : ev.itemNameEn || ev.itemNameAm;
+      if (stockAlertSettings.audioEnabled) {
+        playStockOutAlertSound(ev.itemNameEn || ev.itemNameAm, ev.changedByName);
+      }
+      if (stockAlertSettings.pushEnabled) {
+        sendBrowserPushNotification(
+          `🔴 OUT OF STOCK: ${displayName}`,
+          `${ev.changedByName} (${ev.changedByRole}) marked "${ev.itemNameAm}" out of stock at ${ev.time}.`,
+          `stock-out-${ev.id}`
+        );
+      }
+    });
+  }, [stockAlertLogs, activeRole, hasLoadedCloudSettings, stockAlertSettings, appLang]);
 
   const renderWiFiClockInWidget = () => {
     if (!currentUser) return null;
@@ -2700,69 +3463,104 @@ export default function App() {
 
     if (clockedInToday) {
       return (
-        <div className="bg-emerald-950/20 border border-emerald-500/30 p-4 rounded-xl flex items-center justify-between shadow-inner">
+        <div className="bg-emerald-50 border border-emerald-300 p-4 rounded-2xl flex items-center justify-between shadow-sm">
           <div className="flex items-center gap-3">
-            <span className="text-xl animate-pulse">📶</span>
+            <span className="text-xl">📶</span>
             <div>
-              <p className="text-[10px] text-emerald-400 font-mono font-black uppercase tracking-wider">PAPYRUS SECURE LODGE WIFI</p>
-              <h5 className="text-xs font-black text-white">ክሎክ-ኢን ተረጋግጧል / CLOCK-IN APPROVED</h5>
+              <p className="text-[10px] text-emerald-700 font-mono font-black uppercase tracking-wider">PAPYRUS SECURE LODGE WIFI</p>
+              <h5 className="text-xs font-black text-emerald-950">
+                {tText({ am: 'ክሎክ-ኢን ተረጋግጧል', en: 'CLOCK-IN APPROVED', or: 'Seensi Mirkanaa\'e', ti: 'ክሎክ-ኢን ተረጋጊጹ', sid: 'Seena Buuxantino', fr: 'POINTAGE APPROUVÉ', de: 'STEMPELN GENEHMIGT', it: 'TIMBRATURA APPROVATA', zh: '打卡已批准', ar: 'تم اعتماد الحضور' })}
+              </h5>
             </div>
           </div>
-          <span className="bg-emerald-500 text-black text-[9px] font-mono uppercase font-black px-2.5 py-1 rounded">
-            ONLINE / ገባሪ ✔
+          <span className="bg-emerald-600 text-white text-[9px] font-mono uppercase font-black px-2.5 py-1 rounded-lg shadow-xs">
+            ONLINE ✔
           </span>
         </div>
       );
     }
 
     return (
-      <div className="bg-[#0b131a] border border-[#00f5ff]/20 p-5 rounded-2xl relative overflow-hidden space-y-4 shadow-[4px_4px_0px_0px_rgba(0,245,255,0.1)]">
-        <div className="absolute top-0 right-0 w-24 h-24 bg-[#00f5ff]/5 rounded-full blur-2xl pointer-events-none" />
-        
-        <div className="flex justify-between items-start">
+      <div className="bg-white border border-stone-200 p-5 rounded-2xl relative overflow-hidden space-y-4 shadow-sm">
+        <div className="flex justify-between items-start gap-3 flex-wrap">
           <div className="space-y-0.5">
-            <span className="text-[9px] text-[#00f5ff] font-mono font-black tracking-widest uppercase block">ATTENDANCE VERIFICATION ENGINE</span>
-            <h4 className="text-sm font-black text-white uppercase">📶 የእለት ተእለት የስራ መግቢያ ማረጋገጫ (WiFi Clock-In)</h4>
-            <p className="text-[10.5px] text-white/50 leading-relaxed font-bold">
-              በድርጅቱ ዋይፋይ (Lodge Corporate WiFi) ሲገናኙ ብቻ መመዝገብ ይችላሉ።
+            <span className="text-[9px] text-[#b21f1f] font-mono font-black tracking-widest uppercase block">ATTENDANCE VERIFICATION ENGINE</span>
+            <h4 className="text-sm font-black text-stone-900 uppercase">
+              📶 {tText({ am: 'የእለት ተእለት የስራ መግቢያ ማረጋገጫ (WiFi Clock-In)', en: 'Daily WiFi Shift Clock-In', or: 'Mirkaneessa Seensa Hojii WiFi', ti: 'ዕለታዊ WiFi መእተዊ ሰራሕተኛ', sid: 'Barru WiFi Looso Seena', fr: 'Pointage WiFi Quotidien', de: 'Täglicher WiFi-Schicht-Check-In', it: 'Timbratura WiFi Giornaliera', zh: '每日 WiFi 上班打卡', ar: 'تسجيل الحضور اليومي عبر WiFi' })}
+            </h4>
+            <p className="text-[11px] text-stone-600 leading-relaxed font-semibold">
+              {tText({ am: 'በድርጅቱ ዋይፋይ (Lodge Corporate WiFi) ሲገናኙ ብቻ መመዝገብ ይችላሉ።', en: 'Connect to Lodge Corporate WiFi to submit your attendance clock-in.', or: 'WiFi Dhaabbatichaatti yoo walqunnamtan qofa galmaa\'uu dandeessu.', ti: 'ብWiFi እቲ ትካል ክትራኸቡ ከለኹም ጥራይ ክትምዝገቡ ትኽእሉ።', sid: 'Looje WiFi ledo xaadduro calla borreesa dandiinanni.', fr: 'Connectez-vous au WiFi du Lodge pour pointer votre prise de service.', de: 'Mit dem Lodge-WLAN verbinden, um einzuchecken.', it: 'Connettiti al WiFi del Lodge per registrare l\'ingresso.', zh: '连接度假村企业 WiFi 后即可打卡上班。', ar: 'اتصل بشبكة WiFi الخاصة بالمنتجع لتسجيل الحضور.' })}
             </p>
           </div>
           <div className="flex flex-col items-end font-mono text-[9px]">
-            <span className="text-emerald-400 font-bold flex items-center gap-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping"></span>
+            <span className="text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded font-bold flex items-center gap-1">
               PAPYRUS_LODGE_SECURE
             </span>
-            <span className="text-white/40">IP: 192.168.43.32 (MATCHED Whitelist)</span>
+            <span className="text-stone-500 mt-1">IP: 192.168.43.32 (MATCHED Whitelist)</span>
           </div>
         </div>
 
         {pendingRequest ? (
-          <div className="bg-[#1C1D13] border border-yellow-500/20 p-3 text-center rounded space-y-1">
-            <div className="flex items-center justify-center gap-2 text-yellow-400 font-bold text-xs animate-pulse">
+          <div className="bg-amber-50 border border-amber-300 p-3 text-center rounded-xl space-y-1">
+            <div className="flex items-center justify-center gap-2 text-amber-800 font-bold text-xs">
               <span>⏳</span>
-              <span>የማሳወቂያ ጥያቄ ተልኳል (PENDING MANAGER APPROVAL)</span>
+              <span>{tText({ am: 'የማሳወቂያ ጥያቄ ተልኳል (በመጠባበቅ ላይ)', en: 'PENDING MANAGER APPROVAL', or: 'Eeyyama Hoggansaa Eegaa Jira', ti: 'ፍቓድ ማናጀር ይጽበ ኣሎ', sid: 'Massagaanchu Fajjo Keerinnanni No', fr: 'EN ATTENTE DE VALIDATION', de: 'WARTET AUF FREIGABE', it: 'IN ATTESA DI APPROVAZIONE', zh: '等待经理审批', ar: 'في انتظار موافقة المدير' })}</span>
             </div>
-            <p className="text-[10px] text-white/60">
-              እባክዎ ማናጀሩ ጥያቄዎን እስኪያፀድቁ ድረስ ይጠብቁ።
+            <p className="text-[10px] text-amber-900/80">
+              {tText({ am: 'እባክዎ ማናጀሩ ጥያቄዎን እስኪያፀድቁ ድረስ ይጠብቁ።', en: 'Please wait while the manager reviews and approves your clock-in.', or: 'Maaloo hanga hoggantoonni mirkaneessan eegaa.', ti: 'በጃኹም ማናጀር ክሳብ ዘጽድቖ ተጸበዩ።', sid: 'Maaloo massagaanchu fajjeeshsha keeri.', fr: 'Veuillez patienter pendant que le responsable approuve votre pointage.', de: 'Bitte warten Sie, bis der Manager Ihre Anfrage bestätigt.', it: 'Attendi mentre il manager approva la timbratura.', zh: '请等待经理审核批准您的打卡请求。', ar: 'يرجى الانتظار حتى يوافق المدير على طلبك.' })}
             </p>
           </div>
         ) : (
-          <div className="flex flex-col sm:flex-row gap-3 items-center justify-between border-t border-white/5 pt-3">
+          <div className="flex flex-col sm:flex-row gap-3 items-center justify-between border-t border-stone-200 pt-3">
             <div className="text-left">
-              <span className="text-[9px] text-white/40 block font-mono">
-                {appLang === 'am' ? 'የመሣሪያ ግንኙነት ሁኔታ (DEVICE CONNECTION STATUS):' : 'DEVICE CONNECTION STATUS:'}
+              <span className="text-[9px] text-stone-500 block font-mono uppercase font-bold">
+                {tText({
+                  am: 'የመሣሪያ ግንኙነት ሁኔታ:',
+                  en: 'DEVICE CONNECTION STATUS:',
+                  or: 'HAALA WALQUNNAMTII:',
+                  ti: 'ኩነታት መርበብ:',
+                  sid: 'XAADDO GARA:',
+                  fr: 'STATUT DE CONNEXION :',
+                  de: 'VERBINDUNGSSTATUS:',
+                  it: 'STATO CONNESSIONE:',
+                  zh: '设备连接状态：',
+                  ar: 'حالة الاتصال:',
+                })}
               </span>
-              <p className="text-xs font-bold text-[#C1FF00] flex items-center gap-1.5">
-                <span>📶 {appLang === 'am' ? 'ተገናኝቷል (CONNECTED)' : 'CONNECTED'}</span>
-                <span className="text-[10px] text-white/50 font-normal font-sans">
-                  {appLang === 'am' ? '(ሲግናል፡ እጅግ በጣም ጥሩ፣ ማረጋገጫ አልፏል)' : '(Signal: Perfect, Whitelist Verification Passed)'}
+              <p className="text-xs font-bold text-emerald-700 flex items-center gap-1.5">
+                <span>
+                  📶 {tText({
+                    am: 'ተገናኝቷል (CONNECTED)',
+                    en: 'CONNECTED',
+                    or: 'WALQUNNAMEERA',
+                    ti: 'ተራኺቡ ኣሎ',
+                    sid: 'XAADINO',
+                    fr: 'CONNECTÉ',
+                    de: 'VERBUNDEN',
+                    it: 'CONNESSO',
+                    zh: '已连接',
+                    ar: 'متصل',
+                  })}
+                </span>
+                <span className="text-[10px] text-stone-600 font-normal font-sans">
+                  {tText({
+                    am: '(ሲግናል፡ እጅግ በጣም ጥሩ፣ ማረጋገጫ አልፏል)',
+                    en: '(Signal: Perfect, Whitelist Verification Passed)',
+                    or: '(Mallattoo: Baay’ee Gaarii, Mirkanaa’eera)',
+                    ti: '(ሲግናል፡ ብሉጽ፣ ምርግጋጽ ሓሊፉ)',
+                    sid: '(Siignaale: Dancha, Buuxantino)',
+                    fr: '(Signal : Excellent, vérifié)',
+                    de: '(Signal: Perfekt, verifiziert)',
+                    it: '(Segnale: Ottimo, verificato)',
+                    zh: '(信号极佳，白名单验证通过)',
+                    ar: '(الإشارة ممتازة، تم التحقق)',
+                  })}
                 </span>
               </p>
             </div>
             
             <button
               onClick={() => {
-                const updatedTime = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
                 const newReq = {
                   id: 'att-req-' + Date.now(),
                   staffName: currentUser.name,
@@ -2773,9 +3571,9 @@ export default function App() {
                 };
                 setPendingAttendanceRequests(prev => [newReq, ...prev]);
                 playVoiceAlert(`Clock-in request submitted for ${currentUser.name}. Waiting for manager approval.`);
-                alert(`🎉 የዋይፋይ ክሎክ-ኢን ጥያቄ በተሳካ ሁኔታ ተልኳል! ማናጀሩ ሲያፀድቁት ሙሉ በሙሉ ይንቀሳቀሳሉ።`);
+                alert(`🎉 የዋይፋይ ክሎክ-ኢን ጥያቄ በተሳካ ሁታ ተልኳል! ማናጀሩ ሲያፀድቁት ሙሉ በሙሉ ይንቀሳቀሳሉ።`);
               }}
-              className="w-full sm:w-auto bg-[#00f5ff] hover:bg-white text-black font-black text-xs uppercase px-5 py-2.5 font-mono cursor-pointer transition-all border border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] rounded-xl animate-bounce"
+              className="w-full sm:w-auto bg-[#b21f1f] hover:bg-[#8c1414] text-white font-black text-xs uppercase px-5 py-2.5 font-mono cursor-pointer transition-all border-b-2 border-[#f4c22b] shadow-md rounded-xl"
             >
               🔐 CLOCK IN (ማረጋገጫ ደውል)
             </button>
@@ -2856,6 +3654,7 @@ export default function App() {
 
   const handleSuccessLogin = (matchedStaff: StaffMember) => {
     setCurrentUser(matchedStaff);
+    setIsStaffAuthModalOpen(false);
     const privilege = matchedStaff.accessPrivilege || matchedStaff.role;
     if (privilege === 'waiter') setActiveRole('waiter');
     if (privilege === 'chef') setActiveRole('chef');
@@ -3241,12 +4040,14 @@ export default function App() {
     });
   };
 
-  // Atomic helper functions for Assistance Calls to ensure 100% reliable cloud sync without overwriting other clients
+  // Atomic helper functions for Assistance Calls to ensure 100% reliable cloud sync without overwriting other clients or creating duplicates
   const addAssistanceCall = async (newCall: AssistanceCall) => {
-    setAssistanceCalls(prev => {
-      if (prev.some(c => c.id === newCall.id)) return prev;
-      return [newCall, ...prev];
-    });
+    const callWithTs: AssistanceCall = {
+      ...newCall,
+      createdAt: newCall.createdAt || Date.now(),
+    };
+
+    setAssistanceCalls(prev => upsertDeduplicatedAssistanceCall(prev, callWithTs));
 
     try {
       const { data, error: fetchErr } = await supabase
@@ -3268,19 +4069,60 @@ export default function App() {
         currentList = data.value.list;
       }
 
-      if (!currentList.some(c => c.id === newCall.id)) {
-        const updatedList = [newCall, ...currentList];
-        await supabase
-          .from('system_settings')
-          .upsert({ key: 'assistanceCalls', value: { list: updatedList } });
-      }
+      const updatedList = upsertDeduplicatedAssistanceCall(currentList, callWithTs);
+      await supabase
+        .from('system_settings')
+        .upsert({ key: 'assistanceCalls', value: { list: updatedList } });
     } catch (err) {
       console.warn("Error adding assistance call to DB:", err);
     }
   };
 
+  const resolveOrderAssistanceCalls = async (
+    orderId: string,
+    handledBy?: string,
+    types?: Array<'new_order' | 'pickup' | 'call'>,
+  ) => {
+    const bareId = orderId.replace(/^#/, '');
+    const matchesOrderCall = (c: AssistanceCall) => {
+      if (!c.active) return false;
+      if (types && types.length > 0 && c.type && !types.includes(c.type)) return false;
+      if (c.orderId && (c.orderId === orderId || c.orderId.replace(/^#/, '') === bareId)) return true;
+      return c.id.includes(orderId) || c.id.includes(bareId);
+    };
+
+    setAssistanceCalls(prev =>
+      prev.map(c => (matchesOrderCall(c) ? { ...c, active: false, handledBy: handledBy || c.handledBy } : c))
+    );
+
+    try {
+      const { data, error: fetchErr } = await supabase
+        .from('system_settings')
+        .select('value')
+        .eq('key', 'assistanceCalls')
+        .maybeSingle();
+      if (!fetchErr && data?.value && Array.isArray(data.value.list)) {
+        const updatedList = (data.value.list as AssistanceCall[]).map(c =>
+          matchesOrderCall(c) ? { ...c, active: false, handledBy: handledBy || c.handledBy } : c
+        );
+        await supabase
+          .from('system_settings')
+          .upsert({ key: 'assistanceCalls', value: { list: updatedList } });
+      }
+    } catch (err) {
+      console.warn("Error resolving order assistance calls in DB:", err);
+    }
+  };
+
   const removeAssistanceCall = async (id: string) => {
-    setAssistanceCalls(prev => prev.filter(c => c.id !== id));
+    const localTarget = assistanceCalls.find(c => c.id === id);
+    const localKey = localTarget ? getAssistanceCallDedupKey(localTarget) : null;
+    const isSameCallOrKey = (c: AssistanceCall, key: string | null) =>
+      c.id === id || (Boolean(key) && c.active !== false && getAssistanceCallDedupKey(c) === key);
+
+    setAssistanceCalls(prev =>
+      prev.map(c => (isSameCallOrKey(c, localKey) ? { ...c, active: false, handledBy: currentUser?.name || c.handledBy } : c))
+    );
 
     try {
       const { data, error: fetchErr } = await supabase
@@ -3302,66 +4144,179 @@ export default function App() {
         currentList = data.value.list;
       }
 
-      const updatedList = currentList.filter(c => c.id !== id);
+      const remoteTarget = currentList.find(c => c.id === id) || localTarget;
+      const remoteKey = remoteTarget ? getAssistanceCallDedupKey(remoteTarget) : localKey;
+
+      const updatedList = currentList.map(c =>
+        isSameCallOrKey(c, remoteKey) ? { ...c, active: false, handledBy: currentUser?.name || c.handledBy } : c
+      );
       await supabase
         .from('system_settings')
         .upsert({ key: 'assistanceCalls', value: { list: updatedList } });
     } catch (err) {
-      console.warn("Error removing assistance call from DB:", err);
+      console.warn("Error resolving assistance call in DB:", err);
     }
   };
 
   const markAssistanceCallInactive = async (id: string) => {
-    setAssistanceCalls(prev => prev.map(c => c.id === id ? { ...c, active: false } : c));
-
-    try {
-      const { data, error: fetchErr } = await supabase
-        .from('system_settings')
-        .select('value')
-        .eq('key', 'assistanceCalls')
-        .maybeSingle();
-
-      if (fetchErr) {
-        if (fetchErr.code === '42P01' || fetchErr.message?.includes('does not exist')) {
-          console.warn("Supabase: Table 'system_settings' is not initialized yet. Staying in local fallback mode.");
-        } else {
-          console.warn("Error fetching assistanceCalls:", fetchErr);
-        }
-      }
-
-      let currentList: AssistanceCall[] = [];
-      if (!fetchErr && data?.value && Array.isArray(data.value.list)) {
-        currentList = data.value.list;
-      }
-
-      const updatedList = currentList.map(c => c.id === id ? { ...c, active: false } : c);
-      await supabase
-        .from('system_settings')
-        .upsert({ key: 'assistanceCalls', value: { list: updatedList } });
-    } catch (err) {
-      console.warn("Error marking assistance call inactive in DB:", err);
-    }
+    await removeAssistanceCall(id);
   };
 
-  // CALL FOR ASSISTANCE / CITATION BUSZ
+  // CALL FOR ASSISTANCE / TARGETED ASSIGNED WAITER & LEADERSHIP CONCIERGE
   const handleTriggerBuzzer = () => {
-    const timeNow = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
+    setConciergeModalTab('waiter');
+  };
+
+  const handleOpenLeadershipContact = () => {
+    setConciergeModalTab('leadership');
+  };
+
+  const handleSendTargetedWaiterCall = (payload: {
+    location: string;
+    reason: string;
+    message: string;
+    targetWaiter?: string;
+  }) => {
+    const nowMs = Date.now();
+    const timeNow = new Date(nowMs).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
+    const resolvedWaiter = payload.targetWaiter || getAssignedWaiterForTable(payload.location) || undefined;
     const newCall: AssistanceCall = {
-      id: 'c-' + Date.now(),
-      location: guestLocation,
+      id: 'c-' + nowMs,
+      location: payload.location,
       time: timeNow,
-      active: true
+      active: true,
+      type: 'call',
+      reason: payload.reason,
+      message: payload.message,
+      targetWaiter: resolvedWaiter,
+      targetRole: 'waiter',
+      createdAt: nowMs,
     };
     addAssistanceCall(newCall);
-    try {
-      alert(`🔔 ጥሪ ተልኳል! አስተናጋጅ በቅርቡ ይመጣል። / Assistance called for ${guestLocation}!`);
-    } catch (e) {
-      console.warn("Alert blocked:", e);
-    }
   };
 
   const handleResolveBuzzer = (id: string) => {
     removeAssistanceCall(id);
+  };
+
+  const handleSendLeadershipMessage = (payload: {
+    target: 'manager' | 'admin' | 'support' | 'both';
+    location: string;
+    senderName: string;
+    senderPhone: string;
+    topic: string;
+    message: string;
+  }) => {
+    const now = new Date();
+    const newMsg: LeadershipMessage = {
+      id: 'lm-' + Date.now(),
+      target: payload.target,
+      location: payload.location,
+      senderName: payload.senderName || undefined,
+      senderPhone: payload.senderPhone || undefined,
+      topic: payload.topic,
+      message: payload.message,
+      time: now.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' }),
+      date: now.toLocaleDateString('en-CA'),
+      status: 'Pending',
+    };
+    setLeadershipMessages((prev) => [newMsg, ...prev]);
+  };
+
+  const handleReplyLeadershipMessage = (id: string, replyText: string, repliedBy: string) => {
+    const replyTime = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
+    setLeadershipMessages((prev) =>
+      prev.map((m) =>
+        m.id === id
+          ? { ...m, reply: replyText, repliedBy, replyTime, status: 'Replied' }
+          : m,
+      ),
+    );
+  };
+
+  const handleResolveLeadershipMessage = (id: string) => {
+    setLeadershipMessages((prev) =>
+      prev.map((m) => (m.id === id ? { ...m, status: 'Resolved' } : m)),
+    );
+  };
+
+  const handleDeleteLeadershipMessage = (id: string) => {
+    setLeadershipMessages((prev) => prev.filter((m) => m.id !== id));
+  };
+
+  const getAccessibleMenuItemFields = (item: MenuItem) => {
+    const originalItem = INITIAL_MENU_ITEMS.find((m) => m.id === item.id);
+    const isUnedited =
+      originalItem &&
+      originalItem.nameAm === item.nameAm &&
+      originalItem.nameEn === item.nameEn &&
+      originalItem.desc === item.desc;
+
+    const name =
+      isUnedited && itemTranslations[item.id] && itemTranslations[item.id][appLang]
+        ? itemTranslations[item.id][appLang].name
+        : ['en', 'fr', 'de', 'it', 'zh', 'ar'].includes(appLang)
+          ? item.nameEn || item.nameAm
+          : item.nameAm;
+
+    const desc =
+      isUnedited && itemTranslations[item.id] && itemTranslations[item.id][appLang]
+        ? itemTranslations[item.id][appLang].desc
+        : item.desc || '';
+
+    const catObj = categories.find((c) => c.id === item.cat);
+    const categoryLabel =
+      (categoryTranslations[item.cat] && categoryTranslations[item.cat][appLang]) ||
+      catObj?.label ||
+      item.cat;
+
+    const isDrink =
+      item.cat === 'drinks' ||
+      item.cat.toLowerCase().includes('drink') ||
+      item.cat.toLowerCase().includes('beverage');
+    const isCustomizable = !isDrink && (item.customizable || item.cat === 'food' || item.cat === 'traditional');
+
+    const mod = customModifiers[item.id] || {
+      qaria: modifierOptions.qariaChoices[0] || 'አለ',
+      injera: modifierOptions.injeraChoices[2] || modifierOptions.injeraChoices[0] || 'ሙሉ',
+      dabo: 0,
+      qty: 1,
+      customInstructions: '',
+    };
+
+    return {
+      name,
+      desc,
+      categoryLabel,
+      isDrink,
+      isCustomizable,
+      qariaLabel: getTranslatedModifierValue(mod.qaria),
+      injeraLabel: getTranslatedModifierValue(mod.injera),
+      daboCount: mod.dabo || 0,
+      qty: mod.qty || 1,
+    };
+  };
+
+  const speakMenuItemDetails = (item: MenuItem, indexInList?: number, totalInList?: number, force = false) => {
+    if (!isVoiceOverEnabled && !force) return;
+    const fields = getAccessibleMenuItemFields(item);
+    const payload = buildDishSpeechPayload({
+      item,
+      appLang,
+      translatedName: fields.name,
+      translatedDesc: fields.desc,
+      categoryLabel: fields.categoryLabel,
+      indexInList,
+      totalInList,
+      isDrink: fields.isDrink,
+      isCustomizable: fields.isCustomizable,
+      currentQty: fields.qty,
+      qariaLabel: fields.qariaLabel,
+      injeraLabel: fields.injeraLabel,
+      daboCount: fields.daboCount,
+    });
+    playAccessibleChime('step');
+    runVoiceOver(payload.nativeText, force, payload.fallbackEnText);
   };
 
   // ITEM CUSTOMIZERS ACCORDING TO USER FLOW
@@ -3370,6 +4325,27 @@ export default function App() {
       ...prev,
       [id]: { ...prev[id], qaria: value }
     }));
+    if (isVoiceOverEnabled) {
+      playAccessibleChime('step');
+      const label = getTranslatedModifierValue(value);
+      const enText = `Green pepper set to ${value === 'የለም' ? 'none' : 'included'}.`;
+      runVoiceOver(
+        tText({
+          am: `ቃሪያ ${label} ተመርጧል።`,
+          or: `Qariyaa: ${label}.`,
+          ti: `ቃሪያ ${label} ተመሪጹ።`,
+          sid: `Qaariya: ${label}.`,
+          en: `Pepper: ${label}.`,
+          fr: `Piment : ${label}.`,
+          de: `Pfeffer: ${label}.`,
+          it: `Peperoncino: ${label}.`,
+          zh: `青椒：${label}。`,
+          ar: `الفلفل: ${label}.`,
+        }),
+        false,
+        enText,
+      );
+    }
   };
 
   const handleModifyInjera = (id: string, value: string) => {
@@ -3377,20 +4353,85 @@ export default function App() {
       ...prev,
       [id]: { ...prev[id], injera: value }
     }));
+    if (isVoiceOverEnabled) {
+      playAccessibleChime('step');
+      const label = getTranslatedModifierValue(value);
+      const priceAdd = Number(modifierOptions.injeraPrices?.[value] || 0);
+      const pricePhraseEn = priceAdd > 0 ? `, plus ${priceAdd} ${currency}` : '';
+      const pricePhraseAm = priceAdd > 0 ? `፣ ተጨማሪ ${priceAdd} ${currency}` : '';
+      runVoiceOver(
+        tText({
+          am: `እንጀራ ${label}${pricePhraseAm} ተመርጧል።`,
+          en: `Injera: ${label}${pricePhraseEn}.`,
+          or: `Injera: ${label}${pricePhraseEn}.`,
+          ti: `እንጀራ ${label}${pricePhraseAm}።`,
+          sid: `Injera: ${label}${pricePhraseEn}.`,
+          fr: `Injéra : ${label}${pricePhraseEn}.`,
+          de: `Injera: ${label}${pricePhraseEn}.`,
+          it: `Injera: ${label}${pricePhraseEn}.`,
+          zh: `英吉拉：${label}${priceAdd > 0 ? ` (+${priceAdd} ${currency})` : ''}。`,
+          ar: `إينجيرا: ${label}${priceAdd > 0 ? ` (+${priceAdd} ${currency})` : ''}.`,
+        }),
+        false,
+        `Injera set to ${label}${priceAdd > 0 ? `, plus ${priceAdd} Birr` : ''}.`,
+      );
+    }
   };
 
   const handleModifyDabo = (id: string, dir: number) => {
+    const nextDabo = Math.max(0, (customModifiers[id]?.dabo || 0) + dir);
     setCustomModifiers(prev => ({
       ...prev,
-      [id]: { ...prev[id], dabo: Math.max(0, (prev[id]?.dabo || 0) + dir) }
+      [id]: { ...prev[id], dabo: nextDabo }
     }));
+    if (isVoiceOverEnabled) {
+      playAccessibleChime('step');
+      const unitPrice = Number(modifierOptions.daboPrice || 0);
+      const amt = nextDabo * unitPrice;
+      runVoiceOver(
+        tText({
+          am: `ተጨማሪ ዳቦ ${nextDabo} (${amt} ${currency})።`,
+          en: `Extra bread: ${nextDabo} (${amt} ${currency}).`,
+          or: `Damboo dabalataa: ${nextDabo} (${amt} ${currency}).`,
+          ti: `ዝተወሰኸ ዳቦ ${nextDabo} (${amt} ${currency})።`,
+          sid: `Daboo dabalata: ${nextDabo} (${amt} ${currency}).`,
+          fr: `Pain supplémentaire : ${nextDabo} (${amt} ${currency}).`,
+          de: `Extra Brot: ${nextDabo} (${amt} ${currency}).`,
+          it: `Pane extra: ${nextDabo} (${amt} ${currency}).`,
+          zh: `加面包 ${nextDabo} 份 (${amt} ${currency})。`,
+          ar: `خبز إضافي: ${nextDabo} (${amt} ${currency}).`,
+        }),
+        false,
+        `Extra bread count ${nextDabo}, ${amt} Birr.`,
+      );
+    }
   };
 
   const handleModifyQty = (id: string, dir: number) => {
+    const nextQty = Math.max(1, (customModifiers[id]?.qty || 1) + dir);
     setCustomModifiers(prev => ({
       ...prev,
-      [id]: { ...prev[id], qty: Math.max(1, (prev[id]?.qty || 1) + dir) }
+      [id]: { ...prev[id], qty: nextQty }
     }));
+    if (isVoiceOverEnabled) {
+      playAccessibleChime('step');
+      runVoiceOver(
+        tText({
+          am: `ብዛት ${nextQty}።`,
+          en: `Quantity ${nextQty}.`,
+          or: `Baay'ina ${nextQty}.`,
+          ti: `ብዝሒ ${nextQty}።`,
+          sid: `Bikkino ${nextQty}.`,
+          fr: `Quantité ${nextQty}.`,
+          de: `Menge ${nextQty}.`,
+          it: `Quantità ${nextQty}.`,
+          zh: `数量 ${nextQty}。`,
+          ar: `الكمية ${nextQty}.`,
+        }),
+        false,
+        `Quantity ${nextQty}.`,
+      );
+    }
   };
 
   const isCustomOnlyItem = (item: MenuItem) => {
@@ -3433,11 +4474,29 @@ export default function App() {
   // ADD TO CLIENT BASKET
   const handleAddToBasket = (itemId: string) => {
     const item = menuItems.find(m => m.id === itemId);
-    if (!item) return;
+    if (!item || !item.available) {
+      if (isVoiceOverEnabled) playAccessibleChime('alert');
+      const soldOutTxt = tText({
+        am: 'ይቅርታ፣ ይህ ምግብ በአሁኑ ሰዓት አልቋል።',
+        en: 'Sorry, this item is currently sold out.',
+        or: 'Dhiifama, nyaatni kun amma dhumeera.',
+        ti: 'ይቕሬታ፣ እዚ መግቢ ኣብዚ እዋን ተወዲኡ ኣሎ።',
+        sid: 'Dhiifama, tenne sagale xa gooffino.',
+        fr: 'Désolé, cet article est actuellement épuisé.',
+        de: 'Entschuldigung, dieses Gericht ist ausverkauft.',
+        it: 'Spiacenti, questo piatto è esaurito.',
+        zh: '抱歉，该菜品目前已售罄。',
+        ar: 'عذراً، هذا الطبق غير متوفر حالياً.',
+      });
+      runVoiceOver(soldOutTxt, false, 'Sorry, this item is currently sold out.');
+      setAccessibleToast(`🛑 ${soldOutTxt}`);
+      setTimeout(() => setAccessibleToast(''), 3200);
+      return;
+    }
 
     const mod = customModifiers[itemId] || { 
       qaria: modifierOptions.qariaChoices[0] || 'አለ', 
-      injera: modifierOptions.injeraChoices[2] || modifierOptions.injeraChoices[0] || 'كامل (ሙሉ)', 
+      injera: modifierOptions.injeraChoices[2] || modifierOptions.injeraChoices[0] || 'ሙሉ', 
       dabo: 0, 
       qty: 1,
       customInstructions: '',
@@ -3451,18 +4510,19 @@ export default function App() {
 
     const transName = isUnedited && itemTranslations[itemId] && itemTranslations[itemId][appLang]
       ? itemTranslations[itemId][appLang].name
-      : (['en', 'fr', 'de', 'it'].includes(appLang) ? (item.nameEn || item.nameAm) : item.nameAm);
+      : (['en', 'fr', 'de', 'it', 'zh', 'ar'].includes(appLang) ? (item.nameEn || item.nameAm) : item.nameAm);
 
     let finalLabel = transName;
     let priceOffset = 0;
 
-    const tLabelQaria = { am: 'ቃሪያ', en: 'Pepper', or: 'Qariyaa', ti: 'ቃሪያ', fr: 'Piment', de: 'Pfeffer', it: 'Peperoncino' }[appLang] || 'Pepper';
-    const tLabelInjera = { am: 'እንጀራ', en: 'Injera', or: 'Injera', ti: 'እንጀራ', fr: 'Injéra', de: 'Injera', it: 'Injera' }[appLang] || 'Injera';
-    const tLabelDabo = { am: 'ዳቦ', en: 'Bread', or: 'Damboo', ti: 'ዳቦ', fr: 'Pain', de: 'Brot', it: 'Pane' }[appLang] || 'Bread';
-    const tLabelBirr = { am: 'ብር', en: 'Birr', or: 'Birr', ti: 'ብር', fr: 'Birr', de: 'Birr', it: 'Birr' }[appLang] || 'Birr';
-    const tLabelMayo = { am: 'ማዮኔዝ', en: 'Mayonnaise', or: 'Mayonnaise', ti: 'ማዮኔዝ', fr: 'Mayonnaise', de: 'Mayonnaise', it: 'Maionese' }[appLang] || 'Mayonnaise';
-    const tLabelKocho = { am: 'ቆጮ', en: 'Kocho', or: 'Kocho', ti: 'ቆጮ', fr: 'Kocho', de: 'Kocho', it: 'Kocho' }[appLang] || 'Kocho';
-    const tSeparator = appLang === 'am' ? '፣ ' : ', ';
+    const tLabelQaria = tText({ am: 'ቃሪያ', en: 'Pepper', or: 'Qariyaa', ti: 'ቃሪያ', sid: 'Qaariya', fr: 'Piment', de: 'Pfeffer', it: 'Peperoncino', zh: '青椒', ar: 'فلفل' });
+    const tLabelInjera = tText({ am: 'እንጀራ', en: 'Injera', or: 'Injera', ti: 'እንጀራ', sid: 'Injera', fr: 'Injéra', de: 'Injera', it: 'Injera', zh: '英吉拉', ar: 'إينجيرا' });
+    const tLabelDabo = tText({ am: 'ዳቦ', en: 'Bread', or: 'Damboo', ti: 'ዳቦ', sid: 'Daboo', fr: 'Pain', de: 'Brot', it: 'Pane', zh: '面包', ar: 'خبز' });
+    const tLabelMayo = tText({ am: 'ማዮኔዝ', en: 'Mayonnaise', or: 'Maayooniizii', ti: 'ማዮኔዝ', sid: 'Maayooniize', fr: 'Mayonnaise', de: 'Mayonnaise', it: 'Maionese', zh: '蛋黄酱', ar: 'مايونيز' });
+    const tLabelKocho = tText({ am: 'ቆጮ', en: 'Kocho', or: 'Qoccoo', ti: 'ቆጮ', sid: 'Qoocoo', fr: 'Kocho', de: 'Kocho', it: 'Kocho', zh: '科乔饼', ar: 'كوتشو' });
+    const tYesWord = tText({ am: 'አለ', en: 'Yes', or: 'Eeyyee', ti: 'ኣሎ', sid: 'Ee', fr: 'Oui', de: 'Ja', it: 'Sì', zh: '加配', ar: 'نعم' });
+    const tExtraWord = tText({ am: 'ተጨማሪ', en: 'Extra', or: 'Dabalata', ti: 'ተወሳኺ', sid: 'Dabalata', fr: 'Extra', de: 'Extra', it: 'Extra', zh: '备注', ar: 'إضافي' });
+    const tSeparator = appLang === 'am' || appLang === 'ti' ? '፣ ' : ', ';
 
     const options = [];
     const isDrink = item.cat === 'drinks' || item.cat.toLowerCase().includes('drink') || item.cat.toLowerCase().includes('beverage');
@@ -3473,14 +4533,14 @@ export default function App() {
       
       const injeraPrice = Number(modifierOptions.injeraPrices?.[mod.injera] || 0);
       if (injeraPrice > 0) {
-        options.push(`${tLabelInjera}: ${getTranslatedModifierValue(mod.injera)} (+${injeraPrice} ${tLabelBirr})`);
+        options.push(`${tLabelInjera}: ${getTranslatedModifierValue(mod.injera)} (+${injeraPrice} ${currency})`);
         priceOffset += injeraPrice;
       } else {
         options.push(`${tLabelInjera}: ${getTranslatedModifierValue(mod.injera)}`);
       }
       
       if (mod.dabo > 0) {
-        options.push(`${tLabelDabo}: ${mod.dabo} (+${mod.dabo * modifierOptions.daboPrice} ${tLabelBirr})`);
+        options.push(`${tLabelDabo}: ${mod.dabo} (+${mod.dabo * modifierOptions.daboPrice} ${currency})`);
         priceOffset += (mod.dabo * modifierOptions.daboPrice);
       }
     }
@@ -3488,22 +4548,21 @@ export default function App() {
     // Add Mayo option if selected (e.g. for burgers) (skip for drinks)
     if (mod.mayo && !isDrink) {
       const price = modifierOptions.mayoPrice !== undefined ? modifierOptions.mayoPrice : 20;
-      options.push(`${tLabelMayo}: ${appLang === 'am' ? 'አለ' : 'Yes'} (+${price} ${tLabelBirr})`);
+      options.push(`${tLabelMayo}: ${tYesWord} (+${price} ${currency})`);
       priceOffset += price;
     }
 
     // Add Kocho option if selected (e.g. for traditional items) (skip for drinks)
     if (mod.kocho && !isDrink) {
       const price = modifierOptions.kochoPrice !== undefined ? modifierOptions.kochoPrice : 45;
-      options.push(`${tLabelKocho}: ${appLang === 'am' ? 'አለ' : 'Yes'} (+${price} ${tLabelBirr})`);
+      options.push(`${tLabelKocho}: ${tYesWord} (+${price} ${currency})`);
       priceOffset += price;
     }
 
     // Add Custom instructions/additions if present (skip for drinks)
     if (mod.customInstructions && mod.customInstructions.trim() !== '' && !isDrink) {
       const price = modifierOptions.customAdditionsPrice !== undefined ? modifierOptions.customAdditionsPrice : 35;
-      const extraLabel = appLang === 'am' ? 'ተጨማሪ' : 'Extra';
-      options.push(`${extraLabel}: "${mod.customInstructions}" (+${price} ${tLabelBirr})`);
+      options.push(`${tExtraWord}: "${mod.customInstructions}" (+${price} ${currency})`);
       priceOffset += price;
     }
 
@@ -3511,21 +4570,42 @@ export default function App() {
       finalLabel += ` (${options.join(tSeparator)})`;
     }
 
+    const unitPrice = item.price + priceOffset;
     const newItem: OrderItem = {
       id: item.id + '-' + Date.now(),
       baseId: item.id,
       name: finalLabel,
       qty: mod.qty,
-      price: item.price + priceOffset
+      price: unitPrice
     };
 
-    setCart(prev => [...prev, newItem]);
+    const nextCart = [...cart, newItem];
+    setCart(nextCart);
     // Reset quantity, text box and checkboxes cleanly
     setCustomModifiers(prev => ({
       ...prev,
       [itemId]: { ...prev[itemId], qty: 1, customInstructions: '', mayo: false, kocho: false }
     }));
-    alert('🛒 ወደ ቅርጫት ታክሏል! / Successfully added to cart!');
+
+    const totalBasketCount = nextCart.reduce((s, ci) => s + ci.qty, 0);
+    const totalBasketAmount = nextCart.reduce((s, ci) => s + ci.qty * ci.price, 0);
+    if (isVoiceOverEnabled) playAccessibleChime('added');
+    const addedEn = `Added ${mod.qty} ${item.nameEn || transName} to cart. Cart now has ${totalBasketCount} items totaling ${totalBasketAmount} ${currency}.`;
+    const addedMsg = tText({
+      am: `${mod.qty} ${transName} ወደ ቅርጫት ታክሏል። ቅርጫትዎ ውስጥ ${totalBasketCount} ትዕዛዞች፣ ጠቅላላ ${totalBasketAmount} ${currency} አለ።`,
+      or: `${mod.qty} ${transName} gara guuboo dabalameera. Baay'inni ${totalBasketCount}, waliigala ${totalBasketAmount} ${currency}.`,
+      ti: `${mod.qty} ${transName} ናብ ዘንቢል ተወሲኹ። ጠቕላላ ${totalBasketCount}፣ ድምር ${totalBasketAmount} ${currency}።`,
+      sid: `${mod.qty} ${transName} guboora ledamino. Mulu ${totalBasketCount} (${totalBasketAmount} ${currency}).`,
+      en: addedEn,
+      fr: `Ajouté ${mod.qty} × ${transName} au panier. Total : ${totalBasketCount} articles (${totalBasketAmount} ${currency}).`,
+      de: `${mod.qty} × ${transName} hinzugefügt. Gesamt: ${totalBasketCount} Artikel (${totalBasketAmount} ${currency}).`,
+      it: `Aggiunto ${mod.qty} × ${transName} al carrello. Totale: ${totalBasketCount} articoli (${totalBasketAmount} ${currency}).`,
+      zh: `已将 ${mod.qty} 份 ${transName} 加入购物车。目前共 ${totalBasketCount} 件，合计 ${totalBasketAmount} ${currency}。`,
+      ar: `تمت إضافة ${mod.qty} من ${transName} إلى السلة. لديك الآن ${totalBasketCount} عناصر بإجمالي ${totalBasketAmount} ${currency}.`,
+    });
+    runVoiceOver(addedMsg, false, addedEn);
+    setAccessibleToast(`✅ ${transName} × ${mod.qty} (${totalBasketAmount} ${currency})`);
+    setTimeout(() => setAccessibleToast(''), 3200);
   };
 
   const handleRemoveCartItem = (id: string) => {
@@ -3533,14 +4613,55 @@ export default function App() {
   };
 
   const handleQuickAddItemFromAssistant = (item: MenuItem) => {
+    const liveItem = menuItems.find((m) => m.id === item.id);
+    if (!liveItem || !liveItem.available) {
+      if (isVoiceOverEnabled) playAccessibleChime('alert');
+      const soldOutMsg = tText({
+        am: 'ይቅርታ፣ ይህ ምግብ በአሁኑ ሰዓት አልቋል።',
+        en: 'Sorry, this item is currently sold out.',
+        or: 'Dhiifama, nyaatni kun amma dhumeera.',
+        ti: 'ይቕሬታ፣ እዚ መግቢ ተወዲኡ ኣሎ።',
+        sid: 'Dhiifama, tenne sagale gooffino.',
+        fr: 'Désolé, cet article est épuisé.',
+        de: 'Entschuldigung, dieser Artikel ist ausverkauft.',
+        it: 'Spiacenti, articolo esaurito.',
+        zh: '抱歉，该菜品已售罄。',
+        ar: 'عذراً، هذا العنصر غير متوفر حالياً.',
+      });
+      runVoiceOver(soldOutMsg, false, 'Sorry, this item is currently sold out.');
+      setAccessibleToast(`🛑 ${soldOutMsg}`);
+      setTimeout(() => setAccessibleToast(''), 3200);
+      return;
+    }
+    const transName = ['en', 'fr', 'de', 'it', 'zh', 'ar'].includes(appLang)
+      ? (item.nameEn || item.nameAm)
+      : item.nameAm;
     const newItem: OrderItem = {
       id: `${item.id}-${Date.now()}`,
       baseId: item.id,
-      name: appLang === 'am' ? item.nameAm : (item.nameEn || item.nameAm),
+      name: transName,
       qty: 1,
       price: item.price
     };
-    setCart(prev => [...prev, newItem]);
+    const nextCart = [...cart, newItem];
+    setCart(nextCart);
+    if (isVoiceOverEnabled) playAccessibleChime('added');
+    runVoiceOver(
+      tText({
+        am: `${transName} ወደ ቅርጫት ታክሏል።`,
+        en: `Added ${transName} to cart.`,
+        or: `${transName} gara guuboo dabalameera.`,
+        ti: `${transName} ናብ ዘንቢል ተወሲኹ።`,
+        sid: `${transName} guboora ledamino.`,
+        fr: `${transName} ajouté au panier.`,
+        de: `${transName} zum Warenkorb hinzugefügt.`,
+        it: `${transName} aggiunto al carrello.`,
+        zh: `已将 ${transName} 加入购物车。`,
+        ar: `تمت إضافة ${transName} إلى السلة.`,
+      }),
+      false,
+      `Added ${item.nameEn || transName} to cart.`,
+    );
   };
 
   const handleFocusMenuItemFromAssistant = (item: MenuItem) => {
@@ -3550,9 +4671,142 @@ export default function App() {
     setTimeout(() => {
       const el = document.getElementById(`menu-card-item-${item.id}`);
       if (el) {
-        el.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+        el.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
       }
     }, 120);
+  };
+
+  const handleVoiceExecuteResult = (result: VoiceOrderResponse) => {
+    if (result.focusCategoryId) {
+      setMenuSearchQuery('');
+      setSelectedCategory(result.focusCategoryId);
+    }
+
+    let nextCartState = [...cart];
+
+    if (result.itemIdsToRemove && result.itemIdsToRemove.length > 0) {
+      const hasClearAll = result.itemIdsToRemove.some((id) => id.toLowerCase() === 'all');
+      if (hasClearAll) {
+        nextCartState = [];
+      } else {
+        const removeSet = new Set(result.itemIdsToRemove);
+        nextCartState = nextCartState.filter(
+          (ci) => !removeSet.has(ci.id) && !removeSet.has(ci.baseId),
+        );
+      }
+    }
+
+    const vPepper = tText({ am: 'ቃሪያ', en: 'Pepper', or: 'Qariyaa', ti: 'ቃሪያ', sid: 'Qaariya', fr: 'Piment', de: 'Pfeffer', it: 'Peperoncino', zh: '青椒', ar: 'فلفل' });
+    const vInjera = tText({ am: 'እንጀራ', en: 'Injera', or: 'Injera', ti: 'እንጀራ', sid: 'Injera', fr: 'Injéra', de: 'Injera', it: 'Injera', zh: '英吉拉', ar: 'إينجيرا' });
+    const vBread = tText({ am: 'ዳቦ', en: 'Bread', or: 'Damboo', ti: 'ዳቦ', sid: 'Daboo', fr: 'Pain', de: 'Brot', it: 'Pane', zh: '面包', ar: 'خبز' });
+    const vMayo = tText({ am: 'ማዮኔዝ', en: 'Extra Mayo', or: 'Maayooniizii', ti: 'ማዮኔዝ', sid: 'Maayooniize', fr: 'Mayonnaise', de: 'Extra Mayo', it: 'Maionese', zh: '加蛋黄酱', ar: 'مايونيز إضافي' });
+    const vKocho = tText({ am: 'ቆጮ', en: 'Extra Kocho', or: 'Qoccoo', ti: 'ቆጮ', sid: 'Qoocoo', fr: 'Extra Kocho', de: 'Extra Kocho', it: 'Extra Kocho', zh: '加科乔饼', ar: 'كوتشو إضافي' });
+    const vYes = tText({ am: 'አለ', en: 'Yes', or: 'Eeyyee', ti: 'ኣሎ', sid: 'Ee', fr: 'Oui', de: 'Ja', it: 'Sì', zh: '有', ar: 'نعم' });
+    const vNo = tText({ am: 'የለም', en: 'No', or: 'Lakki', ti: 'የለን', sid: 'Dino', fr: 'Non', de: 'Nein', it: 'No', zh: '无', ar: 'لا' });
+    const vSep = appLang === 'am' || appLang === 'ti' ? '፣ ' : ', ';
+
+    if (result.itemsToAdd && result.itemsToAdd.length > 0) {
+      const newlyAdded: OrderItem[] = [];
+      for (const action of result.itemsToAdd) {
+        const item = menuItems.find((m) => m.id === action.itemId && m.available);
+        if (!item) continue;
+
+        const transName = ['en', 'fr', 'de', 'it', 'zh', 'ar'].includes(appLang)
+          ? (item.nameEn || item.nameAm)
+          : item.nameAm;
+        const isDrink =
+          item.cat === 'drinks' ||
+          item.cat.toLowerCase().includes('drink') ||
+          item.cat.toLowerCase().includes('beverage');
+
+        let finalLabel = transName;
+        let priceOffset = 0;
+        const options: string[] = [];
+
+        if (!isDrink && (item.customizable || item.cat === 'food' || item.cat === 'traditional')) {
+          if (action.pepper === 'no') {
+            options.push(`${vPepper}: ${vNo}`);
+          } else if (action.pepper === 'yes') {
+            options.push(`${vPepper}: ${vYes}`);
+          }
+
+          if (action.injera) {
+            const mappedInjera =
+              action.injera === 'none'
+                ? 'የለም'
+                : action.injera === 'half'
+                  ? 'ግማሽ'
+                  : 'ሙሉ';
+            const injPrice = Number(modifierOptions.injeraPrices?.[mappedInjera] || 0);
+            if (injPrice > 0) {
+              options.push(`${vInjera}: ${getTranslatedModifierValue(mappedInjera)} (+${injPrice})`);
+              priceOffset += injPrice;
+            } else {
+              options.push(`${vInjera}: ${getTranslatedModifierValue(mappedInjera)}`);
+            }
+          }
+
+          if (action.breadCount && action.breadCount > 0) {
+            const breadCost = action.breadCount * Number(modifierOptions.daboPrice || 15);
+            options.push(`${vBread}: ${action.breadCount} (+${breadCost})`);
+            priceOffset += breadCost;
+          }
+        }
+
+        if (action.extraMayo && !isDrink) {
+          const mayoCost = Number(modifierOptions.mayoPrice || 20);
+          options.push(`${vMayo} (+${mayoCost})`);
+          priceOffset += mayoCost;
+        }
+
+        if (action.extraKocho && !isDrink) {
+          const kochoCost = Number(modifierOptions.kochoPrice || 45);
+          options.push(`${vKocho} (+${kochoCost})`);
+          priceOffset += kochoCost;
+        }
+
+        if (action.customInstructions && action.customInstructions.trim() && !isDrink) {
+          const customCost = Number(modifierOptions.customAdditionsPrice || 35);
+          options.push(`${action.customInstructions.trim()} (+${customCost})`);
+          priceOffset += customCost;
+        }
+
+        if (options.length > 0) {
+          finalLabel += ` (${options.join(vSep)})`;
+        }
+
+        newlyAdded.push({
+          id: `${item.id}-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+          baseId: item.id,
+          name: finalLabel,
+          qty: Math.max(1, action.quantity || 1),
+          price: item.price + priceOffset,
+        });
+      }
+
+      if (newlyAdded.length > 0) {
+        nextCartState = [...nextCartState, ...newlyAdded];
+        const firstAddedMenuItem = menuItems.find((m) => m.id === newlyAdded[0].baseId);
+        if (firstAddedMenuItem) {
+          setMenuSearchQuery('');
+          setSelectedCategory(firstAddedMenuItem.cat);
+          setSelectedMenuCardId(firstAddedMenuItem.id);
+        }
+        const totalAmt = nextCartState.reduce((s, ci) => s + ci.qty * ci.price, 0);
+        setAccessibleToast(`🎙️ ${newlyAdded.map((n) => `${n.qty}× ${n.name}`).join(', ')} • ${totalAmt} ${currency}`);
+        setTimeout(() => setAccessibleToast(''), 4000);
+      }
+    }
+
+    setCart(nextCartState);
+
+    if (result.intent === 'open_cart' || result.intent === 'confirm_order') {
+      if (nextCartState.length > 0) {
+        setTimeout(() => setIsCartOpen(true), 450);
+      }
+    } else if (result.intent === 'call_waiter') {
+      handleTriggerBuzzer();
+    }
   };
 
   // GUEST CHEKOUT LOGIC
@@ -3568,12 +4822,39 @@ export default function App() {
     receiptScreenshot?: string;
     receiptComment?: string;
   }) => {
+    const soldOutInCart = cart.filter((ci) => {
+      const match = menuItems.find((m) => m.id === ci.baseId);
+      return match && !match.available;
+    });
+    if (soldOutInCart.length > 0) {
+      const names = soldOutInCart.map((s) => s.name).join(', ');
+      const soldOutAlert = tText({
+        am: `🛑 እባክዎ ከቅርጫት ያስወግዱ — የሚከተሉት ምግቦች አልቀዋል: ${names}`,
+        en: `🛑 Cannot place order — the following item(s) just sold out: ${names}`,
+        or: `🛑 Ajajuun hin danda'amu — nyaatni kun dhumeera: ${names}`,
+        ti: `🛑 ትእዛዝ ክስደድ ኣይተኻእለን — እዚ ተወዲኡ ኣሎ: ${names}`,
+        sid: `🛑 Hajajo soyya di-dandiinanni — gooffino: ${names}`,
+        fr: `🛑 Commande impossible — article(s) épuisé(s) : ${names}`,
+        de: `🛑 Bestellung nicht möglich — ausverkauft: ${names}`,
+        it: `🛑 Impossibile ordinare — esaurito: ${names}`,
+        zh: `🛑 无法下单 — 以下菜品已售罄：${names}`,
+        ar: `🛑 تعذر الطلب — الأصناف التالية غير متوفرة: ${names}`,
+      });
+      setAccessibleToast(soldOutAlert);
+      setTimeout(() => setAccessibleToast(''), 4500);
+      return;
+    }
+
     const subtotal = cart.reduce((sum, item) => sum + (item.price * item.qty), 0);
     const sc = Math.round((subtotal * serviceChargeRate) / 100);
     const vt = Math.round(((subtotal + sc) * vatRate) / 100);
     const nowMs = Date.now();
     const timeNow = new Date(nowMs).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
     const dateTodayStr = new Date(nowMs).toISOString().split('T')[0]; // Format: YYYY-MM-DD
+
+    const assignedWaiterForLoc = getAssignedWaiterForTable(details.location);
+    const assignedChefForLoc = getAssignedChefForTable(details.location);
+    const isPaidUpfront = details.payment === 'chapa';
 
     const newOrder: Order = {
       id: '#O-' + Math.floor(100 + Math.random() * 900),
@@ -3583,40 +4864,67 @@ export default function App() {
       serviceCharge: sc,
       vat: vt,
       tip: details.tip,
-      status: 'Pending',
+      status: isPaidUpfront ? 'Paid' : 'Pending',
+      paymentVerified: isPaidUpfront,
       cookingStatus: 'Pending',
       servedByWaiter: false,
+      checkedByWaiter: false,
       payment: details.payment,
       bankId: details.bankId,
       bankRef: details.bankRef,
       receiptScreenshot: details.receiptScreenshot,
       receiptComment: details.receiptComment,
       confirmed: true,
-      waiter: currentUser?.name || 'የጠረጴዛ አስተናጋጅ',
-      createdByRole: currentUser?.role || 'waiter',
+      waiter: assignedWaiterForLoc || (currentUser?.role === 'waiter' ? currentUser.name : undefined),
+      chefName: assignedChefForLoc || undefined,
+      createdByRole: currentUser?.role || 'customer',
       orderType: details.orderType,
       deliveryPhone: details.phone,
       deliveryAddress: details.address,
       time: timeNow,
       date: dateTodayStr,
-      createdAt: nowMs
+      createdAt: nowMs,
+      updatedAt: nowMs,
     };
 
     setOrders(prev => [newOrder, ...prev]);
     setTrackedOrderIds(prev => [newOrder.id, ...prev.filter(id => id !== newOrder.id)]);
     setLastPlacedOrderId(newOrder.id);
     setCart([]);
-    
-    // Trigger real-time buzzer/assistance call on waiter dashboard when ordering
+
+    // Route new order notification cleanly to Kitchen (Chef) without triggering premature pickup alarm
     const orderBuzzerCall: AssistanceCall = {
-      id: 'order-' + newOrder.id.replace('#', '') + '-' + nowMs,
+      id: 'neword-' + newOrder.id.replace('#', '') + '-' + nowMs,
+      orderId: newOrder.id,
       location: details.location,
       time: timeNow,
       active: true,
-      type: 'pickup',
-      message: `🛍️ አዲስ ትዕዛዝ ${newOrder.id} ገብቷል! (New Order placed)`
+      type: 'new_order',
+      targetRole: 'chef',
+      targetWaiter: assignedWaiterForLoc || undefined,
+      createdAt: nowMs,
+      message: `🛎️ አዲስ ትዕዛዝ ${newOrder.id} (${details.location}) ወደ ኩሽና ገብቷል! (${isPaidUpfront ? 'Paid · Chapa' : details.payment.toUpperCase()})`
     };
     addAssistanceCall(orderBuzzerCall);
+
+    if (isVoiceOverEnabled) playAccessibleChime('added');
+    const placedEn = `Order ${newOrder.id} placed successfully for ${details.location}. Total ${newOrder.total} Birr.`;
+    runVoiceOver(
+      tText({
+        am: `ትዕዛዝዎ ${newOrder.id} በተሳካ ሁኔታ ተልኳል። ጠቅላላ ሂሳብ ${newOrder.total} ${currency} ነው።`,
+        en: `Order ${newOrder.id} placed successfully for ${details.location}. Total ${newOrder.total} ${currency}.`,
+        or: `Ajajni keessan ${newOrder.id} (${details.location}) milkaa'inaan ergameera. Waliigala ${newOrder.total} ${currency}.`,
+        ti: `ትእዛዝኩም ${newOrder.id} ናብ ${details.location} ብዓወት ተላኢኹ። ጠቕላላ ${newOrder.total} ${currency}።`,
+        sid: `Hajajokki ${newOrder.id} (${details.location}) danchunni soyino. Mulu ${newOrder.total} ${currency}.`,
+        fr: `Commande ${newOrder.id} envoyée pour ${details.location}. Total ${newOrder.total} ${currency}.`,
+        de: `Bestellung ${newOrder.id} für ${details.location} gesendet. Gesamt ${newOrder.total} ${currency}.`,
+        it: `Ordine ${newOrder.id} inviato per ${details.location}. Totale ${newOrder.total} ${currency}.`,
+        zh: `订单 ${newOrder.id} 已成功发送（${details.location}），合计 ${newOrder.total} ${currency}。`,
+        ar: `تم إرسال الطلب ${newOrder.id} بنجاح إلى ${details.location}. الإجمالي ${newOrder.total} ${currency}.`,
+      }),
+      false,
+      placedEn,
+    );
 
     // Open Live Order Tracker modal immediately so guest sees queue position & orders ahead
     setIsLiveTrackerOpen(true);
@@ -3654,7 +4962,127 @@ export default function App() {
   };
 
   const handleToggleMenuItemAvailable = (id: string) => {
-    setMenuItems(prev => prev.map(m => m.id === id ? { ...m, available: !m.available } : m));
+    const targetItem = menuItems.find((m) => m.id === id);
+    if (!targetItem) return;
+
+    const previousAvailable = targetItem.available;
+    const nextAvailable = !previousAvailable;
+    const now = new Date();
+    const timeNow = now.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
+    const dateNow = now.toISOString().split('T')[0];
+
+    const fallbackActorByRole: Record<string, string> = {
+      chef: 'Kitchen Staff',
+      waiter: 'Waiter Staff',
+      manager: leadershipContacts.managerName || 'Manager',
+      admin: leadershipContacts.gmName || 'System Admin',
+    };
+    const changedByName = currentUser?.name || fallbackActorByRole[activeRole] || 'Staff Member';
+    const changedByRole = currentUser?.role || activeRole || 'staff';
+    const logId = `sa-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+
+    const logEntry: StockAlertLogEntry = {
+      id: logId,
+      menuItemId: targetItem.id,
+      itemNameAm: targetItem.nameAm,
+      itemNameEn: targetItem.nameEn || targetItem.nameAm,
+      category: targetItem.cat,
+      previousAvailable,
+      newAvailable: nextAvailable,
+      changedByName,
+      changedByRole,
+      time: timeNow,
+      date: dateNow,
+      timestamp: now.getTime(),
+      acknowledged: false,
+      pushDispatched: !nextAvailable && stockAlertSettings.pushEnabled,
+      smsDispatched: false,
+    };
+
+    setMenuItems((prev) => prev.map((m) => (m.id === id ? { ...m, available: nextAvailable } : m)));
+    setStockAlertLogs((prev) => [logEntry, ...prev].slice(0, 200));
+
+    if (!nextAvailable && stockAlertSettings.smsEnabled && stockAlertSettings.managerPhone.trim()) {
+      fetch('/api/alerts/stock-notify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          itemNameAm: targetItem.nameAm,
+          itemNameEn: targetItem.nameEn || targetItem.nameAm,
+          changedByName,
+          changedByRole,
+          time: timeNow,
+          managerPhone: stockAlertSettings.managerPhone.trim(),
+        }),
+      })
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data) => {
+          if (data?.deliveredViaSms) {
+            setStockAlertLogs((prev) =>
+              prev.map((l) => (l.id === logId ? { ...l, smsDispatched: true } : l)),
+            );
+          }
+        })
+        .catch(() => {});
+    }
+  };
+
+  const handleAcknowledgeStockAlert = (logId: string) => {
+    const ackBy = currentUser?.name || leadershipContacts.managerName || 'Manager';
+    const ackAt = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
+    setStockAlertLogs((prev) =>
+      prev.map((l) =>
+        l.id === logId ? { ...l, acknowledged: true, acknowledgedBy: ackBy, acknowledgedAt: ackAt } : l,
+      ),
+    );
+  };
+
+  const handleAcknowledgeAllStockAlerts = () => {
+    const ackBy = currentUser?.name || leadershipContacts.managerName || 'Manager';
+    const ackAt = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
+    setStockAlertLogs((prev) =>
+      prev.map((l) =>
+        !l.newAvailable && !l.acknowledged
+          ? { ...l, acknowledged: true, acknowledgedBy: ackBy, acknowledgedAt: ackAt }
+          : l,
+      ),
+    );
+  };
+
+  const handleClearStockAlertLogs = () => {
+    setStockAlertLogs([]);
+  };
+
+  const handleManagerCallWaiter = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const loc = managerWaiterCallLocation.trim() || 'Service Desk';
+    const assigned = managerWaiterCallTarget.trim() || getAssignedWaiterForTable(loc) || undefined;
+    const sender = currentUser?.name || leadershipContacts.managerName || 'Manager';
+    const nowMs = Date.now();
+    const timeNow = new Date(nowMs).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
+    const noteText = managerWaiterCallNote.trim()
+      ? `👑 ከማናጀር (${sender}): ${managerWaiterCallNote.trim()}`
+      : `👑 ማናጀር (${sender}) አስተናጋጅ ጠርተዋል`;
+
+    const call: AssistanceCall = {
+      id: 'mgr-call-' + nowMs,
+      location: loc,
+      time: timeNow,
+      active: true,
+      type: 'call',
+      reason: 'Manager Waiter Call',
+      message: noteText,
+      targetWaiter: assigned,
+      targetRole: 'waiter',
+      createdAt: nowMs,
+    };
+    addAssistanceCall(call);
+    playWaiterCallAlertSound(loc, assigned, noteText);
+    setManagerWaiterCallNote('');
+    setManagerWaiterCallFeedback(
+      `✓ ለ${assigned ? ` ${assigned}` : 'አስተናጋጆች'} (${loc}) የድምፅ ጥሪ ተልኳል!`,
+    );
+    setTimeout(() => setManagerWaiterCallFeedback(null), 4000);
   };
 
   const handleRemoveMenuItem = (id: string) => {
@@ -3924,6 +5352,24 @@ export default function App() {
     setQrGeneratedUrl(url);
   };
 
+  const handlePrintQrCard = () => {
+    const cleanLocation = (qrLocation.trim() || 'TABLE 01').toUpperCase();
+    const fallbackUrl = `https://ais-pre-o4e7tydp6hz3g2z7skgpe4-75812013665.europe-west2.run.app/?table=${encodeURIComponent(cleanLocation)}`;
+    const now = new Date();
+    const entry: QrPrintLogEntry = {
+      id: `qrp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      location: cleanLocation,
+      qrUrl: qrGeneratedUrl || fallbackUrl,
+      printedByName: currentUser?.name || leadershipContacts.gmName || 'System Admin',
+      printedByRole: currentUser?.role || activeRole || 'admin',
+      time: now.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+      date: now.toISOString().split('T')[0],
+      timestamp: now.getTime(),
+    };
+    setQrPrintLogs((prev) => [entry, ...prev].slice(0, 100));
+    window.print();
+  };
+
   // CHEF WORKFLOW
   const handleConfirmOrderPayment = (orderId: string, confirmed: boolean) => {
     setOrders(prev => prev.map(o => o.id === orderId ? { ...o, confirmed } : o));
@@ -3959,20 +5405,72 @@ export default function App() {
     }
   };
 
+  const isStaffOrderRestricted = () => {
+    if (activeRole === 'customer' || activeRole === 'entry') return false;
+    if (isSupervisorRole(currentUser)) return false;
+    const effRole = (currentUser?.accessPrivilege || currentUser?.role || activeRole || '').toLowerCase();
+    return activeRole === 'waiter' || activeRole === 'chef' || effRole === 'waiter' || effRole === 'chef';
+  };
+
   const handleUpdateOrderStatus = (orderId: string, newStatus: OrderStatus) => {
     const targetOrder = orders.find(o => o.id === orderId);
-    if (targetOrder && newStatus === 'Completed') {
-      playVoiceAlert(`Attention waiter! Order for ${targetOrder.location} is ready! Chef completed cooking.`);
-      const chefBuzzerCall: AssistanceCall = {
-        id: 'chef-' + orderId + '-' + Date.now(),
-        location: targetOrder.location,
-        time: new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' }),
-        active: true,
-        type: 'pickup',
-        message: `👨‍🍳 ትዕዛዝ ${orderId} ተዘጋጅቷል - ከኩሽና ይወሰድ! (Order Ready - Pick up from Kitchen)`
-      };
-      addAssistanceCall(chefBuzzerCall);
+    if (!targetOrder) return;
+
+    if (isStaffOrderRestricted()) {
+      const access = canStaffAccessOrder(currentUser, targetOrder, shiftAssignments, tableAssignments);
+      if (!access.allowed) {
+        setAccessibleToast(`🔒 የፈረቃ መዳረሻ ተከልክሏል (Access Denied): ${access.reason}`);
+        setTimeout(() => setAccessibleToast(''), 4000);
+        return;
+      }
     }
+
+    const nowMs = Date.now();
+    const timeNow = new Date(nowMs).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
+    const resolvedWaiter =
+      (!isGenericWaiterLabel(targetOrder.waiter) ? targetOrder.waiter : '') ||
+      getAssignedWaiterForTable(targetOrder.location) ||
+      undefined;
+
+    if (newStatus === 'Preparing') {
+      resolveOrderAssistanceCalls(orderId, currentUser?.name, ['new_order']);
+    }
+
+    if (newStatus === 'Completed') {
+      resolveOrderAssistanceCalls(orderId, currentUser?.name, ['new_order']);
+      const pickupId = getKitchenPickupAlertId(orderId);
+      const bareId = orderId.replace(/^#/, '').trim();
+      const existingActivePickup = assistanceCalls.find(
+        (c) =>
+          c.active !== false &&
+          c.type === 'pickup' &&
+          (c.id === pickupId || (c.orderId && c.orderId.replace(/^#/, '').trim() === bareId))
+      );
+
+      if (!existingActivePickup) {
+        if (triggeredPickupAlertIdsRef.current) {
+          triggeredPickupAlertIdsRef.current.add(pickupId);
+        }
+        playVoiceAlert(`Attention ${resolvedWaiter || 'waiter'}! Order for ${targetOrder.location} is ready! Chef completed cooking.`);
+        const chefBuzzerCall: AssistanceCall = {
+          id: pickupId,
+          orderId,
+          location: targetOrder.location,
+          time: timeNow,
+          active: true,
+          type: 'pickup',
+          targetRole: 'waiter',
+          targetWaiter: resolvedWaiter,
+          createdAt: nowMs,
+          message: resolvedWaiter
+            ? `🍲 ${resolvedWaiter} — ${targetOrder.location} (${orderId}) ተሰርቶ አልቋል! እባክዎ ቼክ አድርገው ለደንበኛው ያድርሱ! (Ready from Kitchen)`
+            : `🍲 ትዕዛዝ ${orderId} (${targetOrder.location}) ተሰርቶ አልቋል — ቼክ አድርገው ለደንበኛው ያድርሱ! (Ready from Kitchen)`
+        };
+        addAssistanceCall(chefBuzzerCall);
+      }
+    }
+
+    const activeRoleLower = (currentUser?.accessPrivilege || currentUser?.role || activeRole || '').toLowerCase();
 
     setOrders(prev => {
       return prev.map(o => {
@@ -3983,7 +5481,11 @@ export default function App() {
             ...o, 
             status: finalStatus, 
             cookingStatus: updatedCooking,
-            servedByWaiter: newStatus === 'Completed' ? false : o.servedByWaiter
+            servedByWaiter: newStatus === 'Completed' ? false : o.servedByWaiter,
+            readyAt: newStatus === 'Completed' ? timeNow : o.readyAt,
+            updatedAt: nowMs,
+            chefName: activeRoleLower === 'chef' && currentUser?.name ? currentUser.name : o.chefName,
+            waiter: resolvedWaiter || (activeRoleLower === 'waiter' && currentUser?.name && !o.waiter ? currentUser.name : o.waiter),
           };
         }
         return o;
@@ -3995,6 +5497,27 @@ export default function App() {
     const targetOrder = orders.find(o => o.id === orderId);
     if (!targetOrder) return;
 
+    if (isStaffOrderRestricted()) {
+      const access = canStaffAccessOrder(currentUser, targetOrder, shiftAssignments, tableAssignments);
+      if (!access.allowed) {
+        setAccessibleToast(`🔒 የፈረቃ መዳረሻ ተከልክሏል (Access Denied): ${access.reason}`);
+        setTimeout(() => setAccessibleToast(''), 4000);
+        return;
+      }
+    }
+
+    const nowMs = Date.now();
+    const timeNow = new Date(nowMs).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
+    const activeRoleLower = (currentUser?.accessPrivilege || currentUser?.role || activeRole || '').toLowerCase();
+    const resolvedWaiter =
+      (waiterName && waiterName.trim()) ||
+      (!isGenericWaiterLabel(targetOrder.waiter) ? targetOrder.waiter : '') ||
+      getAssignedWaiterForTable(targetOrder.location) ||
+      undefined;
+
+    // Clear kitchen incoming alert once cooked
+    resolveOrderAssistanceCalls(orderId, currentUser?.name, ['new_order']);
+
     // Mark as completed and update the assigned waiter
     setOrders(prev => {
       return prev.map(o => {
@@ -4005,36 +5528,87 @@ export default function App() {
             status: finalStatus,
             cookingStatus: 'Completed',
             servedByWaiter: false,
-            waiter: waiterName || o.waiter
+            checkedByWaiter: false,
+            readyAt: timeNow,
+            updatedAt: nowMs,
+            waiter: resolvedWaiter || o.waiter,
+            chefName: activeRoleLower === 'chef' && currentUser?.name ? currentUser.name : o.chefName,
           };
         }
         return o;
       });
     });
 
-    const targetMsg = waiterName 
-      ? `👨‍🍳 ${waiterName} - ጠረጴዛ ${targetOrder.location} ያዘዙት ትዕዛዝ #${orderId} ተዘጋጅቷል - እባክዎ ከኩሽና ይውሰዱ! (Targeted Waiter Delivery)`
-      : `👨‍🍳 ትዕዛዝ #${orderId} ለጠረጴዛ ${targetOrder.location} ተዘጋጅቷል - ከኩሽና ይወሰድ! (Order Ready - Pick up)`;
+    const pickupId = getKitchenPickupAlertId(orderId);
+    const bareId = orderId.replace(/^#/, '').trim();
+    const existingActivePickup = assistanceCalls.find(
+      (c) =>
+        c.active !== false &&
+        c.type === 'pickup' &&
+        (c.id === pickupId || (c.orderId && c.orderId.replace(/^#/, '').trim() === bareId))
+    );
 
-    if (waiterName) {
-      playVoiceAlert(`Attention ${waiterName}! Order for ${targetOrder.location} is ready! Please deliver it.`);
-    } else {
-      playVoiceAlert(`Attention waiter! Order for ${targetOrder.location} is ready!`);
+    const targetMsg = resolvedWaiter
+      ? `🍲 ${resolvedWaiter} — ${targetOrder.location} (${orderId}) ተሰርቶ አልቋል! እባክዎ ቼክ አድርገው ለደንበኛው ያድርሱ! (Ready for Check & Delivery)`
+      : `🍲 ${orderId} (${targetOrder.location}) ተሰርቶ አልቋል — ማንኛውም አስተናጋጅ ቼክ አድርጎ ያድርስ! (Ready from Kitchen)`;
+
+    // Ensure alerts are unique and not repetitive by checking active alert IDs in assistanceCalls
+    if (!existingActivePickup) {
+      if (triggeredPickupAlertIdsRef.current) {
+        triggeredPickupAlertIdsRef.current.add(pickupId);
+      }
+      if (resolvedWaiter) {
+        playVoiceAlert(`Attention ${resolvedWaiter}! Order for ${targetOrder.location} is ready! Please check and deliver.`);
+      } else {
+        playVoiceAlert(`Attention waiter! Order for ${targetOrder.location} is ready! Please check and deliver.`);
+      }
+
+      const chefBuzzerCall: AssistanceCall = {
+        id: pickupId,
+        orderId,
+        location: targetOrder.location,
+        time: timeNow,
+        active: true,
+        type: 'pickup',
+        targetRole: 'waiter',
+        targetWaiter: resolvedWaiter,
+        createdAt: nowMs,
+        message: targetMsg
+      };
+
+      addAssistanceCall(chefBuzzerCall);
+    } else if (resolvedWaiter && existingActivePickup.targetWaiter !== resolvedWaiter) {
+      // Update the existing unique active pickup alert's assigned waiter without spawning a duplicate alert
+      addAssistanceCall({
+        ...existingActivePickup,
+        id: existingActivePickup.id,
+        targetWaiter: resolvedWaiter,
+        message: targetMsg,
+      });
     }
+  };
 
-    const chefBuzzerCall: AssistanceCall = {
-      id: 'chef-' + orderId + '-' + Date.now(),
-      location: targetOrder.location,
-      time: new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' }),
-      active: true,
-      type: 'pickup',
-      message: targetMsg
-    };
-
-    addAssistanceCall(chefBuzzerCall);
+  const handleOpenOrderAdjustment = (ord: Order) => {
+    if (isStaffOrderRestricted()) {
+      const access = canStaffAccessOrder(currentUser, ord, shiftAssignments, tableAssignments);
+      if (!access.allowed) {
+        alert(`🔒 የፈረቃ መዳረሻ ተከልክሏል (Edit Blocked): ${access.reason}`);
+        return;
+      }
+    }
+    setAdjustingOrder(ord);
   };
 
   const handleSaveOrderAdjustments = (updatedOrder: Order) => {
+    const existing = orders.find(o => o.id === updatedOrder.id) || updatedOrder;
+    if (isStaffOrderRestricted()) {
+      const access = canStaffAccessOrder(currentUser, existing, shiftAssignments, tableAssignments);
+      if (!access.allowed) {
+        alert(`🔒 የፈረቃ መዳረሻ ተከልክሏል (Save Blocked): ${access.reason}`);
+        setAdjustingOrder(null);
+        return;
+      }
+    }
     setOrders(prev => prev.map(o => o.id === updatedOrder.id ? updatedOrder : o));
     setAdjustingOrder(null);
     alert('✔️ ትዕዛዙ በተሳካ ሁኔታ ተስተካክሏል! / Order adjustments saved successfully.');
@@ -4301,49 +5875,29 @@ export default function App() {
     const title = (e.currentTarget.querySelector('#promo-title') as HTMLInputElement).value;
     const desc = (e.currentTarget.querySelector('#promo-desc') as HTMLInputElement).value;
     const tag = (e.currentTarget.querySelector('#promo-tag') as HTMLInputElement).value;
-    const video = addPromoVideo || (e.currentTarget.querySelector('#promo-video') as HTMLInputElement).value;
     const poster = addPromoPoster || (e.currentTarget.querySelector('#promo-poster') as HTMLInputElement).value;
 
-    const newPr = { title, desc, tag, video, poster };
+    const newPr = { title, desc, tag, poster };
     setPromos(prev => [...prev, newPr]);
-    setAddPromoVideo('');
     setAddPromoPoster('');
     alert('📢 ማስታወቂያው በተሳካ ሁኔታ ተመዝግቧል! / Promotion campaign registered.');
     e.currentTarget.reset();
   };
 
-  const getYouTubeEmbedUrl = (url: string, isMuted: boolean = true, isAutoplay: boolean = true) => {
-    let videoId = 'EvwYOmxaxdA'; // Chef Cooking Sizzle video loop matching gourmet food preparation
-    if (url) {
-      if (url.includes('pixabay.com') || url.includes('202004')) {
-        videoId = 'EvwYOmxaxdA';
-      } else if (url.includes('youtu.be/')) {
-        videoId = url.split('youtu.be/')[1]?.split('?')[0] || videoId;
-      } else if (url.includes('v=')) {
-        videoId = url.split('v=')[1]?.split('&')[0] || videoId;
-      } else if (url.includes('embed/')) {
-        videoId = url.split('embed/')[1]?.split('?')[0] || videoId;
-      } else if (url.trim().length === 11) {
-        videoId = url.trim();
-      }
-    }
-    return `https://www.youtube-nocookie.com/embed/${videoId}?autoplay=${isAutoplay ? '1' : '0'}&mute=${isMuted ? '1' : '0'}&loop=1&playlist=${videoId}&controls=0&showinfo=0&rel=0&iv_load_policy=3&playsinline=1&modestbranding=1&disablekb=1&fs=0&wmode=transparent&enablejsapi=1`;
-  };
-
   if (currentPath === '/login') {
-    return <SupabaseLogin appLang={appLang === 'am' ? 'am' : 'en'} />;
+    return <SupabaseLogin appLang={appLang} />;
   }
 
   if (currentPath === '/admin') {
     return (
-      <div className="min-h-screen bg-[#070707] text-white flex flex-col p-4 md:p-8 justify-center items-center font-sans relative z-10 text-center animate-fade-in">
-        <div className="max-w-md bg-[#121212] border border-white/10 p-8 rounded-2xl shadow-xl space-y-6">
-          <div className="w-16 h-16 bg-[#C1FF00]/10 border border-[#C1FF00]/30 rounded-full flex items-center justify-center mx-auto text-2xl">
+      <div dir={isRtl ? 'rtl' : 'ltr'} className="min-h-screen bg-[#7A1010] text-white flex flex-col p-4 md:p-8 justify-center items-center font-sans relative z-10 text-center animate-fade-in">
+        <div className="max-w-md bg-[#991B1B] border-2 border-[#F4C22B] p-8 rounded-2xl shadow-2xl space-y-6">
+          <div className="w-16 h-16 bg-[#F4C22B] border-2 border-white rounded-full flex items-center justify-center mx-auto text-2xl">
             🔒
           </div>
           <div className="space-y-2">
             <h1 className="text-xl font-black uppercase tracking-tight text-white">Super CMS Disabled</h1>
-            <p className="text-xs text-stone-400">
+            <p className="text-xs text-[#FEF3C7]">
               The SuperAdmin CMS component is currently disabled or has been removed. Please use the manager or administrator dashboard inside the application to handle operations.
             </p>
           </div>
@@ -4353,7 +5907,7 @@ export default function App() {
                 window.history.pushState({}, '', '/');
                 window.dispatchEvent(new PopStateEvent('popstate'));
               }}
-              className="w-full py-3 bg-[#C1FF00] hover:bg-white text-black text-xs font-black uppercase tracking-wider rounded-xl transition-colors cursor-pointer"
+              className="w-full py-3 bg-[#F4C22B] hover:bg-white text-[#1C1917] text-xs font-black uppercase tracking-wider rounded-xl transition-colors cursor-pointer border border-[#CF9D12]"
             >
               🛖 Go to Main Page
             </button>
@@ -4367,7 +5921,7 @@ export default function App() {
                 window.history.pushState({}, '', '/login');
                 window.dispatchEvent(new PopStateEvent('popstate'));
               }}
-              className="w-full py-3 bg-white/5 hover:bg-white/10 text-stone-300 hover:text-white text-xs font-bold uppercase tracking-wider rounded-xl transition-colors cursor-pointer border border-white/10"
+              className="w-full py-3 bg-[#7A1212] hover:bg-[#8C1414] text-white text-xs font-bold uppercase tracking-wider rounded-xl transition-colors cursor-pointer border border-[#F4C22B]/40"
             >
               🚪 Sign Out
             </button>
@@ -4377,469 +5931,397 @@ export default function App() {
     );
   }
 
+  const isStaffPortalRole = ['waiter', 'chef', 'receptionist', 'cashier', 'guard', 'manager', 'admin'].includes(activeRole);
+
   return (
-    <div className="min-h-screen bg-[#070707] text-white flex flex-col selection:bg-[#C1FF00] selection:text-black font-sans relative z-0">
+    <div
+      dir={isRtl ? 'rtl' : 'ltr'}
+      className={`min-h-screen overflow-x-clip flex flex-col font-sans relative z-0 ${
+        isStaffPortalRole
+          ? 'bg-[#FAF6F0] text-stone-900 staff-menu-theme selection:bg-[#f4c22b] selection:text-stone-950'
+          : 'bg-[#070707] text-white selection:bg-[#F4C22B] selection:text-[#1C1917]'
+      }`}
+    >
       {(activeRole === 'entry' || activeRole === 'customer') && (
-        <div 
-          id="video-bg-container" 
-          className={`fixed inset-0 w-screen h-screen overflow-hidden pointer-events-none z-[1] bg-black transition-opacity duration-1000 ${
-            activeRole === 'customer' ? 'opacity-55' : 'opacity-100'
+        <div
+          id="ambient-bg-container"
+          className={`fixed inset-0 w-full h-full overflow-hidden pointer-events-none z-[1] bg-[#070707] transition-opacity duration-500 ${
+            activeRole === 'customer' ? 'opacity-65' : 'opacity-100'
           }`}
         >
-          {!isBgVideoEnabled || bgVideoType === 'gourmet-paradise' || bgVideoType === 'mango-paradise' ? (
-            <div className="absolute inset-0 w-full h-full overflow-hidden">
-              {/* Ken Burns zooming background image of luxury restaurant table */}
-              <motion.div
-                className="absolute inset-0 w-full h-full bg-cover bg-center"
-                style={{
-                  backgroundImage: `url(${gourmetBg})`,
-                  x: mousePos.x * -15,
-                  y: mousePos.y * -15,
-                }}
-                animate={{
-                  scale: [1, 1.04, 1],
-                }}
-                transition={{
-                  duration: 35,
-                  repeat: Infinity,
-                  ease: "easeInOut"
-                }}
-              />
-
-              {/* Glowing warm culinary fire/golden-amber light flare */}
-              <motion.div
-                className="absolute top-1/3 left-1/2 -translate-x-1/2 w-[700px] h-[700px] bg-amber-500/10 rounded-full blur-[150px]"
-                animate={{
-                  scale: [1, 1.2, 1],
-                  opacity: [0.4, 0.7, 0.4],
-                }}
-                transition={{
-                  duration: 12,
-                  repeat: Infinity,
-                  ease: "easeInOut"
-                }}
-              />
-
-              {/* Gently rising smoke curls / floating warm mist particles */}
-              {!isMobile && [...Array(5)].map((_, i) => (
-                <motion.div
-                  key={`smoke-${i}`}
-                  className="absolute bg-white/3 rounded-full blur-xl"
-                  style={{
-                    bottom: "-10%",
-                    left: `${20 + i * 15}%`,
-                    width: `${150 + i * 50}px`,
-                    height: `${150 + i * 50}px`,
-                  }}
-                  animate={{
-                    y: ["0%", "-120%"],
-                    x: [0, (i % 2 === 0 ? 30 : -30)],
-                    opacity: [0, 0.25, 0.15, 0],
-                    scale: [0.8, 1.3]
-                  }}
-                  transition={{
-                    duration: 14 + i * 3,
-                    repeat: Infinity,
-                    ease: "easeOut",
-                    delay: i * 2
-                  }}
-                />
-              ))}
-
-              {/* Rising culinary golden sparkles */}
-              {!isMobile && [...Array(12)].map((_, i) => (
-                <motion.div
-                  key={`sparkle-${i}`}
-                  className="absolute text-amber-300/30 font-serif select-none pointer-events-none"
-                  style={{
-                    bottom: "10%",
-                    left: `${10 + i * 8}%`,
-                    fontSize: `${12 + (i % 3) * 6}px`,
-                  }}
-                  animate={{
-                    y: ["0vh", "-95vh"],
-                    x: [0, Math.sin(i) * 40],
-                    opacity: [0, 0.6, 0.4, 0],
-                  }}
-                  transition={{
-                    duration: 10 + (i % 4) * 3,
-                    repeat: Infinity,
-                    ease: "easeInOut",
-                    delay: i * 1.5
-                  }}
-                >
-                  ✦
-                </motion.div>
-              ))}
-
-              {/* Floating Culinary Masterpiece Signature Dish */}
-              {!isMobile && (
-                <motion.div
-                  className="absolute right-[8%] top-[20%] w-[390px] h-[390px] hidden xl:flex items-center justify-center z-10"
-                  style={{
-                    x: mousePos.x * 25,
-                    y: mousePos.y * 25,
-                  }}
-                  animate={{
-                    y: [0, -20, 0],
-                    rotate: [0, 2, -2, 0]
-                  }}
-                  transition={{
-                    duration: 8,
-                    repeat: Infinity,
-                    ease: "easeInOut"
-                  }}
-                >
-                  {/* Under-plate shadow and ambient warm glow */}
-                  <div className="absolute inset-4 bg-amber-500/15 rounded-full blur-3xl" />
-                  
-                  <img
-                    src={signatureDish}
-                    alt="Lodge Gourmet Signature Dish"
-                    referrerPolicy="no-referrer"
-                    className="w-full h-full object-contain filter drop-shadow-[0_30px_50px_rgba(245,158,11,0.25)] rounded-full border border-white/5 bg-black/20 backdrop-blur-sm"
-                  />
-                </motion.div>
-              )}
-
-              {/* Floating Gourmet Delicacies / Food Items */}
-              {!isMobile && [
-                { emoji: '🥩', name: 'Steak', size: 'text-5xl' },
-                { emoji: '🍔', name: 'Burger', size: 'text-5xl' },
-                { emoji: '🍕', name: 'Pizza', size: 'text-5xl' },
-                { emoji: '🍤', name: 'Shrimp', size: 'text-4xl' },
-                { emoji: '🍅', name: 'Tomato', size: 'text-4xl' },
-              ].map((item, i) => (
-                <motion.div
-                  key={`food-${i}`}
-                  className={`absolute ${item.size} select-none filter drop-shadow-[0_15px_20px_rgba(0,0,0,0.45)]`}
-                  style={{
-                    left: `${12 + i * 18}%`,
-                    top: `${68 + (i % 3) * 6}%`,
-                    x: mousePos.x * (18 + i * 7),
-                    y: mousePos.y * (18 + i * 7),
-                  }}
-                  animate={{
-                    y: [0, -15 - (i * 3), 0],
-                    rotate: [0, 8 + i * 4, -8 - i * 4, 0]
-                  }}
-                  transition={{
-                    duration: 6 + i * 1.2,
-                    repeat: Infinity,
-                    ease: "easeInOut"
-                  }}
-                >
-                  {item.emoji}
-                </motion.div>
-              ))}
-
-              {/* Floating Fresh Herbs & Spices */}
-              {!isMobile && [
-                { emoji: '🌿', size: 'text-3xl' },
-                { emoji: '🌶️', size: 'text-3.5xl' },
-                { emoji: '🌱', size: 'text-2.5xl' },
-                { emoji: '🍋', size: 'text-3xl' },
-              ].map((item, i) => (
-                <motion.div
-                  key={`herb-${i}`}
-                  className={`absolute ${item.size} select-none filter drop-shadow-[0_8px_12px_rgba(0,0,0,0.25)]`}
-                  style={{
-                    left: `${8 + i * 26}%`,
-                    top: `${12 + i * 14}%`,
-                    x: mousePos.x * (14 + i * 5),
-                    y: mousePos.y * (14 + i * 5),
-                  }}
-                  animate={{
-                    y: [0, 12, 0],
-                    x: [0, -8, 0],
-                    rotate: [0, 15, -15, 0]
-                  }}
-                  transition={{
-                    duration: 8 + i * 1.8,
-                    repeat: Infinity,
-                    ease: "easeInOut"
-                  }}
-                >
-                  {item.emoji}
-                </motion.div>
-              ))}
-            </div>
-          ) : bgVideoType === 'youtube' ? (
-            <div className="absolute inset-0 w-full h-full overflow-hidden scale-[1.25]">
-              <iframe
-                className="absolute top-1/2 left-1/2 w-[120vw] h-[67.5vw] min-h-[120vh] min-w-[213.33vh] -translate-x-1/2 -translate-y-1/2 opacity-75 select-none scale-[1.2] object-cover pointer-events-none"
-                src={getYouTubeEmbedUrl(bgVideoUrl, true, true)}
-                title="Hawassa Papyrus Background Video"
-                allow="autoplay; encrypted-media"
-                frameBorder="0"
-              ></iframe>
-              <div className="absolute inset-0 bg-transparent z-10 pointer-events-none"></div>
-            </div>
-          ) : (
-            <video
-              className="absolute top-1/2 left-1/2 w-full h-full min-h-screen min-w-full -translate-x-1/2 -translate-y-1/2 opacity-75 object-cover pointer-events-none"
-              src={bgVideoUrl}
-              autoPlay
-              muted
-              loop
-              playsInline
-            />
-          )}
-          {/* High legibility overlay */}
-          <div className="absolute inset-0 bg-gradient-to-b from-black/60 via-black/10 to-black/80 z-10" />
+          <div
+            className="absolute inset-0 w-full h-full bg-cover bg-center opacity-25"
+            style={{ backgroundImage: `url(${gourmetBg})` }}
+          />
+          <div className="absolute inset-0 bg-gradient-to-b from-black/80 via-[#070707]/85 to-black/95 z-10" />
         </div>
       )}
-      <div className="absolute inset-0 bg-[radial-gradient(ellipse_80%_80%_at_50%_-20%,rgba(193,255,0,0.04),rgba(255,255,255,0))] pointer-events-none z-[2]" />
+      {!isStaffPortalRole && (
+        <div className="absolute inset-0 bg-[radial-gradient(ellipse_80%_80%_at_50%_-20%,rgba(244,194,43,0.12),rgba(255,255,255,0))] pointer-events-none z-[2]" />
+      )}
 
       {activeRole === 'customer' ? (
-        <header className="sticky top-0 z-50 bg-[#f4c22b] text-black py-3 px-3 sm:px-6 flex items-center justify-between border-b-4 border-[#cf9d12] shadow-xl transition-all gap-3">
-          {/* Logo Section */}
-          <div 
-            onClick={() => {
-              setActiveRole('entry');
-              setCurrentUser(null);
-            }}
-            className="flex items-center gap-2 shrink-0 cursor-pointer hover:scale-105 active:scale-95 transition-transform"
-          >
-            <div className="w-10 h-10 rounded-full overflow-hidden flex items-center justify-center bg-white border-2 border-[#b21f1f] shadow-md shrink-0">
-              <img src={sanitizeLogoUrl(logoUrl)} alt="Logo" referrerPolicy="no-referrer" className="w-full h-full object-cover" />
-            </div>
-            <div className="flex flex-col text-left leading-none shrink-0">
-              <span className="text-[10px] sm:text-[12px] font-extrabold text-[#b21f1f] uppercase tracking-tight">HAWASSA</span>
-              <span className="text-[6px] sm:text-[8px] text-stone-800 font-mono tracking-widest uppercase">PAPYRUS</span>
-            </div>
-          </div>
+        <header className="sticky top-0 z-50 w-full max-w-full overflow-x-clip bg-gradient-to-r from-[#eab308] via-[#f4c22b] to-[#eab308] text-black border-b-4 border-[#cf9d12] shadow-[0_8px_24px_rgba(0,0,0,0.28)]">
+          <div className="max-w-7xl mx-auto w-full px-2.5 sm:px-6 py-2 md:py-2.5 flex flex-col md:flex-row md:items-center md:justify-between gap-2 min-w-0">
+            {/* Row 1 on mobile (Logo left + compact controls right); splits neatly to order-1 & order-3 on md+ */}
+            <div className="flex items-center justify-between gap-1.5 sm:gap-2 min-w-0 w-full md:contents">
+              {/* Logo Section */}
+              <div 
+                onClick={() => {
+                  stopAccessibleSpeech();
+                  setIsVoiceOverEnabled(false);
+                  setActiveRole('entry');
+                  setCurrentUser(null);
+                }}
+                className="md:order-1 flex items-center gap-1.5 sm:gap-2 min-w-0 shrink-0 cursor-pointer hover:scale-[1.02] active:scale-95 transition-transform"
+              >
+                <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-full overflow-hidden flex items-center justify-center bg-white border-2 border-[#b21f1f] shadow-md shrink-0">
+                  <img src={sanitizeLogoUrl(logoUrl)} alt="Logo" referrerPolicy="no-referrer" className="w-full h-full object-cover" />
+                </div>
+                <div className="flex flex-col text-left leading-none min-w-0">
+                  <span className="text-[10px] sm:text-[12px] font-black text-[#b21f1f] uppercase tracking-tight whitespace-nowrap">HAWASSA</span>
+                  <span className="text-[7px] sm:text-[8px] text-stone-900 font-mono font-bold tracking-widest uppercase whitespace-nowrap">PAPYRUS</span>
+                </div>
+              </div>
 
-          {/* Horizontally Scrollable Navigation Links */}
-          <div className="flex-1 flex items-center gap-2 overflow-x-auto no-scrollbar scroll-smooth py-1 px-1">
-            <button 
-              onClick={() => {
-                setActiveNavTab('home');
-                window.scrollTo({ top: 0, behavior: 'smooth' });
-              }} 
-              className={`px-3 py-1.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all duration-300 shrink-0 cursor-pointer ${
-                activeNavTab === 'home'
-                  ? 'bg-white text-[#b21f1f] border border-white shadow-md'
-                  : 'bg-[#b21f1f] text-white hover:bg-[#8c1414] border border-[#8c1414]'
-              }`}
-            >
-              {appLang === 'am' ? 'መነሻ' : 'Home'}
-            </button>
-            <button 
-              onClick={() => {
-                setActiveNavTab('categories');
-                const catSec = document.getElementById('category-highlights-section');
-                if (catSec) catSec.scrollIntoView({ behavior: 'smooth' });
-              }} 
-              className={`px-3 py-1.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all duration-300 shrink-0 cursor-pointer ${
-                activeNavTab === 'categories'
-                  ? 'bg-white text-[#b21f1f] border border-white shadow-md'
-                  : 'bg-[#b21f1f] text-white hover:bg-[#8c1414] border border-[#8c1414]'
-              }`}
-            >
-              {appLang === 'am' ? 'ምድቦች' : 'Category'}
-            </button>
-            <button 
-              onClick={() => {
-                setActiveNavTab('drinks');
-                setSelectedCategory('drinks');
-                const catSec = document.getElementById('category-highlights-section');
-                if (catSec) catSec.scrollIntoView({ behavior: 'smooth' });
-              }} 
-              className={`px-3 py-1.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all duration-300 shrink-0 cursor-pointer ${
-                activeNavTab === 'drinks'
-                  ? 'bg-white text-[#b21f1f] border border-white shadow-md'
-                  : 'bg-[#b21f1f] text-white hover:bg-[#8c1414] border border-[#8c1414]'
-              }`}
-            >
-              {appLang === 'am' ? 'መጠጦች' : 'Drinks'}
-            </button>
-            <button 
-              onClick={() => {
-                setActiveNavTab('about');
-                const elements = document.getElementsByClassName('gallery-section-tag');
-                if (elements.length > 0) {
-                  elements[0].scrollIntoView({ behavior: 'smooth' });
-                }
-              }} 
-              className={`px-3 py-1.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all duration-300 shrink-0 cursor-pointer ${
-                activeNavTab === 'about'
-                  ? 'bg-white text-[#b21f1f] border border-white shadow-md'
-                  : 'bg-[#b21f1f] text-white hover:bg-[#8c1414] border border-[#8c1414]'
-              }`}
-            >
-              {appLang === 'am' ? 'ስለ እኛ' : 'About'}
-            </button>
-
-            {/* Need Help Button */}
-            <button 
-              onClick={handleTriggerBuzzer} 
-              className="bg-[#b21f1f] hover:bg-[#8c1414] text-white px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all shadow-md active:scale-95 cursor-pointer border border-[#8c1414] shrink-0"
-            >
-              {appLang === 'am' ? 'እርዳታ ይጥሩ 🛎️' : 'Need Help? 🛎️'}
-            </button>
-
-            {/* AI Menu Assistant Quick Jump */}
-            <button
-              type="button"
-              onClick={() => {
-                const panel = document.getElementById('menu-ai-assistant-panel');
-                if (panel) panel.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                const toggleBtn = document.getElementById('btn-toggle-menu-ai');
-                if (toggleBtn && (toggleBtn.textContent?.includes('ክፈት') || toggleBtn.textContent?.includes('Ask AI'))) {
-                  toggleBtn.click();
-                }
-              }}
-              className="bg-white hover:bg-stone-100 text-[#b21f1f] px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all shadow-md active:scale-95 cursor-pointer border border-stone-200 flex items-center gap-1 shrink-0 whitespace-nowrap"
-            >
-              <Sparkles className="w-3.5 h-3.5 text-[#b21f1f]" />
-              <span>{appLang === 'am' ? 'AI ሜኑ ረዳት' : 'AI Guide'}</span>
-            </button>
-
-            {/* Live Order Check & Queue Button */}
-            {(() => {
-              const myActiveCount = orders.filter((o) => {
-                const st = getEffectiveCookingStatus(o);
-                if (st === 'Inactive' || (o.status === 'Paid' && o.servedByWaiter)) return false;
-                return (
-                  trackedOrderIds.includes(o.id) ||
-                  o.location.trim().toLowerCase() === guestLocation.trim().toLowerCase()
-                );
-              }).length;
-              return (
+              {/* Right section: Audio Toggle, Lang & Cart */}
+              <div className="md:order-3 flex items-center justify-end gap-1 sm:gap-2 min-w-0 shrink-0">
+                {/* Customer Header Audio Screen-Reader Switch */}
                 <button
                   type="button"
-                  id="btn-open-live-order-tracker"
-                  onClick={() => setIsLiveTrackerOpen(true)}
-                  className="bg-stone-900 hover:bg-black text-white px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all shadow-md active:scale-95 cursor-pointer border border-stone-700 flex items-center gap-1.5 shrink-0 whitespace-nowrap"
+                  id="btn-header-voiceover-toggle"
+                  aria-pressed={isVoiceOverEnabled}
+                  aria-label={isVoiceOverEnabled ? 'Disable Audio Menu Guide' : 'Enable Audio Menu Guide'}
+                  onClick={() => {
+                    const nextVal = !isVoiceOverEnabled;
+                    setIsVoiceOverEnabled(nextVal);
+                    if (nextVal) {
+                      playAccessibleChime('tour_start');
+                      setTimeout(() => {
+                        runVoiceOver(
+                          tText({
+                            am: 'የድምፅ ሜኑ ረዳት አገልግሎት በርቷል።',
+                            en: 'Audio menu guide enabled.',
+                            or: 'Gargaarsi sagalee meenuu banameera.',
+                            ti: 'ኣገልግሎት ድምጺ ሜኑ ተኸፊቱ ኣሎ።',
+                            sid: 'Macciishshate meenuu kaa\'laanchu fannamino.',
+                            fr: 'Guide vocal du menu activé.',
+                            de: 'Audio-Menüführung aktiviert.',
+                            it: 'Guida vocale del menu attivata.',
+                            zh: '语音菜单导览已开启。',
+                            ar: 'تم تفعيل الدليل الصوتي للقائمة.',
+                          }),
+                          true,
+                          'Audio menu guide enabled.',
+                        );
+                      }, 80);
+                    } else {
+                      stopAccessibleSpeech();
+                      playAccessibleChime('tour_end');
+                    }
+                  }}
+                  className={`px-2 sm:px-2.5 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all flex items-center gap-1 border cursor-pointer shrink-0 whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black ${
+                    isVoiceOverEnabled
+                      ? 'bg-stone-950 text-[#f4c22b] border-stone-900 shadow-md'
+                      : 'bg-white text-stone-700 border-stone-300 hover:bg-stone-100'
+                  }`}
+                  title={t('header.audio_guide_tooltip')}
                 >
-                  <span className="w-2 h-2 rounded-full bg-red-500 animate-ping inline-block" />
-                  <span>{appLang === 'am' ? 'ላይቭ ኦርደር' : 'Live Orders'}</span>
-                  {myActiveCount > 0 && (
-                    <span className="bg-[#f4c22b] text-black font-mono text-[9px] font-black px-1.5 py-0.5 rounded-full tabular-nums">
-                      {myActiveCount}
+                  {isVoiceOverEnabled ? <Volume2 className="w-3.5 h-3.5 shrink-0" /> : <VolumeX className="w-3.5 h-3.5 shrink-0" />}
+                  <span className="hidden min-[380px]:inline truncate max-w-[64px] sm:max-w-none">{isVoiceOverEnabled ? t('header.audio_on') : t('header.audio_off')}</span>
+                </button>
+
+                {/* Universal Lang Selector with all native (incl. Sidama) and foreign options */}
+                <LanguageSelector
+                  id="header-lang-selector-customer"
+                  variant="customer"
+                  onLanguageChanged={(selected, msg) => {
+                    if (isVoiceOverEnabled) {
+                      speakAccessibleText(msg, selected, {
+                        rate: voiceSpeed,
+                        fallbackEnText: `Language changed to ${selected}.`,
+                      });
+                    }
+                  }}
+                />
+
+                {/* Shopping Cart Button */}
+                <button 
+                  id="btn-basket-react"
+                  onClick={() => setIsCartOpen(true)}
+                  aria-label={`Open Order Cart (${cart.reduce((sum, i) => sum + i.qty, 0)} items)`}
+                  className="relative px-2 sm:px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-yellow-400 via-white to-red-600 hover:from-yellow-300 hover:via-amber-50 hover:to-red-500 text-red-950 font-black text-xs border-2 border-red-700 flex items-center gap-1 sm:gap-1.5 shadow-md active:scale-95 transition-all cursor-pointer shrink-0"
+                  title={t('header.basket_tooltip')}
+                >
+                  <ShoppingCart className="w-4 h-4 text-red-700 fill-yellow-300 shrink-0" />
+                  <span className="hidden sm:inline font-mono uppercase tracking-wider">{t('header.cart')}</span>
+                  {cart.length > 0 ? (
+                    <span className="bg-red-600 text-white text-[9px] font-black font-mono px-1.5 py-0.5 rounded-full border border-white shadow-sm">
+                      {cart.reduce((sum, i) => sum + i.qty, 0)}
                     </span>
+                  ) : (
+                    <span className="w-2.5 h-2.5 bg-red-600 rounded-full ring-2 ring-white" />
                   )}
                 </button>
-              );
-            })()}
+              </div>
+            </div>
 
-            {/* Room Location Selector */}
-            <div className="flex items-center gap-1.5 bg-white border border-stone-200 px-2.5 py-1 rounded-xl shadow-md shrink-0">
-              <MapPin className="text-[#b21f1f] w-3.5 h-3.5 shrink-0" />
-              <div className="flex flex-col text-left">
-                <span className="text-[6px] uppercase font-mono font-black text-stone-500 tracking-wider block leading-none">Room</span>
-                <input 
-                  type="text" 
-                  value={guestLocation}
-                  onChange={(e) => setGuestLocation(e.target.value)}
-                  placeholder="Room 101"
-                  className="bg-transparent text-stone-900 font-black text-xs outline-none w-14 uppercase leading-none p-0 border-none focus:ring-0"
-                  id="guest-location-input-top-main"
-                />
+            {/* Row 2 on Mobile (Bounded scrollable navigation rail); md:order-2 md:flex-1 on Desktop */}
+            <div className="md:order-2 md:flex-1 min-w-0 w-full flex items-center gap-1.5 sm:gap-2 overflow-x-auto no-scrollbar scroll-smooth pt-1.5 pb-0.5 md:py-1 border-t border-black/15 md:border-t-0">
+              <button 
+                onClick={() => {
+                  setActiveNavTab('home');
+                  window.scrollTo({ top: 0, behavior: 'smooth' });
+                }} 
+                className={`px-2.5 sm:px-3 py-1.5 rounded-xl text-[11px] sm:text-xs font-black uppercase tracking-wider transition-all duration-300 shrink-0 cursor-pointer ${
+                  activeNavTab === 'home'
+                    ? 'bg-white text-[#b21f1f] border border-white shadow-md'
+                    : 'bg-[#b21f1f] text-white hover:bg-[#8c1414] border border-[#8c1414]'
+                }`}
+              >
+                {t('header.home')}
+              </button>
+              <button 
+                onClick={() => {
+                  setActiveNavTab('categories');
+                  const catSec = document.getElementById('category-highlights-section');
+                  if (catSec) catSec.scrollIntoView({ behavior: 'smooth' });
+                }} 
+                className={`px-2.5 sm:px-3 py-1.5 rounded-xl text-[11px] sm:text-xs font-black uppercase tracking-wider transition-all duration-300 shrink-0 cursor-pointer ${
+                  activeNavTab === 'categories'
+                    ? 'bg-white text-[#b21f1f] border border-white shadow-md'
+                    : 'bg-[#b21f1f] text-white hover:bg-[#8c1414] border border-[#8c1414]'
+                }`}
+              >
+                {t('header.categories')}
+              </button>
+              <button 
+                onClick={() => {
+                  setActiveNavTab('drinks');
+                  setSelectedCategory('drinks');
+                  const catSec = document.getElementById('category-highlights-section');
+                  if (catSec) catSec.scrollIntoView({ behavior: 'smooth' });
+                }} 
+                className={`px-2.5 sm:px-3 py-1.5 rounded-xl text-[11px] sm:text-xs font-black uppercase tracking-wider transition-all duration-300 shrink-0 cursor-pointer ${
+                  activeNavTab === 'drinks'
+                    ? 'bg-white text-[#b21f1f] border border-white shadow-md'
+                    : 'bg-[#b21f1f] text-white hover:bg-[#8c1414] border border-[#8c1414]'
+                }`}
+              >
+                {t('header.drinks')}
+              </button>
+              <button 
+                onClick={() => {
+                  setActiveNavTab('about');
+                  const elements = document.getElementsByClassName('gallery-section-tag');
+                  if (elements.length > 0) {
+                    elements[0].scrollIntoView({ behavior: 'smooth' });
+                  }
+                }} 
+                className={`px-2.5 sm:px-3 py-1.5 rounded-xl text-[11px] sm:text-xs font-black uppercase tracking-wider transition-all duration-300 shrink-0 cursor-pointer ${
+                  activeNavTab === 'about'
+                    ? 'bg-white text-[#b21f1f] border border-white shadow-md'
+                    : 'bg-[#b21f1f] text-white hover:bg-[#8c1414] border border-[#8c1414]'
+                }`}
+              >
+                {t('header.about')}
+              </button>
+
+              {/* Call Assigned Waiter Button */}
+              <button 
+                type="button"
+                id="btn-header-call-assigned-waiter"
+                onClick={handleTriggerBuzzer} 
+                className="bg-[#b21f1f] hover:bg-[#8c1414] text-white px-2.5 sm:px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all shadow-md active:scale-95 cursor-pointer border border-[#8c1414] shrink-0 whitespace-nowrap"
+              >
+                {t('header.call_waiter')}
+              </button>
+
+              {/* Manager / General Manager / Support Contact Button */}
+              <button 
+                type="button"
+                id="btn-header-contact-leadership"
+                onClick={handleOpenLeadershipContact} 
+                className="bg-amber-300 hover:bg-amber-200 text-red-950 px-2.5 sm:px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all shadow-md active:scale-95 cursor-pointer border border-amber-500 shrink-0 whitespace-nowrap"
+              >
+                {t('header.manager_support')}
+              </button>
+
+              {/* Voice Ordering Standalone Quick Jump */}
+              <button
+                type="button"
+                onClick={() => {
+                  const voiceSec = document.getElementById('voice-ordering-standalone-section');
+                  if (voiceSec) voiceSec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }}
+                className="bg-stone-950 hover:bg-stone-900 text-[#f4c22b] px-2.5 sm:px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all shadow-md active:scale-95 cursor-pointer border border-stone-800 flex items-center gap-1 shrink-0 whitespace-nowrap"
+              >
+                <span>🎙️</span>
+                <span>{t('header.voice_order')}</span>
+              </button>
+
+              {/* AI Menu Assistant Quick Jump */}
+              <button
+                type="button"
+                onClick={() => {
+                  const panel = document.getElementById('menu-ai-assistant-panel');
+                  if (panel) panel.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                  const toggleBtn = document.getElementById('btn-toggle-menu-ai');
+                  if (toggleBtn && (toggleBtn.textContent?.includes('ክፈት') || toggleBtn.textContent?.includes('Ask AI'))) {
+                    toggleBtn.click();
+                  }
+                }}
+                className="bg-white hover:bg-stone-100 text-[#b21f1f] px-2.5 sm:px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all shadow-md active:scale-95 cursor-pointer border border-stone-200 flex items-center gap-1 shrink-0 whitespace-nowrap"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-[#b21f1f]" />
+                <span>{t('header.ai_guide')}</span>
+              </button>
+
+              {/* Live Order Check & Queue Button */}
+              {(() => {
+                const myActiveCount = orders.filter((o) => {
+                  const st = getEffectiveCookingStatus(o);
+                  if (st === 'Inactive' || (o.status === 'Paid' && o.servedByWaiter)) return false;
+                  return (
+                    trackedOrderIds.includes(o.id) ||
+                    o.location.trim().toLowerCase() === guestLocation.trim().toLowerCase()
+                  );
+                }).length;
+                return (
+                  <button
+                    type="button"
+                    id="btn-open-live-order-tracker"
+                    onClick={() => setIsLiveTrackerOpen(true)}
+                    className="bg-stone-900 hover:bg-black text-white px-2.5 sm:px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all shadow-md active:scale-95 cursor-pointer border border-stone-700 flex items-center gap-1.5 shrink-0 whitespace-nowrap"
+                  >
+                    <span className="w-2 h-2 rounded-full bg-red-500 animate-ping inline-block" />
+                    <span>{t('header.live_orders')}</span>
+                    {myActiveCount > 0 && (
+                      <span className="bg-[#f4c22b] text-black font-mono text-[9px] font-black px-1.5 py-0.5 rounded-full tabular-nums">
+                        {myActiveCount}
+                      </span>
+                    )}
+                  </button>
+                );
+              })()}
+
+              {/* Room Location Selector */}
+              <div className="flex items-center gap-1.5 bg-white border border-stone-200 px-2.5 py-1 rounded-xl shadow-md shrink-0">
+                <MapPin className="text-[#b21f1f] w-3.5 h-3.5 shrink-0" />
+                <div className="flex flex-col text-left">
+                  <span className="text-[6px] uppercase font-mono font-black text-stone-500 tracking-wider block leading-none">{t('header.room')}</span>
+                  <input 
+                    type="text" 
+                    value={guestLocation}
+                    onChange={(e) => setGuestLocation(e.target.value)}
+                    placeholder="Room 101"
+                    className="bg-transparent text-stone-900 font-black text-xs outline-none w-14 uppercase leading-none p-0 border-none focus:ring-0"
+                    id="guest-location-input-top-main"
+                  />
+                </div>
               </div>
             </div>
           </div>
+        </header>
+      ) : activeRole === 'entry' ? (
+        <header className="relative z-40 max-w-6xl w-full mx-auto px-3 sm:px-6 md:px-8 pt-3 pb-1 flex flex-wrap justify-end items-center gap-1.5 sm:gap-2 overflow-x-clip">
+          {/* Compact Language Selector */}
+          <LanguageSelector
+            id="header-lang-selector"
+            variant="entry"
+            onLanguageChanged={(selected, msg) => {
+              if (isVoiceOverEnabled) {
+                speakAccessibleText(msg, selected, {
+                  rate: voiceSpeed,
+                  fallbackEnText: `Language changed to ${selected}.`,
+                });
+              }
+            }}
+          />
 
-          {/* Right section: Lang & Cart */}
-          <div className="flex items-center gap-2 shrink-0">
-            {/* Universal Lang Selector with all native and foreign options */}
-            <div className="flex items-center gap-1 bg-white hover:bg-stone-50 border border-stone-200 px-2 py-1 rounded-xl transition-all shrink-0">
-              <span className="text-xs">🌐</span>
-              <select
-                value={appLang}
-                onChange={(e) => {
-                  const selected = e.target.value as any;
-                  setAppLang(selected);
-                  sessionStorage.setItem('papyrus_app_lang', selected);
-                }}
-                className="bg-transparent text-stone-900 font-black text-[9px] tracking-wider uppercase border-none outline-none cursor-pointer pr-1 flex focus:ring-0"
-              >
-                <optgroup label="Native" className="bg-stone-100 text-stone-900">
-                  <option value="am">አማርኛ</option>
-                  <option value="or">Oromoo</option>
-                  <option value="ti">ትግርኛ</option>
-                </optgroup>
-                <optgroup label="Foreign" className="bg-stone-100 text-stone-900">
-                  <option value="en">English</option>
-                  <option value="fr">Français</option>
-                  <option value="de">Deutsch</option>
-                  <option value="it">Italiano</option>
-                </optgroup>
-              </select>
-            </div>
+          {/* Voice Reader Accessibility Switch */}
+          <button
+            id="btn-header-voiceover-toggle"
+            onClick={() => {
+              const nextVal = !isVoiceOverEnabled;
+              setIsVoiceOverEnabled(nextVal);
+              if (nextVal) {
+                setTimeout(() => {
+                  runVoiceOver(
+                    tText({
+                      am: 'የድምፅ ረዳት አገልግሎት በርቷል',
+                      en: 'Screen reader enabled.',
+                      or: 'Gargaarsi sagalee banameera.',
+                      ti: 'ኣንባቢ ድምጺ ተኸፊቱ ኣሎ።',
+                      sid: 'Macciishshate kaa\'laanchu fannamino.',
+                      fr: 'Lecteur vocal activé.',
+                      de: 'Sprachausgabe aktiviert.',
+                      it: 'Lettore vocale attivato.',
+                      zh: '语音辅助已开启。',
+                      ar: 'تم تفعيل القارئ الصوتي.',
+                    }),
+                    true,
+                  );
+                }, 100);
+              } else {
+                stopAccessibleSpeech();
+              }
+            }}
+            className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider transition-all flex items-center gap-1 border cursor-pointer backdrop-blur-md whitespace-nowrap shrink-0 ${
+              isVoiceOverEnabled 
+                ? 'bg-[#F4C22B] text-[#1C1917] border-white' 
+                : 'bg-[#8C1414]/90 text-white border-[#F4C22B]/40 hover:bg-[#B21F1F]'
+            }`}
+            title={t('header.audio_guide_tooltip')}
+          >
+            <span>{isVoiceOverEnabled ? `🔊 ${t('header.audio_on')}` : `🔇 ${t('header.audio_off')}`}</span>
+          </button>
 
-            {/* Shopping Cart Button */}
-            <button 
-              onClick={() => setIsCartOpen(true)}
-              className="relative px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-yellow-400 via-white to-red-600 hover:from-yellow-300 hover:via-amber-50 hover:to-red-500 text-red-950 font-black text-xs border-2 border-red-700 flex items-center gap-1.5 shadow-md active:scale-95 transition-all cursor-pointer shrink-0"
-              title="የትእዛዝ ማስቀመጫ ዘንቢል / Order Basket"
-            >
-              <ShoppingCart className="w-4 h-4 text-red-700 fill-yellow-300" />
-              <span className="hidden sm:inline font-mono uppercase tracking-wider">{appLang === 'am' ? 'ዘንቢል' : 'Cart'}</span>
-              {cart.length > 0 ? (
-                <span className="bg-red-600 text-white text-[9px] font-black font-mono px-1.5 py-0.5 rounded-full border border-white shadow-sm animate-bounce">
-                  {cart.reduce((sum, i) => sum + i.qty, 0)}
-                </span>
-              ) : (
-                <span className="w-2.5 h-2.5 bg-red-600 rounded-full ring-2 ring-white" />
-              )}
-            </button>
-          </div>
+          {/* Lite-Mode Toggle */}
+          <button
+            id="btn-toggle-lite-mode"
+            onClick={() => setLiteMode(prev => !prev)}
+            className={`text-[10px] font-bold uppercase font-mono px-2.5 py-1 rounded-full border transition-all cursor-pointer flex items-center gap-1 backdrop-blur-md whitespace-nowrap shrink-0 ${
+              liteMode 
+                ? 'bg-[#F4C22B] text-[#1C1917] border-white' 
+                : 'bg-[#8C1414]/90 text-white border-[#F4C22B]/40 hover:bg-[#B21F1F]'
+            }`}
+            title="Basic / Offline mode"
+          >
+            <span>📶 {liteMode ? 'BASIC' : 'NORMAL'}</span>
+          </button>
         </header>
       ) : (
-        <header className="sticky top-0 z-50 bg-[#0F0F0F]/95 backdrop-blur-md border-b-2 border-white/5 py-4 px-4 md:px-8 flex justify-between items-center transition-all">
-          <div className="flex items-center gap-3">
-            {/* Company Dynamic Logo */}
-            <div className="w-10 h-10 rounded-xl overflow-hidden flex items-center justify-center">
+        <header className="sticky top-0 z-50 w-full max-w-full overflow-x-clip bg-[#f4c22b] text-stone-950 border-b-4 border-[#cf9d12] py-3 px-3 sm:px-4 md:px-8 flex flex-wrap justify-between items-center gap-3 shadow-md transition-all">
+          <div className="flex items-center gap-3 min-w-0">
+            {/* Company Dynamic Logo matching Digital Menu Header */}
+            <div className="w-10 h-10 rounded-full overflow-hidden flex items-center justify-center bg-white border-2 border-[#b21f1f] shadow-sm shrink-0">
               <img src={sanitizeLogoUrl(logoUrl)} alt="Logo" referrerPolicy="no-referrer" className="w-full h-full object-cover" />
             </div>
-            <div>
-              <span className="text-white font-extrabold tracking-widest text-[#C1FF00] text-xs block">HAWASSA PAPYRUS</span>
-              <span className="text-[8px] text-[#00f5ff] font-mono tracking-wider block font-bold">DIGITAL ECO-PORTAL v2</span>
+            <div className="min-w-0">
+              <span className="font-black tracking-tight text-[#b21f1f] text-xs sm:text-sm block uppercase leading-none truncate">HAWASSA PAPYRUS</span>
+              <span className="text-[10px] text-stone-900 font-bold tracking-wide block mt-0.5 truncate">
+                {tRole(activeRole)}
+              </span>
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2.5">
+          <div className="flex flex-wrap items-center gap-2 min-w-0">
             {/* UNIVERSAL COMPACT LANGUAGE DROPDOWN */}
-            <div className="flex items-center gap-1 bg-white/5 hover:bg-white/10 border border-white/10 px-2 py-1 rounded-xl transition-all">
-              <span className="text-xs">🌐</span>
-              <select
-                id="header-lang-selector"
-                value={appLang}
-                onChange={(e) => {
-                  const selected = e.target.value as any;
-                  setAppLang(selected);
-                  sessionStorage.setItem('papyrus_app_lang', selected);
-                  const descMap: any = {
-                    am: 'ቋንቋ ወደ አማርኛ ተቀይሯል',
-                    en: 'Language changed to English',
-                    or: 'Afaan gara Oromootti jijjiirameera',
-                    ti: 'ቋንቋ ናብ ትግርኛ ተቐይሩ ኣሎ',
-                    fr: 'La langue est changée en Français',
-                    de: 'Sprache auf Deutsch umgestellt',
-                    it: 'Lingua impostata su Italiano'
-                  };
-                  runVoiceOver(descMap[selected] || 'Language changed', true);
-                }}
-                className="bg-transparent text-white font-black text-[9px] tracking-wider uppercase border-none outline-none cursor-pointer pr-1 flex focus:ring-0"
-                style={{ colorScheme: 'dark' }}
-              >
-                <optgroup label="ሀገረሰብ (NATIVE)" className="bg-[#0F0F0F] text-white">
-                  <option value="am">አማርኛ</option>
-                  <option value="or">Oromoo</option>
-                  <option value="ti">ትግርኛ</option>
-                </optgroup>
-                <optgroup label="የውጭ (FOREIGN)" className="bg-[#0F0F0F] text-white">
-                  <option value="en">English</option>
-                  <option value="fr">Français</option>
-                  <option value="de">Deutsch</option>
-                  <option value="it">Italiano</option>
-                </optgroup>
-              </select>
-            </div>
+            <LanguageSelector
+              id="header-lang-selector"
+              variant="staff"
+              onLanguageChanged={(selected, msg) => {
+                if (isVoiceOverEnabled) {
+                  speakAccessibleText(msg, selected, {
+                    rate: voiceSpeed,
+                    fallbackEnText: `Language changed to ${selected}.`,
+                  });
+                }
+              }}
+            />
 
-            {/* DYNAMIC VOICE READER ACCESSIBILITY TACTILE SWITCH (for visually impaired) */}
+            {/* DYNAMIC VOICE READER ACCESSIBILITY SWITCH */}
             <button
               id="btn-header-voiceover-toggle"
               onClick={() => {
@@ -4847,79 +6329,67 @@ export default function App() {
                 setIsVoiceOverEnabled(nextVal);
                 if (nextVal) {
                   setTimeout(() => {
-                    runVoiceOver(appLang === 'am' ? 'የድምፅ ረዳት አገልግሎት በርቷል' : 'Screen reader enabled.', true);
+                    runVoiceOver(
+                      tText({
+                        am: 'የድምፅ ረዳት አገልግሎት በርቷል',
+                        en: 'Screen reader enabled.',
+                        or: 'Gargaarsi sagalee banameera.',
+                        ti: 'ኣንባቢ ድምጺ ተኸፊቱ ኣሎ።',
+                        sid: 'Macciishshate kaa\'laanchu fannamino.',
+                        fr: 'Lecteur vocal activé.',
+                        de: 'Sprachausgabe aktiviert.',
+                        it: 'Lettore vocale attivato.',
+                        zh: '语音辅助已开启。',
+                        ar: 'تم تفعيل القارئ الصوتي.',
+                      }),
+                      true,
+                    );
                   }, 100);
+                } else {
+                  stopAccessibleSpeech();
                 }
               }}
-              className={`px-2 py-1.5 rounded-xl text-[9px] font-black uppercase tracking-wider transition-all flex items-center gap-1 border hover:scale-[1.01] cursor-pointer ${
+              className={`px-2.5 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all flex items-center gap-1 border cursor-pointer shadow-xs ${
                 isVoiceOverEnabled 
-                  ? 'bg-[#C1FF00]/10 text-[#C1FF00] border-[#C1FF00]/30 font-extrabold' 
-                  : 'bg-white/5 text-white/40 border-white/10 hover:text-white hover:bg-white/10'
+                  ? 'bg-[#b21f1f] text-white border-[#8c1414]' 
+                  : 'bg-white text-stone-800 border-amber-500/60 hover:bg-stone-50'
               }`}
-              title="Voice Reader Activation"
+              title={t('header.audio_guide_tooltip')}
             >
-              <span>{isVoiceOverEnabled ? '🔊 AUDIO-ON' : '🔇 AUDIO-OFF'}</span>
+              <span>{isVoiceOverEnabled ? `🔊 ${t('header.audio_on')}` : `🔇 ${t('header.audio_off')}`}</span>
             </button>
 
-            {activeRole !== 'entry' ? (
-              <div className="flex items-center gap-2">
-                <button
-                  id="btn-header-back-home"
-                  onClick={() => {
-                    setActiveRole('entry');
-                    setCurrentUser(null);
-                  }}
-                  className="bg-white/5 hover:bg-white/10 text-white font-mono text-[9px] uppercase font-black tracking-widest px-2.5 py-1.5 rounded border border-white/10 cursor-pointer flex items-center gap-1 transition-all leading-none"
-                >
-                  <span>🏡 {appLang === 'am' ? 'ዋና በር' : 'HOME'}</span>
-                </button>
+            <div className="flex items-center gap-2">
+              <button
+                id="btn-header-back-home"
+                onClick={() => {
+                  stopAccessibleSpeech();
+                  setIsVoiceOverEnabled(false);
+                  setActiveRole('entry');
+                  setCurrentUser(null);
+                }}
+                className="bg-[#b21f1f] hover:bg-[#8c1414] text-white font-mono text-[10px] uppercase font-black tracking-wider px-3 py-1.5 rounded-xl border border-[#8c1414] cursor-pointer flex items-center gap-1 transition-all leading-none shadow-xs"
+              >
+                <span>🏡 {t('header.home')}</span>
+              </button>
 
-                {activeRole === 'customer' && (
-                  <button 
-                    id="btn-basket-react"
-                    onClick={() => setIsCartOpen(true)}
-                    className="bg-gradient-to-r from-yellow-400 via-white to-red-600 hover:from-yellow-300 hover:via-amber-50 hover:to-red-500 text-red-950 border-2 border-red-700 px-3.5 py-1.5 font-black text-xs uppercase tracking-wider relative flex items-center gap-1.5 cursor-pointer rounded-xl shadow-md active:scale-95 transition-all"
-                  >
-                    <ShoppingCart className="w-3.5 h-3.5 text-red-700 fill-yellow-300" />
-                    <span>{appLang === 'am' ? 'የትእዛዝ ዘንቢል' : 'Cart Basket'}</span>
-                    {cart.length > 0 && (
-                      <span id="badge-cart-qty" className="bg-red-600 text-white px-1.5 py-0.5 text-[9px] font-black font-mono rounded-full border border-white shadow-sm animate-pulse">
-                        {cart.reduce((sum, i) => sum + i.qty, 0)}
-                      </span>
-                    )}
-                  </button>
-                )}
-
-                {currentUser && (
-                  <div className="flex items-center gap-1.5 bg-[#00f5ff]/10 border border-[#00f5ff]/30 px-2 py-1 text-[8px] font-mono rounded text-[#00f5ff] max-w-[120px] truncate">
-                    <span>🟢 {currentUser.name}</span>
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="flex items-center gap-2">
-                {/* LITE-MODE TOGGLE BUTTON */}
-                <button
-                  id="btn-toggle-lite-mode"
-                  onClick={() => setLiteMode(prev => !prev)}
-                  className={`text-[8px] font-black uppercase font-mono px-2 py-1 rounded border transition-all cursor-pointer flex items-center gap-1 ${
-                    liteMode 
-                      ? 'bg-orange-500/20 text-orange-400 border-orange-500/40 animate-pulse' 
-                      : 'bg-white/5 text-white/50 border-white/10 hover:text-white hover:bg-white/10'
-                  }`}
-                  title="Facebook-style Basic / Offline mode"
-                >
-                  <span>📶 {liteMode ? 'BASIC' : 'NORMAL'}</span>
-                </button>
-              </div>
-            )}
+              {currentUser && (
+                <div className="flex items-center gap-1.5 bg-white border border-[#b21f1f]/30 px-2.5 py-1 text-[10px] font-mono font-bold rounded-xl text-[#b21f1f] max-w-[140px] truncate shadow-xs">
+                  <span>👤 {currentUser.name}</span>
+                </div>
+              )}
+            </div>
           </div>
         </header>
       )}
 
       {/* MAIN VIEW CONTROLLER SECTION */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-4 md:p-8 flex flex-col justify-between relative z-10">
-        <section className="flex-1 flex flex-col items-center justify-center py-4">
+      <main className="flex-1 max-w-7xl w-full mx-auto px-2.5 py-3 sm:p-4 md:p-8 flex flex-col justify-between relative z-10 overflow-x-clip">
+        <section
+          className={`flex-1 flex flex-col items-center w-full min-w-0 ${
+            activeRole === 'customer' ? 'justify-start pt-1 pb-4' : 'justify-center py-4'
+          }`}
+        >
           <AnimatePresence mode="wait">
             {activeRole === 'entry' && (
               <motion.div
@@ -4929,751 +6399,1284 @@ export default function App() {
                 exit={{ opacity: 0, y: -10 }}
                 className="w-full flex flex-col items-center justify-center space-y-6"
               >
-                {/* Intro Title */}
-                <div className="text-center space-y-2 relative z-10 max-w-2xl px-4">
-                  <div className="flex justify-center mb-1">
-                    <div className="w-16 h-16 rounded-2xl overflow-hidden relative group">
-                      <img src={sanitizeLogoUrl(logoUrl)} alt="Company Logo" referrerPolicy="no-referrer" className="w-full h-full object-cover" />
+                {/* DRAMATIC CULINARY HERO STAGE (Inspired by dark-crimson & golden-amber showcase) */}
+                <div className="w-full max-w-6xl mx-auto rounded-[28px] overflow-hidden relative shadow-[0_32px_90px_rgba(0,0,0,0.8)] border border-white/10 bg-[radial-gradient(ellipse_at_75%_44%,#6B0F0F_0%,#2A0606_45%,#090808_100%)]">
+                  {/* Subtle ambient crimson & warm wood floor horizon glow */}
+                  <div
+                    aria-hidden="true"
+                    className="pointer-events-none absolute inset-x-0 bottom-0 h-28 bg-gradient-to-t from-[#241108]/95 via-[#170905]/65 to-transparent z-[1]"
+                  />
+                  <div
+                    aria-hidden="true"
+                    className="pointer-events-none absolute right-[-6%] top-[12%] w-[420px] h-[420px] rounded-full bg-red-600/20 blur-[110px] z-[0]"
+                  />
+
+                  {/* INTEGRATED 3-ZONE TOP BAR (Brand | 4 Nav Links | Search, Cart & Staff Sign In) */}
+                  <nav className="relative z-20 flex flex-wrap items-center justify-between gap-2 sm:gap-6 px-3.5 sm:px-6 md:px-10 py-4 border-b border-white/[0.06]">
+                    {/* Zone 1: Single-line Brand Wordmark */}
+                    <button
+                      type="button"
+                      onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+                      className="text-base sm:text-xl font-black tracking-tight text-white whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-2"
+                    >
+                      <span>
+                        Hawassa <span className="text-[#F59E0B]">Papyrus</span>
+                      </span>
+                    </button>
+
+                    {/* Zone 2: Clean Single-Line Navigation Links */}
+                    <div className="hidden md:flex items-center gap-7 text-xs sm:text-[13px] font-medium text-white/85">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsStaffAuthModalOpen(false);
+                          window.scrollTo({ top: 0, behavior: 'smooth' });
+                        }}
+                        className="hover:text-[#F59E0B] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                      >
+                        {t('header.home')}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          document.getElementById('entry-lodge-footer')?.scrollIntoView({ behavior: 'smooth' });
+                        }}
+                        className="hover:text-[#F59E0B] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                      >
+                        {t('header.about')}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveRole('customer');
+                          runVoiceOver(tText({ am: 'ዲጂታል ሜኑ ተከፍቷል', en: 'Digital menu opened.', or: 'Meenuun dijitaalaa banameera.', ti: 'ዲጂታል ሜኑ ተኸፊቱ።', sid: 'Diijitaale Meenuu fanamino.', fr: 'Menu numérique ouvert.', de: 'Digitales Menü geöffnet.', it: 'Menu digitale aperto.', zh: '已打开电子菜单。', ar: 'تم فتح القائمة الرقمية.' }));
+                        }}
+                        className="hover:text-[#F59E0B] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                      >
+                        {tText({ am: 'ዲጂታል ሜኑ', en: 'Menu', or: 'Meenuu', ti: 'ሜኑ', sid: 'Meenuu', fr: 'Menu', de: 'Speisekarte', it: 'Menu', zh: '电子菜单', ar: 'القائمة' })}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          document.getElementById('entry-lodge-footer')?.scrollIntoView({ behavior: 'smooth' });
+                        }}
+                        className="hover:text-[#F59E0B] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                      >
+                        {tText({ am: 'ያግኙን', en: 'Contact us', or: 'Nu qunnamaa', ti: 'ርኸቡና', sid: 'Xaadinonke', fr: 'Contact', de: 'Kontakt', it: 'Contatti', zh: '联系我们', ar: 'تواصل معنا' })}
+                      </button>
                     </div>
-                  </div>
 
-                  <h1 className="text-4xl md:text-5xl font-black tracking-tight font-sans mt-1 text-[#C1FF00]">
-                    {entryTranslation.app_title[appLang]}
-                  </h1>
-                  <p className="text-xs text-white/80 max-w-md mx-auto leading-relaxed font-sans mt-0.5">
-                    {entryTranslation.app_subtitle[appLang]} — {entryTranslation.intro_para[appLang]}
-                  </p>
-                </div>
+                    {/* Zone 3: Search, Cart Bag & Primary Staff Sign-In Pill */}
+                    <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => setActiveRole('customer')}
+                        className="p-2 text-white/80 hover:text-[#F59E0B] transition-colors cursor-pointer"
+                        aria-label="Browse Digital Menu"
+                        title={tText({ am: 'ሜኑ ይፈልጉ', en: 'Search Menu', or: 'Meenuu barbaadi', ti: 'ሜኑ ድለዩ', sid: 'Meenuu hasi', fr: 'Rechercher', de: 'Menü durchsuchen', it: 'Cerca nel menu', zh: '搜索菜单', ar: 'بحث في القائمة' })}
+                      >
+                        <Search className="w-4 h-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setIsCartOpen(true)}
+                        className="relative p-2 text-white/80 hover:text-[#F59E0B] transition-colors cursor-pointer"
+                        aria-label="Open Order Cart"
+                        title={t('header.basket_tooltip')}
+                      >
+                        <ShoppingBag className="w-4 h-4" />
+                        {cart.length > 0 && (
+                          <span className="absolute -top-0.5 -right-0.5 w-4 h-4 rounded-full bg-[#F59E0B] text-[#140C02] text-[9px] font-black font-mono flex items-center justify-center tabular-nums">
+                            {cart.reduce((sum, i) => sum + i.qty, 0)}
+                          </span>
+                        )}
+                      </button>
+                      <button
+                        id="btn-hero-top-signin"
+                        type="button"
+                        onClick={() => {
+                          setStaffPortalState('login');
+                          setUnifiedError('');
+                          setIsStaffAuthModalOpen(true);
+                          runVoiceOver(tText({ am: 'የሰራተኛ መግቢያ ተከፍቷል', en: 'Staff sign in opened.', or: 'Seensi hojjettootaa banameera.', ti: 'መእተዊ ሰራሕተኛታት ተኸፊቱ።', sid: 'Ogeeyyi seena fanamino.', fr: 'Connexion personnel ouverte.', de: 'Mitarbeiter-Anmeldung geöffnet.', it: 'Accesso staff aperto.', zh: '已打开员工登录。', ar: 'تم فتح تسجيل دخول الموظفين.' }));
+                        }}
+                        className="px-3 sm:px-5 py-1.5 sm:py-2 rounded-full bg-[#F59E0B] hover:bg-[#FBBF24] text-[#140C02] text-[11px] sm:text-xs font-extrabold tracking-wide transition-all cursor-pointer whitespace-nowrap shrink-0 shadow-[0_6px_18px_rgba(245,158,11,0.3)] active:scale-[0.98]"
+                      >
+                        {tText({ am: 'የሰራተኛ መግቢያ', en: 'Staff Sign In', or: 'Seensa Hojjetaa', ti: 'መእተዊ ሰራሕተኛ', sid: 'Ogeeyyi Seena', fr: 'Connexion Staff', de: 'Mitarbeiter Login', it: 'Accesso Staff', zh: '员工登录', ar: 'دخول الموظفين' })}
+                      </button>
+                    </div>
+                  </nav>
 
-
-
-                {/* symmetrically styled aspect-square cards (size 20*20 ratio / 1:1 format) and transparent */}
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 w-full max-w-4xl relative z-10 px-4 mt-2 justify-center items-center">
-                  
-                  {/* LEFT SIDE: CUSTOMER GATEWAY (Symmetric 20*20 Ratio aspect-square card) */}
-                  <div 
-                    onMouseEnter={() => runVoiceOver(`${entryTranslation.guest_title[appLang]}. ${entryTranslation.guest_desc[appLang]}`)}
-                    className="aspect-square w-full max-w-[390px] mx-auto flex flex-col justify-between p-6 bg-stone-950/90 hover:bg-stone-900 backdrop-blur-xl border-2 border-amber-500/30 hover:border-amber-400 rounded-3xl shadow-2xl relative overflow-hidden group transition-all duration-300 transform hover:scale-[1.01]"
-                  >
-                    {/* Decorative subtle glass circle */}
-                    <div className="absolute -right-8 -bottom-8 w-32 h-32 bg-amber-500/10 rounded-full blur-2xl group-hover:bg-amber-500/20 transition-all duration-500"></div>
-                    
-                    <div>
-                      <div className="flex justify-between items-center mb-2 border-b border-white/10 pb-2">
-                        <span className="text-3xl font-black font-mono text-amber-400/40 tracking-wider">01</span>
-                        <span className="clay-emoji text-3xl animate-bounce">🍛</span>
-                      </div>
-                      
-                      <h3 className="text-xl font-black uppercase text-amber-400 tracking-wide mb-1.5 font-sans">
-                        {entryTranslation.guest_title[appLang]} <br/>
-                        <span className="text-[9px] text-stone-300/60 block font-normal font-mono mt-0.5">GUEST ORDER GATEWAY</span>
-                      </h3>
-                      
-                      <p className="text-[11px] text-stone-200 leading-relaxed font-sans mb-3 line-clamp-4">
-                        {entryTranslation.guest_desc[appLang]}
+                  {/* HERO SPLIT CONTENT */}
+                  <div className="relative z-10 grid grid-cols-1 lg:grid-cols-12 items-center gap-8 px-6 md:px-10 pt-6 pb-10 md:pt-8 md:pb-12">
+                    {/* LEFT COLUMN: TYPOGRAPHY + DUAL PRIMARY ENTRY BUTTONS */}
+                    <div className="lg:col-span-6 space-y-5 text-left">
+                      <p className="text-xs font-semibold text-[#F59E0B] tracking-wide">
+                        {tText({
+                          am: 'ተመጣጣኝ ዋጋ እና ትኩስ የሃዋሳ መስተንግዶ • Hawassa Papyrus',
+                          en: 'Affordable, fresh & authentic • Hawassa Papyrus Lodge',
+                          or: 'Gatii madaalawaa, qulqulluu fi aadaa • Hawassa Papyrus',
+                          ti: 'ብዝተመጣጠነ ዋጋን ሓድሽ ባህላዊ መስተንግዶን • Hawassa Papyrus',
+                          sid: 'Shiima woxe, haaronna budu qixxaawo • Hawassa Papyrus',
+                          fr: 'Abordable, frais & authentique • Hawassa Papyrus',
+                          de: 'Frisch, authentisch & einladend • Hawassa Papyrus',
+                          it: 'Fresco, autentico e conveniente • Hawassa Papyrus',
+                          zh: '实惠新鲜、地道阿瓦萨风味 • Hawassa Papyrus',
+                          ar: 'أسعار مناسبة ومأكولات طازجة وأصيلة • هاواسا بابيروس',
+                        })}
                       </p>
 
-                      <div className="space-y-1.5 font-sans block text-left">
-                        <div className="flex items-center gap-1.5 text-[9px] text-amber-200/80 font-mono">
-                          <span className="text-amber-400 font-black">✔</span> DIGITAL QR MENU & ORDERING
+                      <h1 className="text-4xl sm:text-5xl font-black text-white leading-[1.08] tracking-tight text-balance">
+                        {tText({
+                          am: 'ትኩስና ጣፋጭ',
+                          en: 'Hot, fresh',
+                          or: 'Nyaata ho’aa fi',
+                          ti: 'ውዑይን ጥዑምን',
+                          sid: 'Xaa’manna haaro',
+                          fr: 'Saveurs fraîches',
+                          de: 'Heiße, frische',
+                          it: 'Sapori freschi',
+                          zh: '新鲜热辣',
+                          ar: 'نكهات طازجة',
+                        })}{' '}
+                        <span className="inline-flex align-middle mx-1 w-11 h-9 rounded-xl overflow-hidden border border-[#F59E0B]/50 shadow-lg bg-[#1C0606]">
+                          <img
+                            src={signatureDish}
+                            alt="Signature Dish"
+                            referrerPolicy="no-referrer"
+                            loading="eager"
+                            decoding="sync"
+                            fetchPriority="high"
+                            className="w-full h-full object-cover"
+                          />
+                        </span>{' '}
+                        {tText({
+                          am: 'ምግቦች',
+                          en: 'flavors',
+                          or: 'mi’aawaa',
+                          ti: 'መግብታት',
+                          sid: 'sagale',
+                          fr: 'et chaudes',
+                          de: 'Gerichte',
+                          it: 'e caldi',
+                          zh: '美食',
+                          ar: 'وساخنة',
+                        })}
+                        <br />
+                        <span className="text-[#F59E0B]">
+                          {tText({
+                            am: 'ለማንኛውም ጊዜ እና ፍላጎት',
+                            en: 'made for any time cravings',
+                            or: 'yeroo hundaaf kan qophaa’e',
+                            ti: 'ንዝኾነ እዋንን ድሌትን',
+                            sid: 'ayee yannarano qixxaabbino',
+                            fr: 'prêtes à toute heure',
+                            de: 'für jeden Appetit',
+                            it: 'per ogni momento',
+                            zh: '满足您的随时味蕾',
+                            ar: 'معدّة لكل الأوقات',
+                          })}
+                        </span>
+                      </h1>
+
+                      <p className="text-xs sm:text-sm text-stone-300/90 leading-relaxed max-w-md">
+                        {entryTranslation.app_subtitle[appLang] || entryTranslation.app_subtitle.en} — {entryTranslation.intro_para[appLang] || entryTranslation.intro_para.en}
+                      </p>
+
+                      {/* PRIMARY ENTRY BUTTONS: Digital Menu + Staff Sign In + Blind/Voice Menu Launcher */}
+                      <div className="flex flex-wrap items-center gap-3 pt-1">
+                        {/* Slot 1 (Amber Solid Pill): DIGITAL MENU */}
+                        <button
+                          id="btn-enter-guest"
+                          type="button"
+                          onClick={() => {
+                            setActiveRole('customer');
+                            runVoiceOver(tText({ am: 'የእንግዳ ዲጂታል ሜኑ ተከፍቷል', en: 'Digital menu loaded.', or: 'Meenuun dijitaalaa banameera.', ti: 'ዲጂታል ሜኑ ተኸፊቱ።', sid: 'Diijitaale meenuu fanamino.', fr: 'Menu numérique chargé.', de: 'Digitales Menü geladen.', it: 'Menu digitale caricato.', zh: '电子菜单已加载。', ar: 'تم تحميل القائمة الرقمية.' }));
+                          }}
+                          className="bg-gradient-to-r from-[#F59E0B] to-[#EA8C00] hover:from-[#FBBF24] hover:to-[#F59E0B] text-[#140C02] font-black text-xs sm:text-sm px-5 sm:px-6 py-3 rounded-full shadow-[0_10px_28px_rgba(245,158,11,0.38)] flex items-center gap-2.5 cursor-pointer whitespace-nowrap shrink-0 transition-all active:scale-[0.98]"
+                        >
+                          <span>{tText({ am: 'ወደ ዲጂታል ሜኑ', en: 'Digital Menu', or: 'Meenuu Dijitaalaa', ti: 'ናብ ዲጂታል ሜኑ', sid: 'Diijitaale Meenuu', fr: 'Menu Numérique', de: 'Digitale Speisekarte', it: 'Menu Digitale', zh: '浏览电子菜单', ar: 'القائمة الرقمية' })}</span>
+                          <img
+                            src={ethiopianCuisineHero}
+                            alt=""
+                            aria-hidden="true"
+                            referrerPolicy="no-referrer"
+                            loading="eager"
+                            decoding="sync"
+                            fetchPriority="high"
+                            className="w-6 h-6 rounded-full object-cover border border-black/25 bg-[#1C0606]"
+                          />
+                        </button>
+
+                        {/* Slot 2 (Outlined Pill): STAFF SIGN IN */}
+                        <button
+                          id="btn-portal-go-login"
+                          type="button"
+                          onClick={() => {
+                            setStaffPortalState('login');
+                            setUnifiedError('');
+                            setIsStaffAuthModalOpen(true);
+                            runVoiceOver(tText({ am: 'የሰራተኛ መግቢያ ፎርም ተከፍቷል', en: 'Staff sign in modal opened.', or: 'Unki seensa hojjettootaa banameera.', ti: 'መእተዊ ሰራሕተኛታት ተኸፊቱ።', sid: 'Ogeeyyi seena fanamino.', fr: 'Fenêtre de connexion ouverte.', de: 'Mitarbeiter-Anmeldefenster geöffnet.', it: 'Finestra di accesso aperta.', zh: '已打开员工登录窗口。', ar: 'تم فتح نافذة دخول الموظفين.' }));
+                          }}
+                          className="border border-white/60 hover:border-[#F59E0B] hover:bg-white/10 text-white font-bold text-xs sm:text-sm px-5 sm:px-6 py-3 rounded-full flex items-center gap-2.5 cursor-pointer whitespace-nowrap shrink-0 transition-all active:scale-[0.98]"
+                        >
+                          <span>{tText({ am: 'የሰራተኛ መግቢያ', en: 'Staff Sign In', or: 'Seensa Hojjetaa', ti: 'መእተዊ ሰራሕተኛ', sid: 'Ogeeyyi Seena', fr: 'Connexion Staff', de: 'Mitarbeiter Login', it: 'Accesso Staff', zh: '员工登录', ar: 'تسجيل دخول الموظفين' })}</span>
+                          <Menu className="w-4 h-4 text-[#F59E0B]" />
+                        </button>
+
+                        {/* Slot 3 (Blind / Visually Impaired Accessible Voice Menu & Order Launcher) */}
+                        <button
+                          id="btn-entry-voice-menu"
+                          type="button"
+                          onClick={startEntryVoiceCapture}
+                          aria-expanded={entryVoiceOpen}
+                          aria-label={tText({
+                            am: 'ለአይነ ስውራን እና በድምፅ ሜኑውን ከፍቶ ምግብ ለማዘዝ (Alt+V)',
+                            en: 'Open Digital Menu and order food by voice for blind and visually impaired guests (Alt+V)',
+                            or: 'Qaroo dhabeeyyiif sagaleedhaan meenuu bananii nyaata ajajuu (Alt+V)',
+                            ti: 'ንዓይነ ስውራን ብድምጺ ሜኑ ከፊትካ ምግቢ ምእዛዝ (Alt+V)',
+                            sid: 'Illensa babbaxinorira huurranni meenuu fante sagale hajaja (Alt+V)',
+                            fr: 'Ouvrir le menu et commander à la voix pour personnes malvoyantes (Alt+V)',
+                            de: 'Menü per Sprache öffnen und bestellen für sehbehinderte Gäste (Alt+V)',
+                            it: 'Apri il menu e ordina con la voce per ospiti non vedenti (Alt+V)',
+                            zh: '视障人士语音打开菜单与点餐 (Alt+V)',
+                            ar: 'افتح القائمة واطلب الطعام بالصوت للمكفوفين وضعاف البصر (Alt+V)',
+                          })}
+                          className="border-2 border-[#F4C22B] bg-[#1C1917]/90 hover:bg-[#292524] text-[#FEF3C7] font-black text-xs sm:text-sm px-5 py-3 rounded-full flex items-center gap-2 cursor-pointer whitespace-nowrap shrink-0 transition-all active:scale-[0.98] shadow-[0_8px_24px_rgba(244,194,43,0.22)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+                        >
+                          <Mic className="w-4 h-4 text-[#F4C22B] shrink-0" />
+                          <span>
+                            {tText({
+                              am: 'በድምፅ ሜኑ ክፈትና እዘዝ',
+                              en: 'Open Menu by Voice',
+                              or: 'Meenuu Sagaleedhaan Bani',
+                              ti: 'ሜኑ ብድምጺ ክፈት',
+                              sid: 'Meenuu Huurranni Fani',
+                              fr: 'Ouvrir le Menu à la Voix',
+                              de: 'Menü per Sprache öffnen',
+                              it: 'Apri Menu con Voce',
+                              zh: '语音打开菜单并点餐',
+                              ar: 'افتح القائمة بالصوت',
+                            })}
+                          </span>
+                        </button>
+                      </div>
+
+                      {/* Accessible Blind / Voice Menu Launcher Drawer (appears only on demand) */}
+                      {entryVoiceOpen && (
+                        <div
+                          role="region"
+                          aria-live="polite"
+                          className="rounded-2xl bg-[#140C02]/95 border-2 border-[#F4C22B] p-3.5 sm:p-4 space-y-2.5 shadow-2xl max-w-lg"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span
+                                className={`w-2.5 h-2.5 rounded-full shrink-0 ${
+                                  entryVoiceStatus === 'listening'
+                                    ? 'bg-red-500 animate-ping'
+                                    : entryVoiceStatus === 'transcribing'
+                                      ? 'bg-amber-400 animate-pulse'
+                                      : 'bg-emerald-400'
+                                }`}
+                              />
+                              <span className="text-xs font-black text-[#F4C22B] truncate">
+                                {entryVoiceStatus === 'listening'
+                                  ? tText({
+                                      am: '🎙️ እየሰማሁ ነው... "ሜኑውን ከፍተው ምግብ ማዘዝ ፈልጌ ነበር" ይበሉ',
+                                      en: '🎙️ Listening... Say "Open menu to order food"',
+                                      or: '🎙️ Dhaggeeffachaa jira... "Meenuu bani" jedhaa',
+                                      ti: '🎙️ እሰምዕ ኣለኹ... "ሜኑ ክፈት" በሉ',
+                                      sid: '🎙️ Macciishshanni noommo... "Meenuu fani" yii',
+                                      fr: '🎙️ À l’écoute... Dites « Ouvrir le menu »',
+                                      de: '🎙️ Höre zu... Sagen Sie „Menü öffnen“',
+                                      it: '🎙️ In ascolto... Di’ «Apri il menu»',
+                                      zh: '🎙️ 正在聆听... 请说“打开菜单点餐”',
+                                      ar: '🎙️ جارٍ الاستماع... قل "افتح القائمة"',
+                                    })
+                                  : entryVoiceStatus === 'transcribing'
+                                    ? tText({
+                                        am: '⏳ ድምፅዎን በማንበብ ላይ...',
+                                        en: '⏳ Understanding your voice...',
+                                        or: '⏳ Sagalee keessan dubbisaa jira...',
+                                        ti: '⏳ ድምጽኹም ይትርጎም ኣሎ...',
+                                        sid: '⏳ Huurroka nabbawwanni...',
+                                        fr: '⏳ Analyse vocale...',
+                                        de: '⏳ Sprache wird verarbeitet...',
+                                        it: '⏳ Elaborazione vocale...',
+                                        zh: '⏳ 正在识别您的语音...',
+                                        ar: '⏳ جارٍ فهم صوتك...',
+                                      })
+                                    : tText({
+                                        am: '🎙️ በድምፅ ሜኑ መክፈቻና ማዘዣ',
+                                        en: '🎙️ Voice Menu & Ordering Assistant',
+                                        or: '🎙️ Meenuu fi Ajaja Sagalee',
+                                        ti: '🎙️ ብድምጺ ሜኑ መኽፈትን መእዘዝን',
+                                        sid: '🎙️ Huurranni Meenuu Fante Hajaji',
+                                        fr: '🎙️ Menu & Commande Vocale',
+                                        de: '🎙️ Sprach-Menü & Bestellung',
+                                        it: '🎙️ Menu & Ordine Vocale',
+                                        zh: '🎙️ 语音菜单与点餐助手',
+                                        ar: '🎙️ القائمة والطلب الصوتي',
+                                      })}
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                cleanupEntryMicCapture();
+                                setEntryVoiceStatus('idle');
+                                setEntryVoiceOpen(false);
+                              }}
+                              aria-label="Close voice launcher"
+                              className="p-1 rounded-lg text-stone-300 hover:text-white hover:bg-white/10 cursor-pointer shrink-0"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                          </div>
+
+                          {entryVoiceError && (
+                            <p className="text-[11px] font-bold text-amber-200 bg-red-950/70 border border-red-700/60 rounded-xl px-2.5 py-2">
+                              {entryVoiceError}
+                            </p>
+                          )}
+
+                          <div className="flex flex-wrap items-center gap-2">
+                            {entryVoiceStatus === 'listening' ? (
+                              <button
+                                type="button"
+                                onClick={stopEntryRecordingAndSend}
+                                className="px-3.5 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white font-black text-xs flex items-center gap-1.5 cursor-pointer"
+                              >
+                                <MicOff className="w-3.5 h-3.5" />
+                                <span>
+                                  {tText({ am: 'አቁምና ላክ', en: 'Stop & Send', or: 'Dhaabiitii Ergi', ti: 'ደው ኣብል', sid: 'Uurrisitii Soki', fr: 'Arrêter & Envoyer', de: 'Stopp & Senden', it: 'Ferma & Invia', zh: '停止并发送', ar: 'إيقاف وإرسال' })}
+                                </span>
+                              </button>
+                            ) : entryVoiceStatus === 'transcribing' ? (
+                              <span className="px-3.5 py-2 rounded-xl bg-amber-500/20 text-[#F4C22B] font-black text-xs flex items-center gap-1.5">
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                <span>{tText({ am: 'በሂደት ላይ...', en: 'Processing...', or: 'Hojii irra...', ti: 'ይስራሕ ኣሎ...', sid: 'Loosamanni...', fr: 'Traitement...', de: 'Verarbeitung...', it: 'Elaborazione...', zh: '处理中...', ar: 'جارٍ المعالجة...' })}</span>
+                              </span>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={startEntryVoiceCapture}
+                                className="px-3.5 py-2 rounded-xl bg-[#F4C22B] hover:bg-amber-300 text-[#140C02] font-black text-xs flex items-center gap-1.5 cursor-pointer"
+                              >
+                                <Mic className="w-3.5 h-3.5" />
+                                <span>{tText({ am: 'ደግመህ ተናገር', en: 'Speak Again', or: 'Irra Deebi’ii Dubbadhu', ti: 'ደጊምካ ተዛረብ', sid: 'Marro Hasaawi', fr: 'Parler à nouveau', de: 'Erneut sprechen', it: 'Parla ancora', zh: '重新说话', ar: 'تحدث مرة أخرى' })}</span>
+                              </button>
+                            )}
+
+                            <button
+                              type="button"
+                              onClick={() => launchCustomerVoiceMenu('__OPEN_MENU_VOICE_MODE__')}
+                              className="px-3.5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-stone-950 font-black text-xs cursor-pointer"
+                            >
+                              {tText({
+                                am: 'ሜኑውን በድምፅ ሁነታ ክፈት →',
+                                en: 'Open Menu in Voice Mode →',
+                                or: 'Meenuu Sagaleedhaan Bani →',
+                                ti: 'ሜኑ ብድምጺ ክፈት →',
+                                sid: 'Meenuu Huurranni Fani →',
+                                fr: 'Ouvrir le Menu Vocal →',
+                                de: 'Sprachmenü öffnen →',
+                                it: 'Apri Menu Vocale →',
+                                zh: '立即开启语音菜单 →',
+                                ar: 'افتح القائمة الصوتية الآن →',
+                              })}
+                            </button>
+                          </div>
+
+                          <form
+                            onSubmit={(e) => {
+                              e.preventDefault();
+                              launchCustomerVoiceMenu(entryVoiceTranscript || '__OPEN_MENU_VOICE_MODE__');
+                            }}
+                            className="flex items-center gap-1.5 pt-1"
+                          >
+                            <input
+                              type="text"
+                              value={entryVoiceTranscript}
+                              onChange={(e) => setEntryVoiceTranscript(e.target.value)}
+                              placeholder={tText({
+                                am: 'ምሳሌ: ሜኑውን ከፍተው ምግብ ማዘዝ ፈልጌ ነበር...',
+                                en: 'e.g. Open menu and order food...',
+                                or: 'Fakkeenyaaf: Meenuu baniitii nyaata ajaji...',
+                                ti: 'ምሳሌ: ሜኑ ከፊትካ ምግቢ ኣዝዝ...',
+                                sid: 'Lawishsha: Meenuu fante sagale hajaji...',
+                                fr: 'ex: Ouvrir le menu et commander...',
+                                de: 'z.B. Menü öffnen und bestellen...',
+                                it: 'es: Apri il menu e ordina...',
+                                zh: '例如：打开菜单并点餐...',
+                                ar: 'مثال: افتح القائمة واطلب الطعام...',
+                              })}
+                              className="flex-1 min-w-0 rounded-xl bg-white/10 border border-white/25 px-3 py-2 text-xs font-bold text-white placeholder:text-stone-400 focus:outline-none focus:border-[#F4C22B]"
+                            />
+                            <button
+                              type="submit"
+                              className="px-3 py-2 rounded-xl bg-[#b21f1f] hover:bg-[#8c1414] text-white font-black text-xs cursor-pointer shrink-0 flex items-center gap-1"
+                              aria-label="Submit voice menu command"
+                            >
+                              <Send className="w-3.5 h-3.5" />
+                            </button>
+                          </form>
                         </div>
-                        <div className="flex items-center gap-1.5 text-[9px] text-amber-200/80 font-mono">
-                          <span className="text-amber-400 font-black">✔</span> ROOM SERVICES & TOURS
+                      )}
+
+                      {/* 24-Hour Room & Table Delivery Strip matching reference */}
+                      <div className="flex items-center gap-3 pt-4">
+                        <div className="w-11 h-11 rounded-2xl overflow-hidden border border-[#F59E0B]/35 bg-black/50 shrink-0 shadow-md">
+                          <img
+                            src={deliveryScooterIllustration}
+                            alt="24 Hour Delivery Service"
+                            referrerPolicy="no-referrer"
+                            loading="eager"
+                            decoding="sync"
+                            fetchPriority="high"
+                            className="w-full h-full object-cover"
+                          />
                         </div>
-                        <div className="flex items-center gap-1.5 text-[9px] text-amber-200/80 font-mono">
-                          <span className="text-amber-400 font-black">✔</span> MULTI-LANGUAGE VOICE ASSIST
+                        <div className="text-[11px] leading-snug text-stone-200/90 font-medium">
+                          <span className="block font-bold text-white">
+                            {tText({ am: 'የ24 ሰዓት ፈጣን አገልግሎት', en: 'We offer 24 hour', or: 'Tajaajila sa’aatii 24', ti: 'ናይ 24 ሰዓት ቅልጡፍ ኣገልግሎት', sid: '24 sa’ate rahote taje', fr: 'Service 24h/24', de: '24-Stunden-Service', it: 'Servizio 24 ore', zh: '24小时全天候送餐', ar: 'خدمة توصيل على مدار 24 ساعة' })}
+                          </span>
+                          <span className="text-stone-300/80">
+                            {tText({ am: 'የክፍልና የጠረጴዛ መስተንግዶ አለን', en: 'room & table delivery service', or: 'tajaajila kutaa fi minjaalaa', ti: 'ኣገልግሎት ክፍልን ጠረጴዛን ኣለና', sid: 'kifilenna xarapheeza iillisha', fr: 'livraison en chambre & table', de: 'Zimmer- & Tischservice', it: 'servizio in camera e al tavolo', zh: '客房与餐桌快速送达服务', ar: 'توصيل سريع للغرف والطاولات' })}
+                          </span>
                         </div>
                       </div>
                     </div>
-                    
-                    <button 
-                      id="btn-enter-guest"
-                      onClick={() => {
-                        setActiveRole('customer');
-                        runVoiceOver(appLang === 'am' ? 'የእንግዳ ማዘዣ ገጽ ተከፍቷል' : 'Guest companion portal loaded.');
-                      }}
-                      className="w-full h-11 bg-amber-400 hover:bg-amber-300 text-stone-950 rounded-xl font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all duration-300 shadow-[0_4px_12px_rgba(251,191,36,0.3)] cursor-pointer"
-                    >
-                      <span>{entryTranslation.guest_btn[appLang]}</span>
-                    </button>
+
+                    {/* RIGHT COLUMN: DRAMATIC FLOATING GOURMET SHOWCASE OVER CRIMSON GLOW */}
+                    <div className="lg:col-span-6 relative min-h-[300px] sm:min-h-[380px] flex items-center justify-center">
+                      {/* Decorative spice & chili floating SVG accent */}
+                      <svg
+                        viewBox="0 0 64 64"
+                        fill="none"
+                        xmlns="http://www.w3.org/2000/svg"
+                        className="w-12 h-12 absolute top-2 right-4 sm:right-8 drop-shadow-[0_8px_16px_rgba(220,38,38,0.4)] pointer-events-none select-none"
+                        aria-hidden="true"
+                      >
+                        <path
+                          d="M46 14C44 26 36 42 18 48C26 52 44 46 50 24C51 19 49 15 46 14Z"
+                          fill="#DC2626"
+                        />
+                        <path d="M47 14C49 9 53 7 56 8" stroke="#22C55E" strokeWidth="3" strokeLinecap="round" />
+                      </svg>
+
+                      {/* Primary Floating Centerpiece Dish */}
+                      <motion.button
+                        type="button"
+                        onClick={() => setActiveRole('customer')}
+                        animate={{ y: [0, -10, 0] }}
+                        transition={{ duration: 5.5, repeat: Infinity, ease: 'easeInOut' }}
+                        className="relative z-10 w-56 h-56 sm:w-64 sm:h-64 rounded-full overflow-hidden border-2 border-[#F59E0B]/40 shadow-[0_30px_65px_rgba(0,0,0,0.85)] cursor-pointer group focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F59E0B] bg-[#1C0606]"
+                        title={tText({ am: 'ወደ ዲጂታል ሜኑ ይግቡ', en: 'Explore Digital Menu', or: 'Meenuu Dijitaalaa daawwadhaa', ti: 'ዲጂታል ሜኑ ርኣዩ', sid: 'Diijitaale meenuu la\'i', fr: 'Explorer le Menu', de: 'Digitales Menü öffnen', it: 'Esplora il Menu', zh: '浏览电子菜单', ar: 'استكشف القائمة الرقمية' })}
+                      >
+                        <img
+                          src={ethiopianCuisineHero}
+                          alt="Hawassa Papyrus Signature Platter"
+                          referrerPolicy="no-referrer"
+                          loading="eager"
+                          decoding="sync"
+                          fetchPriority="high"
+                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                        />
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-transparent" />
+                      </motion.button>
+
+                      {/* Top Floating Dish Accent */}
+                      <motion.button
+                        type="button"
+                        onClick={() => setActiveRole('customer')}
+                        animate={{ y: [0, -12, 0] }}
+                        transition={{ duration: 4.8, repeat: Infinity, ease: 'easeInOut', delay: 0.6 }}
+                        className="absolute top-0 left-4 sm:left-10 z-20 w-28 h-28 sm:w-36 sm:h-36 rounded-full overflow-hidden border-2 border-white/20 shadow-[0_22px_45px_rgba(0,0,0,0.85)] cursor-pointer hover:border-[#F59E0B]/60 transition-colors bg-[#1C0606]"
+                        title={tText({ am: 'ትኩስ ስቴክ እና ጥብስ', en: 'Signature Grill', or: 'Tibsi Addaa', ti: 'ፍሉይ ጥብሲ', sid: 'Baxxino Tibsi', fr: 'Grillades Signature', de: 'Signature-Grill', it: 'Griglia Speciale', zh: '招牌烤肉', ar: 'مشاوي مميزة' })}
+                      >
+                        <img
+                          src={signatureDish}
+                          alt="Sizzling Gourmet Steak"
+                          referrerPolicy="no-referrer"
+                          loading="eager"
+                          decoding="sync"
+                          fetchPriority="high"
+                          className="w-full h-full object-cover"
+                        />
+                      </motion.button>
+
+                      {/* Bottom-Right Floating Culinary Accent */}
+                      <motion.button
+                        type="button"
+                        onClick={() => setActiveRole('customer')}
+                        animate={{ y: [0, -8, 0] }}
+                        transition={{ duration: 6.2, repeat: Infinity, ease: 'easeInOut', delay: 1.1 }}
+                        className="absolute bottom-2 right-2 sm:right-6 z-20 w-28 h-28 sm:w-32 sm:h-32 rounded-full overflow-hidden border-2 border-[#F59E0B]/35 shadow-[0_22px_45px_rgba(0,0,0,0.85)] cursor-pointer hover:border-[#F59E0B] transition-colors bg-[#1C0606]"
+                        title={tText({ am: 'የሼፍ ልዩ ምግቦች', en: 'Chef Specials', or: 'Nyaata Addaa Qopheessaa', ti: 'ፍሉይ መግቢ ሼፍ', sid: 'Baxxino Sheef Sagale', fr: 'Spécialités du Chef', de: 'Chef-Spezialitäten', it: 'Specialità dello Chef', zh: '主厨特荐', ar: 'أطباق الشيف الخاصة' })}
+                      >
+                        <img
+                          src={deliveryChef}
+                          alt="Chef Culinary Special"
+                          referrerPolicy="no-referrer"
+                          loading="eager"
+                          decoding="sync"
+                          fetchPriority="high"
+                          className="w-full h-full object-cover"
+                        />
+                      </motion.button>
+
+                      {/* Subtle Cherry Tomato SVG garnish at bottom */}
+                      <svg
+                        viewBox="0 0 40 40"
+                        fill="none"
+                        xmlns="http://www.w3.org/2000/svg"
+                        className="w-9 h-9 absolute bottom-1 left-12 opacity-90 drop-shadow-lg pointer-events-none select-none"
+                        aria-hidden="true"
+                      >
+                        <circle cx="20" cy="22" r="13" fill="#EF4444" />
+                        <path d="M20 9L17 4M20 9L23 5M20 9L14 9M20 9L26 9" stroke="#22C55E" strokeWidth="2.2" strokeLinecap="round" />
+                      </svg>
+                    </div>
                   </div>
+                </div>
 
-                  {/* RIGHT SIDE: UNIFIED STAFF SECURE LOGGING PORTAL (Symmetric 20*20 Ratio customizable aspect card) */}
-                  <div 
-                    onMouseEnter={() => runVoiceOver(`${entryTranslation.staff_title[appLang]}. ${entryTranslation.staff_desc[appLang]}`)}
-                    className={`${staffPortalState === 'welcome' ? 'aspect-square' : 'min-h-[500px] md:min-h-[550px] overflow-y-auto'} w-full max-w-[390px] mx-auto flex flex-col bg-stone-950/90 hover:bg-stone-900 backdrop-blur-xl border-2 border-amber-500/30 hover:border-amber-400 rounded-3xl shadow-2xl relative transition-all duration-300 transform hover:scale-[1.01]`}
+                {/* INTERACTIVE STAFF SIGN-IN & SIGN-UP MODAL (Opened from Hero or Top-Right Staff Sign In buttons) */}
+                {isStaffAuthModalOpen && (
+                  <div
+                    className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto"
+                    onClick={(e) => {
+                      if (e.target === e.currentTarget) setIsStaffAuthModalOpen(false);
+                    }}
                   >
-                    {/* Background glass decorative blur spots */}
-                    <div className="absolute -left-10 -top-10 w-28 h-28 bg-amber-500/10 rounded-full blur-2xl pointer-events-none"></div>
+                    <div
+                      className={`${staffPortalState === 'welcome' ? 'aspect-square' : 'min-h-[500px] md:min-h-[550px]'} w-full max-w-[390px] mx-auto relative z-10 transition-all duration-300 my-auto`}
+                    >
+                      <PapyrusOrangeBackdropLayer />
 
-                    <div className="p-5 flex-1 flex flex-col justify-between relative z-10">
-                      
-                      {/* === VIEW 1: STAFF PORTAL WELCOME SCREEN === */}
-                      {staffPortalState === 'welcome' && (
-                        <motion.div 
-                          initial={{ opacity: 0, y: 10 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          className="flex-1 flex flex-col justify-between"
-                        >
-                          <div>
-                            {/* Graphic Logo */}
-                            <div className="flex justify-center mt-2 mb-1">
-                              <div className="relative w-12 h-12 flex items-center justify-center">
-                                {/* Overlapping glowing ambient circles matching mockup image design */}
-                                <div className="absolute top-0 left-0 w-8 h-8 rounded-full bg-[#8E9AFF] opacity-80 mix-blend-screen filter blur-[1px] animate-pulse"></div>
-                                <div className="absolute bottom-0 right-0 w-8 h-8 rounded-full bg-[#F19FFF] opacity-85 mix-blend-screen filter blur-[1px]"></div>
-                                <div className="absolute top-1 right-1 w-7 h-7 rounded-full bg-[#FFE5FF] opacity-90 mix-blend-screen flex items-center justify-center shadow-lg">
-                                  <span className="text-sm">🔑</span>
+                      {/* Close Modal Button */}
+                      <button
+                        type="button"
+                        onClick={() => setIsStaffAuthModalOpen(false)}
+                        className="absolute -top-3 -right-3 z-30 w-9 h-9 rounded-full bg-[#1C1917] hover:bg-[#FF5A1F] text-[#FFFFFF] border border-white/20 shadow-lg flex items-center justify-center cursor-pointer transition-colors"
+                        aria-label="Close Staff Sign In"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+
+                      <div className="w-full h-full flex flex-col bg-[#FFFDF9] border border-orange-100 rounded-[28px] shadow-[0_24px_60px_rgba(0,0,0,0.55)] relative overflow-hidden text-[#1C1917]">
+                        <PapyrusCardCulinaryAccents />
+
+                        <div className="p-5 flex-1 flex flex-col justify-between relative z-10 overflow-y-auto no-scrollbar">
+                          
+                          {/* === VIEW 1: STAFF PORTAL WELCOME SCREEN === */}
+                          {staffPortalState === 'welcome' && (
+                          <motion.div 
+                            initial={{ opacity: 0, y: 10 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            className="flex-1 flex flex-col justify-between"
+                          >
+                            <div className="text-center">
+                              {/* Chef Hat + Orange Serving Cloche Crest */}
+                              <div className="flex justify-center mt-0.5 mb-1">
+                                <PapyrusChefClocheCrest className="w-16 h-12" />
+                              </div>
+
+                              {/* Title & Branding matching Food Hub */}
+                              <div className="space-y-1">
+                                <div className="flex items-center justify-center gap-1.5">
+                                  <HeadingBurstDashes side="left" />
+                                  <h2 className="text-xl font-black tracking-tight font-sans text-[#1C1917] leading-tight">
+                                    Hawassa <span className="text-[#FF5A1F]">Papyrus</span>
+                                  </h2>
+                                  <HeadingBurstDashes side="right" />
                                 </div>
+                                <PapyrusBrushUnderline className="w-36 h-2 mx-auto" />
+                                <p className="text-[9px] text-[#EA580C] font-extrabold tracking-widest font-mono uppercase pt-0.5">
+                                  Staff &amp; Admin Secure Desk
+                                </p>
+                                <p className="text-[10px] text-[#57534E] max-w-xs mx-auto leading-snug text-center line-clamp-2 pt-0.5">
+                                  {entryTranslation.staff_desc[appLang]}
+                                </p>
                               </div>
                             </div>
 
-                            {/* Title & Branding */}
-                            <div className="text-center space-y-1">
-                              <h2 className="text-lg font-extrabold tracking-tight font-sans text-white leading-tight">
-                                Hawassa Papyrus
-                              </h2>
-                              <p className="text-[9px] text-[#00f5ff] font-medium tracking-wide font-mono uppercase">
-                                Staff & Admin Secure Desk
-                              </p>
-                              <p className="text-[10px] text-white/70 max-w-xs mx-auto leading-normal text-center line-clamp-3">
-                                {entryTranslation.staff_desc[appLang]}
-                              </p>
-                            </div>
-                          </div>
-
-                          {/* Action Buttons */}
-                          <div className="space-y-2.5 mt-2">
-                            <button
-                              id="btn-portal-go-login"
-                              onClick={() => {
-                                setStaffPortalState('login');
-                                setUnifiedError('');
-                                runVoiceOver(appLang === 'am' ? 'እባክዎ መለያዎን ያስገቡ' : 'Please authenticate to proceed.');
-                              }}
-                              className="w-full h-10 bg-white text-black hover:bg-slate-50 active:scale-[0.99] rounded-xl font-black text-[10px] uppercase tracking-wider flex items-center justify-center gap-2 transition-all duration-200 cursor-pointer shadow-md"
-                            >
-                              <span>ግባ (LOG IN) 🚀</span>
-                            </button>
-
-                            <button
-                              id="btn-portal-go-signup"
-                              onClick={() => {
-                                setStaffPortalState('signup');
-                                setUnifiedError('');
-                                runVoiceOver(appLang === 'am' ? 'አዲስ መለያ ይፍጠሩ' : 'Create a staff log-in account.');
-                              }}
-                              className="w-full h-10 bg-transparent text-white border border-white/35 hover:border-white hover:bg-white/10 active:scale-[0.99] rounded-xl font-black text-[10px] uppercase tracking-wider flex items-center justify-center gap-2 transition-all duration-200 cursor-pointer"
-                            >
-                              <span>ተመዝገብ (SIGN UP NOW) ✍️</span>
-                            </button>
-                          </div>
-
-                          {/* Footer Guest Continue link */}
-                          <div className="text-center mt-3 pt-1.5 border-t border-white/10">
-                            <button 
-                              onClick={() => {
-                                setActiveRole('customer');
-                                runVoiceOver('Guest mode active.');
-                              }}
-                              className="text-[9px] text-white/60 hover:text-white underline font-medium tracking-wider cursor-pointer font-sans"
-                            >
-                              ያለ መለያ ቀጥል (CONTINUE AS GUEST) 🍽️
-                            </button>
-                          </div>
-                        </motion.div>
-                      )}
-
-                      {/* === VIEW 2: STAFF LOGIN SCREEN === */}
-                      {staffPortalState === 'login' && (
-                        <motion.div 
-                          initial={{ opacity: 0, x: -10 }}
-                          animate={{ opacity: 1, x: 0 }}
-                          className="flex-1 flex flex-col justify-between"
-                        >
-                          <div>
-                            {/* Back Navigation & Header */}
-                            <div className="flex justify-between items-center mb-6">
+                            {/* Action Pill Buttons */}
+                            <div className="space-y-2.5 mt-2">
                               <button
-                                onClick={() => setStaffPortalState('welcome')}
-                                className="flex items-center gap-1.5 text-xs text-white/80 hover:text-white cursor-pointer"
+                                id="btn-modal-go-login"
+                                onClick={() => {
+                                  setStaffPortalState('login');
+                                  setUnifiedError('');
+                                  runVoiceOver(tText({ am: 'እባክዎ መለያዎን ያስገቡ', en: 'Please authenticate to proceed.', or: 'Maaloo eenyummeessaa keessan galchaa.', ti: 'በጃኹም መለለይኹም የእትዉ።', sid: 'Maaloo egennotooshsha borreesi.', fr: 'Veuillez vous authentifier.', de: 'Bitte melden Sie sich an.', it: 'Effettua l\'accesso.', zh: '请验证身份以继续。', ar: 'يرجى تسجيل الدخول للمتابعة.' }));
+                                }}
+                                className="w-full h-10 bg-gradient-to-r from-[#FF6B2C] to-[#EA4C08] hover:from-[#FF5714] hover:to-[#DC3F00] active:scale-[0.99] text-[#FFFFFF] rounded-full font-black text-[10px] uppercase tracking-wider flex items-center justify-center gap-2 transition-all duration-200 cursor-pointer shadow-[0_6px_18px_rgba(255,90,31,0.32)]"
                               >
-                                <span>⬅️ ዋና በር</span>
+                                <span>{t('auth.sign_in')}</span>
+                                <ArrowRight className="w-3.5 h-3.5" />
                               </button>
-                              <span className="text-[10px] font-mono tracking-widest font-bold bg-white/20 px-2.5 py-0.5 rounded-full uppercase">
-                                LOGIN DESK
-                              </span>
+
+                              <button
+                                id="btn-portal-go-signup"
+                                onClick={() => {
+                                  setStaffPortalState('signup');
+                                  setUnifiedError('');
+                                  runVoiceOver(tText({ am: 'አዲስ መለያ ይፍጠሩ', en: 'Create a staff log-in account.', or: 'Herrega haaraa uumaa.', ti: 'ሓዱሽ ኣካውንት ፍጠሩ።', sid: 'Haaro xummeessha kalaqi.', fr: 'Créer un compte personnel.', de: 'Mitarbeiterkonto erstellen.', it: 'Crea un account staff.', zh: '创建员工账号。', ar: 'إنشاء حساب موظف جديد.' }));
+                                }}
+                                className="w-full h-10 bg-[#FFF4EC] hover:bg-orange-100/90 text-[#EA580C] border border-orange-200 active:scale-[0.99] rounded-full font-black text-[10px] uppercase tracking-wider flex items-center justify-center gap-2 transition-all duration-200 cursor-pointer"
+                              >
+                                <span>ተመዝገብ (CREATE ACCOUNT)</span>
+                              </button>
                             </div>
 
-                            <div className="space-y-1 mb-5">
-                              <h3 className="text-2xl font-extrabold text-white tracking-tight">
-                                Welcome,
-                              </h3>
-                              <h4 className="text-lg font-bold text-white/90">
-                                Glad to see you! 👋
-                              </h4>
-                              <p className="text-[10px] text-white/85">
-                                እባክዎ መለያዎን ያስገቡ።
-                              </p>
+                            {/* Signature Bottom Chef Hat Divider + Guest Link */}
+                            <div className="text-center mt-2 space-y-2">
+                              <PapyrusChefDivider />
+                              <button 
+                                onClick={() => {
+                                  setIsStaffAuthModalOpen(false);
+                                  setActiveRole('customer');
+                                  runVoiceOver('Guest mode active.');
+                                }}
+                                className="text-[9.5px] text-[#78716C] hover:text-[#EA580C] underline font-semibold tracking-wide cursor-pointer font-sans"
+                              >
+                                ያለ መለያ ቀጥል (CONTINUE AS GUEST)
+                              </button>
                             </div>
+                          </motion.div>
+                        )}
 
-                            <form 
-                              onSubmit={(e) => {
-                                e.preventDefault();
-                                handleUnifiedLoginSubmit();
-                              }} 
-                              className="space-y-4"
-                            >
+                        {/* === VIEW 2: STAFF LOGIN SCREEN === */}
+                        {staffPortalState === 'login' && (
+                          <motion.div 
+                            initial={{ opacity: 0, x: -10 }}
+                            animate={{ opacity: 1, x: 0 }}
+                            className="flex-1 flex flex-col justify-between"
+                          >
+                            <div>
+                              {/* Back Navigation & Header */}
+                              <div className="flex justify-between items-center mb-3">
+                                <button
+                                  onClick={() => setStaffPortalState('welcome')}
+                                  className="flex items-center gap-1 text-xs font-bold text-[#57534E] hover:text-[#EA580C] cursor-pointer transition-colors"
+                                >
+                                  <ArrowLeft className="w-3.5 h-3.5" />
+                                  <span>ዋና በር</span>
+                                </button>
+                                <span className="text-[9px] font-mono tracking-widest font-extrabold text-[#EA580C] uppercase">
+                                  HAWASSA PAPYRUS
+                                </span>
+                              </div>
 
-                              {/* COLLAPSIBLE DIVISION SELECTOR (Hides gracefully, expandable based on user intent) */}
-                              <div className="space-y-2 bg-white/5 border border-white/10 p-2.5 rounded-2xl relative overflow-hidden transition-all">
-                                <div className="flex items-center justify-between">
-                                  <div className="flex items-center gap-2">
-                                    <span className="text-base select-none">
-                                      {unifiedRole === 'waiter' ? '🏃' :
-                                       unifiedRole === 'chef' ? '🍳' :
-                                       unifiedRole === 'receptionist' ? '🛎️' :
-                                       unifiedRole === 'cashier' ? '💰' :
-                                       unifiedRole === 'guard' ? '🛡️' :
-                                       unifiedRole === 'manager' ? '⚡' : '👑'}
-                                    </span>
-                                    <div>
-                                      <span className="text-[8px] font-mono tracking-widest text-yellow-400 uppercase block font-bold leading-none">
-                                        የስራ ዘርፍ (DIVISION)
+                              <div className="text-center space-y-0.5 mb-3.5">
+                                <div className="flex items-center justify-center gap-2">
+                                  <HeadingBurstDashes side="left" />
+                                  <h3 className="text-xl font-black text-[#1C1917] tracking-tight">
+                                    Sign In Account
+                                  </h3>
+                                  <HeadingBurstDashes side="right" />
+                                </div>
+                                <p className="text-[10.5px] text-[#57534E] font-medium">
+                                  Glad to see you! እባክዎ መለያዎን ያስገቡ።
+                                </p>
+                              </div>
+
+                              <form 
+                                onSubmit={(e) => {
+                                  e.preventDefault();
+                                  handleUnifiedLoginSubmit();
+                                }} 
+                                className="space-y-3"
+                              >
+                                {/* COLLAPSIBLE DIVISION SELECTOR */}
+                                <div className="space-y-2 bg-[#FAF6F0] border border-orange-200/70 p-2.5 rounded-2xl relative overflow-hidden transition-all">
+                                  <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-base select-none">
+                                        {unifiedRole === 'waiter' ? '🏃' :
+                                         unifiedRole === 'chef' ? '🍳' :
+                                         unifiedRole === 'receptionist' ? '🛎️' :
+                                         unifiedRole === 'cashier' ? '💰' :
+                                         unifiedRole === 'guard' ? '🛡️' :
+                                         unifiedRole === 'manager' ? '⚡' : '👑'}
                                       </span>
-                                      <span className="text-xs font-black text-white leading-tight block mt-0.5">
-                                        {unifiedRole === 'waiter' ? 'አስተናጋጅ (Waiter)' :
-                                         unifiedRole === 'chef' ? 'ሼፍ (Chef)' :
-                                         unifiedRole === 'receptionist' ? 'ሪሴብሽን (Receptionist)' :
-                                         unifiedRole === 'cashier' ? 'ካሸር (Cashier)' :
-                                         unifiedRole === 'guard' ? 'ጥበቃ (Security)' :
-                                         unifiedRole === 'manager' ? 'ማናጀር (Manager)' : 'አስኪያጅ (Admin)'}
-                                      </span>
+                                      <div>
+                                        <span className="text-[8px] font-mono tracking-widest text-[#EA580C] uppercase block font-extrabold leading-none">
+                                          የስራ ዘርፍ (DIVISION)
+                                        </span>
+                                        <span className="text-xs font-black text-[#1C1917] leading-tight block mt-0.5">
+                                          {unifiedRole === 'waiter' ? 'አስተናጋጅ (Waiter)' :
+                                           unifiedRole === 'chef' ? 'ሼፍ (Chef)' :
+                                           unifiedRole === 'receptionist' ? 'ሪሴብሽን (Receptionist)' :
+                                           unifiedRole === 'cashier' ? 'ካሸር (Cashier)' :
+                                           unifiedRole === 'guard' ? 'ጥበቃ (Security)' :
+                                           unifiedRole === 'manager' ? 'ማናጀር (Manager)' : 'አስኪያጅ (Admin)'}
+                                        </span>
+                                      </div>
                                     </div>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setIsDivisionExpanded(!isDivisionExpanded);
+                                        runVoiceOver(isDivisionExpanded ? 'Division hidden' : 'Please select your division');
+                                      }}
+                                      className="px-2.5 py-1 rounded-full text-[8.5px] font-extrabold uppercase transition-all bg-white text-[#EA580C] border border-orange-200 hover:bg-orange-50 active:scale-95 cursor-pointer shadow-xs"
+                                    >
+                                      {isDivisionExpanded ? '✖ Hide' : 'Select'}
+                                    </button>
                                   </div>
+
+                                  {isDivisionExpanded && (
+                                    <div className="pt-2 border-t border-orange-200/60 space-y-1.5">
+                                      <span className="text-[8px] font-mono text-[#78716C] uppercase block font-bold">
+                                        የስራ ዘርፍዎን ይምረጡ / CHOOSE WORK DIVISION
+                                      </span>
+                                      <div className="grid grid-cols-2 gap-1.5 max-h-[125px] overflow-y-auto pr-1 no-scrollbar">
+                                        {[
+                                          { val: 'waiter', labelAm: 'አስተናጋጅ', labelEn: 'Waiter', emoji: '🏃' },
+                                          { val: 'chef', labelAm: 'ሼፍ', labelEn: 'Chef', emoji: '🍳' },
+                                          { val: 'receptionist', labelAm: 'ሪሴብሽን', labelEn: 'Receptionist', emoji: '🛎️' },
+                                          { val: 'cashier', labelAm: 'ካሸር', labelEn: 'Cashier', emoji: '💰' },
+                                          { val: 'guard', labelAm: 'ጥበቃ', labelEn: 'Security', emoji: '🛡️' },
+                                          { val: 'manager', labelAm: 'ማናጀር', labelEn: 'Manager', emoji: '⚡' },
+                                          { val: 'admin', labelAm: 'አስኪያጅ', labelEn: 'Admin', emoji: '👑' }
+                                        ].map(item => (
+                                          <button
+                                            key={item.val}
+                                            type="button"
+                                            onClick={() => {
+                                              setUnifiedRole(item.val as any);
+                                              setUnifiedError('');
+                                              setIsDivisionExpanded(false);
+                                              runVoiceOver(`Selected ${item.labelEn}`);
+                                            }}
+                                            className={`py-1.5 px-2 font-sans tracking-tight transition-all rounded-xl flex items-center gap-1.5 cursor-pointer text-left border ${
+                                              unifiedRole === item.val
+                                                ? 'bg-[#FF5A1F] text-[#FFFFFF] border-[#EA4C08] font-extrabold shadow-sm'
+                                                : 'bg-white border-stone-200/80 text-[#292524] hover:border-orange-300 hover:bg-orange-50/50'
+                                            }`}
+                                          >
+                                            <span className="text-xs select-none">{item.emoji}</span>
+                                            <div className="leading-none">
+                                              <span className="text-[9px] font-extrabold block leading-none">{item.labelAm}</span>
+                                              <span className={`text-[7.5px] font-medium block leading-none mt-0.5 ${unifiedRole === item.val ? 'text-[#FFFFFF]/85' : 'text-[#78716C]'}`}>{item.labelEn}</span>
+                                            </div>
+                                          </button>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+
+                                {/* Tabs */}
+                                <div className="grid grid-cols-2 gap-1 p-1 bg-[#F3EFE9] border border-stone-200/70 rounded-full text-[9px] font-mono font-bold tracking-wider">
                                   <button
                                     type="button"
                                     onClick={() => {
-                                      setIsDivisionExpanded(!isDivisionExpanded);
-                                      runVoiceOver(isDivisionExpanded ? 'Division hidden' : 'Please select your division');
+                                      setUnifiedMethod('password');
+                                      setUnifiedError('');
                                     }}
-                                    className="px-2 py-0.5 rounded text-[8px] font-black uppercase transition-all bg-red-950/80 text-yellow-300 border border-yellow-400/40 active:scale-95 cursor-pointer hover:bg-red-900"
+                                    className={`py-1.5 rounded-full text-center cursor-pointer transition-all ${
+                                      unifiedMethod === 'password' ? 'bg-white text-[#EA580C] shadow-sm font-black' : 'text-[#57534E] hover:text-[#1C1917]'
+                                    }`}
                                   >
-                                    {isDivisionExpanded ? '✖ Hide' : '⚙️ Select'}
+                                    👤 ዩዘርና የይለፍ ቃል
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setUnifiedMethod('pin');
+                                      setUnifiedError('');
+                                    }}
+                                    className={`py-1.5 rounded-full text-center cursor-pointer transition-all ${
+                                      unifiedMethod === 'pin' ? 'bg-white text-[#EA580C] shadow-sm font-black' : 'text-[#57534E] hover:text-[#1C1917]'
+                                    }`}
+                                  >
+                                    🔢 ባለ 4 አሃዝ ፒን
                                   </button>
                                 </div>
 
-                                {isDivisionExpanded && (
-                                  <div className="pt-2 border-t border-white/10 space-y-1.5">
-                                    <span className="text-[8px] font-mono text-white/50 uppercase block font-bold">
-                                      የስራ ዘርፍዎን ይምረጡ / CHOOSE WORK DIVISION
-                                    </span>
-                                    <div className="grid grid-cols-2 gap-1.5 max-h-[140px] overflow-y-auto pr-1 no-scrollbar">
-                                      {[
-                                        { val: 'waiter', labelAm: 'አስተናጋጅ', labelEn: 'Waiter', emoji: '🏃' },
-                                        { val: 'chef', labelAm: 'ሼፍ', labelEn: 'Chef', emoji: '🍳' },
-                                        { val: 'receptionist', labelAm: 'ሪሴብሽን', labelEn: 'Receptionist', emoji: '🛎️' },
-                                        { val: 'cashier', labelAm: 'ካሸር', labelEn: 'Cashier', emoji: '💰' },
-                                        { val: 'guard', labelAm: 'ጥበቃ', labelEn: 'Security', emoji: '🛡️' },
-                                        { val: 'manager', labelAm: 'ማናጀር', labelEn: 'Manager', emoji: '⚡' },
-                                        { val: 'admin', labelAm: 'አስኪያጅ', labelEn: 'Admin', emoji: '👑' }
-                                      ].map(item => (
-                                        <button
-                                          key={item.val}
-                                          type="button"
-                                          onClick={() => {
-                                            setUnifiedRole(item.val as any);
-                                            setUnifiedError('');
-                                            setIsDivisionExpanded(false); // Collapses elegantly after choice!
-                                            runVoiceOver(`Selected ${item.labelEn}`);
-                                          }}
-                                          className={`py-1 px-1.5 font-sans tracking-tight transition-all rounded-lg flex items-center gap-1.5 cursor-pointer text-left border ${
-                                            unifiedRole === item.val
-                                              ? 'bg-yellow-400 text-red-950 border-yellow-300 font-extrabold shadow-md transform scale-[1.01]'
-                                              : 'bg-white/5 border-white/5 text-white/75 hover:text-white hover:bg-white/10'
-                                          }`}
-                                        >
-                                          <span className="text-xs select-none">{item.emoji}</span>
-                                          <div className="leading-none">
-                                            <span className="text-[9px] font-extrabold block leading-none">{item.labelAm}</span>
-                                            <span className="text-[7.5px] font-medium text-inherit block leading-none mt-0.5">{item.labelEn}</span>
-                                          </div>
-                                        </button>
-                                      ))}
+                                {/* Fields */}
+                                {unifiedMethod === 'password' ? (
+                                  <div className="space-y-2.5">
+                                    {/* Username Pill Input with Orange Circular Icon */}
+                                    <div className="bg-[#F5F5F4] border border-stone-200/90 focus-within:border-[#FF5A1F] focus-within:bg-white rounded-full p-1 pr-3 flex items-center gap-2.5 transition-all">
+                                      <span className="w-8 h-8 rounded-full bg-gradient-to-br from-[#FF6B2C] to-[#EA4C08] text-[#FFFFFF] flex items-center justify-center shrink-0 shadow-xs">
+                                        <User className="w-4 h-4" />
+                                      </span>
+                                      <input
+                                        type="text"
+                                        aria-label="Username"
+                                        value={unifiedUsername || ''}
+                                        onChange={(e) => {
+                                          setUnifiedUsername(e.target.value);
+                                          setUnifiedError('');
+                                        }}
+                                        placeholder={`መግቢያ ስም (e.g. ${unifiedRole})`}
+                                        className="w-full bg-transparent text-[#1C1917] placeholder-[#A8A29E] text-xs font-semibold py-1.5 outline-none border-none focus:ring-0"
+                                      />
                                     </div>
-                                  </div>
-                                )}
-                              </div>
 
-                              {/* Tabs */}
-                              <div className="grid grid-cols-2 gap-1 p-0.5 bg-white/15 border border-white/10 rounded-lg text-[9px] font-mono font-semibold tracking-wider">
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setUnifiedMethod('password');
-                                    setUnifiedError('');
-                                  }}
-                                  className={`py-1 rounded-md text-center cursor-pointer transition-all ${
-                                    unifiedMethod === 'password' ? 'bg-white text-[#7C3AED]' : 'text-white/80 hover:text-white'
-                                  }`}
-                                >
-                                  👤 ዩዘርና የይለፍ ቃል
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setUnifiedMethod('pin');
-                                    setUnifiedError('');
-                                  }}
-                                  className={`py-1 rounded-md text-center cursor-pointer transition-all ${
-                                    unifiedMethod === 'pin' ? 'bg-white text-[#7C3AED]' : 'text-white/80 hover:text-white'
-                                  }`}
-                                >
-                                  🔢 ባለ 4 አሃዝ ፒን
-                                </button>
-                              </div>
-
-                              {/* Fields */}
-                              {unifiedMethod === 'password' ? (
-                                <div className="space-y-2.5">
-                                  <div>
-                                    <label className="text-[9px] font-mono uppercase text-white/90 block mb-0.5">መግቢያ ስም (USERNAME)</label>
-                                    <input
-                                      type="text"
-                                      value={unifiedUsername || ''}
-                                      onChange={(e) => {
-                                        setUnifiedUsername(e.target.value);
-                                        setUnifiedError('');
-                                      }}
-                                      placeholder={`e.g. ${unifiedRole}`}
-                                      className="w-full bg-white/10 border border-white/20 text-white placeholder-white/50 text-xs font-bold py-2 px-3 outline-none focus:border-white focus:bg-white/20 rounded-xl"
-                                    />
-                                  </div>
-                                  <div>
-                                    <label className="text-[9px] font-mono uppercase text-white/90 block mb-0.5">የይለፍ ቃል (PASSWORD)</label>
-                                    <div className="relative">
+                                    {/* Password Pill Input with Orange Circular Icon + Eye Toggle */}
+                                    <div className="bg-[#F5F5F4] border border-stone-200/90 focus-within:border-[#FF5A1F] focus-within:bg-white rounded-full p-1 pr-3 flex items-center gap-2.5 transition-all">
+                                      <span className="w-8 h-8 rounded-full bg-gradient-to-br from-[#FF6B2C] to-[#EA4C08] text-[#FFFFFF] flex items-center justify-center shrink-0 shadow-xs">
+                                        <Lock className="w-4 h-4" />
+                                      </span>
                                       <input
                                         type={showLoginPassword ? 'text' : 'password'}
+                                        aria-label="Password"
                                         value={unifiedPassword || ''}
                                         onChange={(e) => {
                                           setUnifiedPassword(e.target.value);
                                           setUnifiedError('');
                                         }}
-                                        placeholder="••••••••"
-                                        className="w-full bg-white/10 border border-white/20 text-white placeholder-white/50 text-xs font-bold py-2 pl-3 pr-10 outline-none focus:border-white focus:bg-white/20 rounded-xl"
+                                        placeholder="የይለፍ ቃል (Password)"
+                                        className="w-full bg-transparent text-[#1C1917] placeholder-[#A8A29E] text-xs font-semibold py-1.5 outline-none border-none focus:ring-0"
                                       />
                                       <button
                                         type="button"
                                         onClick={() => setShowLoginPassword(!showLoginPassword)}
-                                        className="absolute right-3 top-1/2 -translate-y-1/2 hover:text-white text-white/60 text-xs focus:outline-none"
+                                        className="text-[#78716C] hover:text-[#EA580C] p-1 focus:outline-none cursor-pointer shrink-0"
+                                        aria-label={showLoginPassword ? 'Hide password' : 'Show password'}
                                       >
-                                        {showLoginPassword ? '👁️' : '🙈'}
+                                        {showLoginPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                                       </button>
                                     </div>
                                   </div>
-                                </div>
-                              ) : (
-                                <div className="flex flex-col items-center space-y-2">
-                                  <div className="w-full bg-white/10 border border-white/10 py-1.5 px-3 rounded-lg text-center flex justify-between items-center">
-                                    <span className="text-[9px] font-mono uppercase text-white/80">የደህንነት ፒን ኮድ</span>
-                                    <div className="text-lg font-mono tracking-widest font-black text-white">
-                                      {unifiedPin ? '•'.repeat(unifiedPin.length) : <span className="text-white/20">••••</span>}
+                                ) : (
+                                  <div className="flex flex-col items-center space-y-2">
+                                    <div className="w-full bg-[#FAF6F0] border border-orange-200/80 py-1.5 px-3.5 rounded-full text-center flex justify-between items-center">
+                                      <span className="text-[9px] font-mono uppercase text-[#EA580C] font-extrabold">የደህንነት ፒን ኮድ</span>
+                                      <div className="text-lg font-mono tracking-widest font-black text-[#1C1917] tabular-nums">
+                                        {unifiedPin ? '•'.repeat(unifiedPin.length) : <span className="text-stone-300">••••</span>}
+                                      </div>
                                     </div>
-                                  </div>
 
-                                  <div className="grid grid-cols-3 gap-1 w-full max-w-[190px]">
-                                    {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map(num => (
+                                    <div className="grid grid-cols-3 gap-1.5 w-full max-w-[210px]">
+                                      {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map(num => (
+                                        <button
+                                          key={num}
+                                          type="button"
+                                          onClick={() => {
+                                            setUnifiedError('');
+                                            if (unifiedPin.length < 4) setUnifiedPin(p => p + num);
+                                          }}
+                                          className="bg-[#F5F5F4] hover:bg-orange-50 border border-stone-200/80 text-[#1C1917] font-mono text-xs font-black py-1.5 transition-all active:scale-95 cursor-pointer rounded-xl"
+                                        >
+                                          {num}
+                                        </button>
+                                      ))}
                                       <button
-                                        key={num}
+                                        type="button"
+                                        onClick={() => {
+                                          setUnifiedPin('');
+                                          setUnifiedError('');
+                                        }}
+                                        className="bg-red-50 hover:bg-red-100 border border-red-200 text-red-700 font-mono text-[8.5px] uppercase font-black cursor-pointer rounded-xl"
+                                      >
+                                        CLR
+                                      </button>
+                                      <button
                                         type="button"
                                         onClick={() => {
                                           setUnifiedError('');
-                                          if (unifiedPin.length < 4) setUnifiedPin(p => p + num);
+                                          if (unifiedPin.length < 4) setUnifiedPin(p => p + '0');
                                         }}
-                                        className="bg-white/15 hover:bg-white/30 text-white font-mono text-xs font-bold py-1.5 transition-all active:scale-95 cursor-pointer rounded-lg"
+                                        className="bg-[#F5F5F4] hover:bg-orange-50 border border-stone-200/80 text-[#1C1917] font-mono text-xs font-black py-1.5 active:scale-95 cursor-pointer rounded-xl"
                                       >
-                                        {num}
+                                        0
                                       </button>
-                                    ))}
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setUnifiedPin('');
-                                        setUnifiedError('');
-                                      }}
-                                      className="bg-red-500/20 hover:bg-red-500/40 text-red-200 font-mono text-[8.5px] uppercase font-bold cursor-pointer rounded-lg"
-                                    >
-                                      CLR
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setUnifiedError('');
-                                        if (unifiedPin.length < 4) setUnifiedPin(p => p + '0');
-                                      }}
-                                      className="bg-white/15 hover:bg-white/30 text-white font-mono text-xs font-bold py-1.5 active:scale-95 cursor-pointer rounded-lg"
-                                    >
-                                      0
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => handleUnifiedLoginSubmit()}
-                                      className="bg-white text-[#7C3AED] font-mono text-[9px] font-black cursor-pointer rounded-lg shadow-sm"
-                                    >
-                                      OK 🔐
-                                    </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleUnifiedLoginSubmit()}
+                                        className="bg-gradient-to-r from-[#FF6B2C] to-[#EA4C08] text-[#FFFFFF] font-mono text-[9px] font-black cursor-pointer rounded-xl shadow-sm"
+                                      >
+                                        OK
+                                      </button>
+                                    </div>
                                   </div>
-                                </div>
-                              )}
+                                )}
 
-                              {unifiedError && (
-                                <p className="text-yellow-100 text-[10.5px] font-medium text-center bg-red-600/30 border border-red-500/30 py-1.5 px-2.5 rounded-xl">
-                                  ⚠️ {unifiedError}
-                                </p>
-                              )}
+                                {unifiedError && (
+                                  <p className="text-red-800 text-[10.5px] font-semibold text-center bg-red-50 border border-red-200 py-1.5 px-3 rounded-2xl">
+                                    ⚠️ {unifiedError}
+                                  </p>
+                                )}
 
-                              <button
-                                type="submit"
-                                className="w-full bg-white text-[#7C3AED] hover:bg-slate-50 text-xs font-bold uppercase py-2.5 rounded-xl transition-all shadow-md cursor-pointer flex items-center justify-center gap-1.5"
-                              >
-                                <span>ግባ (SECURE SIGN IN)</span>
-                                <span>🔐</span>
-                              </button>
-                            </form>
-                          </div>
-
-                          <div className="mt-4 text-center">
-                            <span className="text-[9px] font-mono text-white/75 block mb-2 uppercase">
-                              — Or Demo Instant Login —
-                            </span>
-                            <div className="flex justify-center gap-3">
-                              <button
-                                onClick={() => {
-                                  setUnifiedUsername('admin');
-                                  setUnifiedPassword('1234');
-                                  setUnifiedRole('admin');
-                                  setUnifiedMethod('password');
-                                  setUnifiedError('🗝️ Demo admin loaded! Click "SECURE SIGN IN"');
-                                }}
-                                className="w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-xs font-black cursor-pointer shadow border border-white/10"
-                                title="Prefill admin credentials"
-                              >
-                                👑
-                              </button>
-                              <button
-                                onClick={() => {
-                                  setUnifiedUsername('manager');
-                                  setUnifiedPassword('4444');
-                                  setUnifiedRole('manager');
-                                  setUnifiedMethod('password');
-                                  setUnifiedError('⚡ Demo manager loaded! Click "SECURE SIGN IN"');
-                                }}
-                                className="w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-xs font-black cursor-pointer shadow border border-white/10"
-                                title="Prefill manager credentials"
-                              >
-                                ⚡
-                              </button>
-                              <button
-                                onClick={() => {
-                                  setUnifiedUsername('waiter');
-                                  setUnifiedPassword('1234');
-                                  setUnifiedRole('waiter');
-                                  setUnifiedMethod('password');
-                                  setUnifiedError('🏃 Demo waiter loaded! Click "SECURE SIGN IN"');
-                                }}
-                                className="w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-xs font-black cursor-pointer shadow border border-white/10"
-                                title="Prefill waiter credentials"
-                              >
-                                🏃
-                              </button>
-                              <button
-                                onClick={() => {
-                                  setUnifiedUsername('chef');
-                                  setUnifiedPassword('1234');
-                                  setUnifiedRole('chef');
-                                  setUnifiedMethod('password');
-                                  setUnifiedError('🥘 Demo chef loaded! Click "SECURE SIGN IN"');
-                                }}
-                                className="w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-xs font-black cursor-pointer shadow border border-white/10"
-                                title="Prefill chef credentials"
-                              >
-                                🍳
-                              </button>
+                                <button
+                                  type="submit"
+                                  className="w-full bg-gradient-to-r from-[#FF6B2C] to-[#EA4C08] hover:from-[#FF5714] hover:to-[#DC3F00] text-[#FFFFFF] text-xs font-black uppercase py-2.5 rounded-full transition-all shadow-[0_6px_18px_rgba(255,90,31,0.3)] cursor-pointer flex items-center justify-center gap-2 active:scale-[0.99]"
+                                >
+                                  <span>ግባ (SIGN IN)</span>
+                                  <ArrowRight className="w-4 h-4" />
+                                </button>
+                              </form>
                             </div>
-                          </div>
 
-                          <div className="text-center mt-5 pt-2 border-t border-white/10 flex flex-col gap-1.5">
-                            <p className="text-[10px] text-white/80">
-                              Don't have an account?{' '}
-                              <button 
-                                onClick={() => {
-                                  setStaffPortalState('signup');
-                                  setUnifiedError('');
-                                }}
-                                className="underline font-bold hover:text-white cursor-pointer"
-                              >
-                                Sign Up Now
-                              </button>
-                            </p>
-                            <button 
-                              onClick={() => {
-                                setLoginModalRole(unifiedRole);
-                                setTimeout(() => {
-                                  const forgotBtn = document.getElementById('btn-login-forgot');
-                                  if (forgotBtn) forgotBtn.click();
-                                }, 100);
-                              }} 
-                              className="text-[9px] text-white/70 hover:text-white underline tracking-wider cursor-pointer font-sans"
-                            >
-                              የይለፍ ቃል ረስቻለሁ? (Forgot Credentials) 🔑
-                            </button>
-                          </div>
-                        </motion.div>
-                      )}
-
-                      {/* === VIEW 3: STAFF SIGN UP SCREEN === */}
-                      {staffPortalState === 'signup' && (
-                        <motion.div 
-                          initial={{ opacity: 0, x: 10 }}
-                          animate={{ opacity: 1, x: 0 }}
-                          className="flex-1 flex flex-col justify-between"
-                        >
-                          <div>
-                            {/* Back Navigation & Header */}
-                            <div className="flex justify-between items-center mb-5">
-                              <button
-                                onClick={() => setStaffPortalState('welcome')}
-                                className="flex items-center gap-1.5 text-xs text-white/80 hover:text-white cursor-pointer"
-                              >
-                                <span>⬅️ ዋና በር</span>
-                              </button>
-                              <span className="text-[10px] font-mono tracking-widest font-bold bg-white/20 px-2.5 py-0.5 rounded-full uppercase">
-                                REGISTER PORTAL
+                            <div className="mt-3 text-center">
+                              <span className="text-[9px] font-mono text-[#78716C] font-bold block mb-1.5 uppercase">
+                                — Demo Instant Login —
                               </span>
+                              <div className="flex justify-center gap-2.5">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setUnifiedUsername('admin');
+                                    setUnifiedPassword('1234');
+                                    setUnifiedRole('admin');
+                                    setUnifiedMethod('password');
+                                    setUnifiedError('🗝️ Demo admin loaded! Click "SIGN IN"');
+                                  }}
+                                  className="w-9 h-9 rounded-full bg-[#FAF6F0] hover:bg-orange-100 flex items-center justify-center text-xs font-black cursor-pointer shadow-xs border border-orange-200/80 transition-colors"
+                                  title="Prefill admin credentials"
+                                >
+                                  👑
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setUnifiedUsername('manager');
+                                    setUnifiedPassword('4444');
+                                    setUnifiedRole('manager');
+                                    setUnifiedMethod('password');
+                                    setUnifiedError('⚡ Demo manager loaded! Click "SIGN IN"');
+                                  }}
+                                  className="w-9 h-9 rounded-full bg-[#FAF6F0] hover:bg-orange-100 flex items-center justify-center text-xs font-black cursor-pointer shadow-xs border border-orange-200/80 transition-colors"
+                                  title="Prefill manager credentials"
+                                >
+                                  ⚡
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setUnifiedUsername('waiter');
+                                    setUnifiedPassword('1234');
+                                    setUnifiedRole('waiter');
+                                    setUnifiedMethod('password');
+                                    setUnifiedError('🏃 Demo waiter loaded! Click "SIGN IN"');
+                                  }}
+                                  className="w-9 h-9 rounded-full bg-[#FAF6F0] hover:bg-orange-100 flex items-center justify-center text-xs font-black cursor-pointer shadow-xs border border-orange-200/80 transition-colors"
+                                  title="Prefill waiter credentials"
+                                >
+                                  🏃
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setUnifiedUsername('chef');
+                                    setUnifiedPassword('1234');
+                                    setUnifiedRole('chef');
+                                    setUnifiedMethod('password');
+                                    setUnifiedError('🥘 Demo chef loaded! Click "SIGN IN"');
+                                  }}
+                                  className="w-9 h-9 rounded-full bg-[#FAF6F0] hover:bg-orange-100 flex items-center justify-center text-xs font-black cursor-pointer shadow-xs border border-orange-200/80 transition-colors"
+                                  title="Prefill chef credentials"
+                                >
+                                  🍳
+                                </button>
+                              </div>
                             </div>
 
-                            <div className="space-y-1 mb-4">
-                              <h3 className="text-2xl font-extrabold text-white tracking-tight">
-                                Create Account,
-                              </h3>
-                              <h4 className="text-lg font-bold text-white/90">
-                                to get started now! 🌟
-                              </h4>
-                              <p className="text-[10px] text-white/80">
-                                ፈጣን የሠራተኛ መመዝገቢያ ፎርም። እባክዎ መረጃዎን ያስገቡ።
+                            <div className="text-center mt-3 space-y-1.5">
+                              <PapyrusChefDivider />
+                              <p className="text-[10px] text-[#57534E]">
+                                Don&apos;t have an account?{' '}
+                                <button 
+                                  type="button"
+                                  onClick={() => {
+                                    setStaffPortalState('signup');
+                                    setUnifiedError('');
+                                  }}
+                                  className="underline font-extrabold text-[#EA580C] hover:text-[#C2410C] cursor-pointer"
+                                >
+                                  Sign Up Now
+                                </button>
                               </p>
+                              <button 
+                                type="button"
+                                onClick={() => {
+                                  setLoginModalRole(unifiedRole);
+                                  setTimeout(() => {
+                                    const forgotBtn = document.getElementById('btn-login-forgot');
+                                    if (forgotBtn) forgotBtn.click();
+                                  }, 100);
+                                }} 
+                                className="text-[9px] text-[#78716C] hover:text-[#EA580C] underline tracking-wider cursor-pointer font-sans"
+                              >
+                                የይለፍ ቃል ረስቻለሁ? (Forgot Credentials)
+                              </button>
                             </div>
+                          </motion.div>
+                        )}
 
-                            <form 
-                              onSubmit={(e) => {
-                                e.preventDefault();
-                                handleStaffSignUpSubmit();
-                              }} 
-                              className="space-y-3"
-                            >
-                              <div className="grid grid-cols-2 gap-2">
-                                <div>
-                                  <label className="text-[8.5px] font-mono uppercase text-white/90 block mb-0.5">የሙሉ ስም (FULL NAME)</label>
-                                  <input
-                                    type="text"
-                                    value={signupName}
-                                    onChange={(e) => {
-                                      setSignupName(e.target.value);
-                                      setUnifiedError('');
-                                    }}
-                                    placeholder="e.g. ሄኖክ ካሳ"
-                                    className="w-full bg-white/10 border border-white/20 text-white placeholder-white/40 text-xs font-semibold py-1.5 px-2.5 outline-none focus:border-white focus:bg-white/20 rounded-xl"
-                                    required
-                                  />
-                                </div>
-                                <div>
-                                  <label className="text-[8.5px] font-mono uppercase text-white/90 block mb-0.5">መግቢያ ስም (USERNAME)</label>
-                                  <input
-                                    type="text"
-                                    value={signupUsername}
-                                    onChange={(e) => {
-                                      setSignupUsername(e.target.value);
-                                      setUnifiedError('');
-                                    }}
-                                    placeholder="e.g. henok_waiter"
-                                    className="w-full bg-white/10 border border-white/20 text-white placeholder-white/40 text-xs font-semibold py-1.5 px-2.5 outline-none focus:border-white focus:bg-white/20 rounded-xl"
-                                    required
-                                  />
-                                </div>
+                        {/* === VIEW 3: STAFF SIGN UP SCREEN === */}
+                        {staffPortalState === 'signup' && (
+                          <motion.div 
+                            initial={{ opacity: 0, x: 10 }}
+                            animate={{ opacity: 1, x: 0 }}
+                            className="flex-1 flex flex-col justify-between"
+                          >
+                            <div>
+                              {/* Back Navigation & Header */}
+                              <div className="flex justify-between items-center mb-3">
+                                <button
+                                  onClick={() => setStaffPortalState('welcome')}
+                                  className="flex items-center gap-1 text-xs font-bold text-[#57534E] hover:text-[#EA580C] cursor-pointer transition-colors"
+                                >
+                                  <ArrowLeft className="w-3.5 h-3.5" />
+                                  <span>ዋና በር</span>
+                                </button>
+                                <span className="text-[9px] font-mono tracking-widest font-extrabold text-[#EA580C] uppercase">
+                                  HAWASSA PAPYRUS
+                                </span>
                               </div>
 
-                              <div className="grid grid-cols-2 gap-2">
-                                <div>
-                                  <label className="text-[8.5px] font-mono uppercase text-white/90 block mb-0.5">የይለፍ ቃል (PASSWORD)</label>
-                                  <div className="relative">
+                              <div className="text-center space-y-0.5 mb-3">
+                                <div className="flex items-center justify-center gap-2">
+                                  <HeadingBurstDashes side="left" />
+                                  <h3 className="text-lg font-black text-[#1C1917] tracking-tight">
+                                    Create Your Account
+                                  </h3>
+                                  <HeadingBurstDashes side="right" />
+                                </div>
+                                <p className="text-[10px] text-[#57534E] font-medium">
+                                  ፈጣን የሠራተኛ መመዝገቢያ ፎርም • Join Hawassa Papyrus!
+                                </p>
+                              </div>
+
+                              <form 
+                                onSubmit={(e) => {
+                                  e.preventDefault();
+                                  handleStaffSignUpSubmit();
+                                }} 
+                                className="space-y-2.5"
+                              >
+                                <div className="grid grid-cols-2 gap-2">
+                                  <div className="bg-[#F5F5F4] border border-stone-200/90 focus-within:border-[#FF5A1F] focus-within:bg-white rounded-full p-1 pr-2.5 flex items-center gap-1.5 transition-all">
+                                    <span className="w-6 h-6 rounded-full bg-gradient-to-br from-[#FF6B2C] to-[#EA4C08] text-[#FFFFFF] flex items-center justify-center shrink-0">
+                                      <User className="w-3 h-3" />
+                                    </span>
+                                    <input
+                                      type="text"
+                                      aria-label="Full Name"
+                                      value={signupName}
+                                      onChange={(e) => {
+                                        setSignupName(e.target.value);
+                                        setUnifiedError('');
+                                      }}
+                                      placeholder="ሙሉ ስም (Full Name)"
+                                      className="w-full bg-transparent text-[#1C1917] placeholder-[#A8A29E] text-[11px] font-semibold py-1 outline-none border-none focus:ring-0"
+                                      required
+                                    />
+                                  </div>
+                                  <div className="bg-[#F5F5F4] border border-stone-200/90 focus-within:border-[#FF5A1F] focus-within:bg-white rounded-full p-1 pr-2.5 flex items-center gap-1.5 transition-all">
+                                    <span className="w-6 h-6 rounded-full bg-gradient-to-br from-[#FF6B2C] to-[#EA4C08] text-[#FFFFFF] flex items-center justify-center shrink-0">
+                                      <Sparkles className="w-3 h-3" />
+                                    </span>
+                                    <input
+                                      type="text"
+                                      aria-label="Username"
+                                      value={signupUsername}
+                                      onChange={(e) => {
+                                        setSignupUsername(e.target.value);
+                                        setUnifiedError('');
+                                      }}
+                                      placeholder="ዩዘር (Username)"
+                                      className="w-full bg-transparent text-[#1C1917] placeholder-[#A8A29E] text-[11px] font-semibold py-1 outline-none border-none focus:ring-0"
+                                      required
+                                    />
+                                  </div>
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-2">
+                                  <div className="bg-[#F5F5F4] border border-stone-200/90 focus-within:border-[#FF5A1F] focus-within:bg-white rounded-full p-1 pr-2 flex items-center gap-1.5 transition-all">
+                                    <span className="w-6 h-6 rounded-full bg-gradient-to-br from-[#FF6B2C] to-[#EA4C08] text-[#FFFFFF] flex items-center justify-center shrink-0">
+                                      <Lock className="w-3 h-3" />
+                                    </span>
                                     <input
                                       type={showSignupPassword ? 'text' : 'password'}
+                                      aria-label="Password"
                                       value={signupPassword}
                                       onChange={(e) => {
                                         setSignupPassword(e.target.value);
                                         setUnifiedError('');
                                       }}
-                                      placeholder="••••••••"
-                                      className="w-full bg-white/10 border border-white/20 text-white placeholder-white/40 text-xs font-semibold py-1.5 px-2.5 outline-none focus:border-white focus:bg-white/20 rounded-xl pr-8"
+                                      placeholder="ፓስወርድ"
+                                      className="w-full bg-transparent text-[#1C1917] placeholder-[#A8A29E] text-[11px] font-semibold py-1 outline-none border-none focus:ring-0 min-w-0"
                                       required
                                     />
                                     <button
                                       type="button"
                                       onClick={() => setShowSignupPassword(!showSignupPassword)}
-                                      className="absolute right-2 top-1/2 -translate-y-1/2 text-white/60 text-[11px] focus:outline-none"
+                                      className="text-[#78716C] hover:text-[#EA580C] shrink-0 cursor-pointer"
+                                      aria-label={showSignupPassword ? 'Hide password' : 'Show password'}
                                     >
-                                      {showSignupPassword ? '👁️' : '🙈'}
+                                      {showSignupPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
                                     </button>
                                   </div>
+                                  <div className="bg-[#F5F5F4] border border-stone-200/90 focus-within:border-[#FF5A1F] focus-within:bg-white rounded-full p-1 pr-2.5 flex items-center gap-1.5 transition-all">
+                                    <span className="w-6 h-6 rounded-full bg-gradient-to-br from-[#FF6B2C] to-[#EA4C08] text-[#FFFFFF] flex items-center justify-center shrink-0">
+                                      <Shield className="w-3 h-3" />
+                                    </span>
+                                    <input
+                                      type="password"
+                                      aria-label="Confirm Password"
+                                      value={signupConfirmPassword}
+                                      onChange={(e) => {
+                                        setSignupConfirmPassword(e.target.value);
+                                        setUnifiedError('');
+                                      }}
+                                      placeholder="አረጋግጥ (Confirm)"
+                                      className="w-full bg-transparent text-[#1C1917] placeholder-[#A8A29E] text-[11px] font-semibold py-1 outline-none border-none focus:ring-0"
+                                      required
+                                    />
+                                  </div>
                                 </div>
+
+                                <div className="grid grid-cols-2 gap-2">
+                                  <div className="bg-[#F5F5F4] border border-stone-200/90 focus-within:border-[#FF5A1F] focus-within:bg-white rounded-full p-1 pr-2.5 flex items-center gap-1.5 transition-all">
+                                    <span className="w-6 h-6 rounded-full bg-gradient-to-br from-[#FF6B2C] to-[#EA4C08] text-[#FFFFFF] flex items-center justify-center shrink-0">
+                                      <KeyRound className="w-3 h-3" />
+                                    </span>
+                                    <input
+                                      type="text"
+                                      maxLength={4}
+                                      aria-label="4-Digit PIN"
+                                      value={signupPin}
+                                      onChange={(e) => {
+                                        setSignupPin(e.target.value.replace(/\D/g, ''));
+                                        setUnifiedError('');
+                                      }}
+                                      placeholder="4-Digit PIN"
+                                      className="w-full bg-transparent text-[#1C1917] placeholder-[#A8A29E] text-[11px] font-semibold py-1 outline-none border-none focus:ring-0 tracking-widest tabular-nums"
+                                      required
+                                    />
+                                  </div>
+                                  <div className="bg-[#F5F5F4] border border-stone-200/90 focus-within:border-[#FF5A1F] focus-within:bg-white rounded-full p-1 pr-2.5 flex items-center gap-1.5 transition-all">
+                                    <span className="w-6 h-6 rounded-full bg-gradient-to-br from-[#FF6B2C] to-[#EA4C08] text-[#FFFFFF] flex items-center justify-center shrink-0">
+                                      <MapPin className="w-3 h-3" />
+                                    </span>
+                                    <input
+                                      type="text"
+                                      aria-label="Favorite City"
+                                      value={signupSecurityAnswer}
+                                      onChange={(e) => {
+                                        setSignupSecurityAnswer(e.target.value);
+                                        setUnifiedError('');
+                                      }}
+                                      placeholder="ከተማ (hawassa)"
+                                      className="w-full bg-transparent text-[#1C1917] placeholder-[#A8A29E] text-[11px] font-semibold py-1 outline-none border-none focus:ring-0"
+                                      required
+                                    />
+                                  </div>
+                                </div>
+
                                 <div>
-                                  <label className="text-[8.5px] font-mono uppercase text-white/90 block mb-0.5">ይለፍ ቃል አረጋግጥ (CONFIRM)</label>
-                                  <input
-                                    type="password"
-                                    value={signupConfirmPassword}
-                                    onChange={(e) => {
-                                      setSignupConfirmPassword(e.target.value);
-                                      setUnifiedError('');
-                                    }}
-                                    placeholder="••••••••"
-                                    className="w-full bg-white/10 border border-white/20 text-white placeholder-white/40 text-xs font-semibold py-1.5 px-2.5 outline-none focus:border-white focus:bg-white/20 rounded-xl"
-                                    required
-                                  />
+                                  <label className="text-[8.5px] font-mono uppercase text-[#EA580C] font-extrabold block mb-1">
+                                    የስራ ዘርፍ (SELECT ROLE)
+                                  </label>
+                                  <div className="flex gap-1 py-1 px-1 bg-[#F3EFE9] border border-stone-200/80 rounded-full overflow-x-auto no-scrollbar whitespace-nowrap font-sans">
+                                    {[
+                                      { val: 'waiter', label: 'አስተናጋጅ 🏃' },
+                                      { val: 'chef', label: 'ሼፍ 🍳' },
+                                      { val: 'receptionist', label: 'ሪሴብሽን 🛎️' },
+                                      { val: 'cashier', label: 'ካሸር 💰' },
+                                      { val: 'guard', label: 'ጥበቃ 🛡️' },
+                                      { val: 'manager', label: 'ማናጀር ⚡' },
+                                      { val: 'admin', label: 'አስኪያጅ 👑' }
+                                    ].map(item => (
+                                      <button
+                                        key={item.val}
+                                        type="button"
+                                        onClick={() => setSignupRole(item.val as any)}
+                                        className={`py-1 px-2.5 text-[10px] shrink-0 text-center font-sans tracking-tight rounded-full transition-all cursor-pointer ${
+                                          signupRole === item.val
+                                            ? 'bg-[#FF5A1F] text-[#FFFFFF] font-extrabold shadow-xs'
+                                            : 'bg-transparent text-[#57534E] hover:text-[#1C1917]'
+                                        }`}
+                                      >
+                                        {item.label}
+                                      </button>
+                                    ))}
+                                  </div>
                                 </div>
-                              </div>
 
-                              <div className="grid grid-cols-2 gap-2">
-                                <div>
-                                  <label className="text-[8.5px] font-mono uppercase text-white/90 block mb-0.5">ባለ 4 አሃዝ ፒን ቁጥር (PIN)</label>
-                                  <input
-                                    type="text"
-                                    maxLength={4}
-                                    value={signupPin}
-                                    onChange={(e) => {
-                                      setSignupPin(e.target.value.replace(/\D/g, ''));
-                                      setUnifiedError('');
-                                    }}
-                                    placeholder="e.g. 8888"
-                                    className="w-full bg-white/10 border border-white/20 text-white placeholder-white/40 text-xs font-semibold py-1.5 px-2.5 outline-none focus:border-white focus:bg-white/20 rounded-xl text-center tracking-widest"
-                                    required
-                                  />
-                                </div>
-                                <div>
-                                  <label className="text-[8.5px] font-mono uppercase text-[#FFE5FF] block mb-0.5">የሚወዱት ከተማ? (SEC. ANSWER)</label>
-                                  <input
-                                    type="text"
-                                    value={signupSecurityAnswer}
-                                    onChange={(e) => {
-                                      setSignupSecurityAnswer(e.target.value);
-                                      setUnifiedError('');
-                                    }}
-                                    placeholder="e.g. hawassa"
-                                    className="w-full bg-white/10 border border-white/20 text-white placeholder-white/40 text-xs font-semibold py-1.5 px-2.5 outline-none focus:border-white focus:bg-white/20 rounded-xl"
-                                    required
-                                  />
-                                </div>
-                              </div>
+                                {signupSuccessMessage && (
+                                  <p className="text-emerald-800 text-[10.5px] font-semibold text-center bg-emerald-50 border border-emerald-200 py-1.5 px-3 rounded-2xl">
+                                    ✅ {signupSuccessMessage}
+                                  </p>
+                                )}
 
-                              <div>
-                                <label className="text-[8.5px] font-mono uppercase text-white/90 block mb-1">ሠራተኛው የሚሠራበት ዘርፍ (SELECT ROLE)</label>
-                                <div className="flex gap-1 py-1 px-1 bg-white/10 border border-white/10 rounded-xl overflow-x-auto no-scrollbar whitespace-nowrap font-sans">
-                                  {[
-                                    { val: 'waiter', label: 'አስተናጋጅ 🏃' },
-                                    { val: 'chef', label: 'ሼፍ 🍳' },
-                                    { val: 'receptionist', label: 'ሪሴብሽን 🛎️' },
-                                    { val: 'cashier', label: 'ካሸር 💰' },
-                                    { val: 'guard', label: 'ጥበቃ 🛡️' },
-                                    { val: 'manager', label: 'ማናጀር ⚡' },
-                                    { val: 'admin', label: 'አስኪያጅ 👑' }
-                                  ].map(item => (
-                                    <button
-                                      key={item.val}
-                                      type="button"
-                                      onClick={() => setSignupRole(item.val as any)}
-                                      className={`py-1 px-2.5 text-[10px] shrink-0 text-center font-sans tracking-tight rounded-lg transition-all cursor-pointer ${
-                                        signupRole === item.val
-                                          ? 'bg-yellow-400 text-red-950 font-extrabold border border-red-600'
-                                          : 'bg-transparent text-white/70 hover:text-white'
-                                      }`}
-                                    >
-                                      {item.label}
-                                    </button>
-                                  ))}
-                                </div>
-                              </div>
+                                {unifiedError && (
+                                  <p className="text-red-800 text-[10.5px] font-semibold text-center bg-red-50 border border-red-200 py-1.5 px-3 rounded-2xl">
+                                    ⚠️ {unifiedError}
+                                  </p>
+                                )}
 
-                              {signupSuccessMessage && (
-                                <p className="text-[#c1ff00] text-[10.5px] font-medium text-center bg-emerald-950/60 border border-emerald-500/40 py-1.5 px-2.5 rounded-xl">
-                                  ✅ {signupSuccessMessage}
-                                </p>
-                              )}
+                                <button
+                                  type="submit"
+                                  className="w-full bg-gradient-to-r from-[#FF6B2C] to-[#EA4C08] hover:from-[#FF5714] hover:to-[#DC3F00] text-[#FFFFFF] text-xs font-black uppercase py-2.5 rounded-full transition-all shadow-[0_6px_18px_rgba(255,90,31,0.3)] cursor-pointer flex items-center justify-center gap-2 active:scale-[0.99]"
+                                >
+                                  <span>SIGN UP</span>
+                                  <ArrowRight className="w-4 h-4" />
+                                </button>
+                              </form>
+                            </div>
 
-                              {unifiedError && (
-                                <p className="text-yellow-100 text-[10.5px] font-medium text-center bg-red-600/30 border border-red-500/30 py-1.5 px-2.5 rounded-xl">
-                                  ⚠️ {unifiedError}
-                                </p>
-                              )}
+                            <div className="text-center mt-3 space-y-2">
+                              <PapyrusChefDivider />
+                              <p className="text-[10px] text-[#57534E]">
+                                Already have an account?{' '}
+                                <button 
+                                  type="button"
+                                  onClick={() => {
+                                    setStaffPortalState('login');
+                                    setUnifiedError('');
+                                  }}
+                                  className="underline font-extrabold text-[#EA580C] hover:text-[#C2410C] cursor-pointer"
+                                >
+                                  Login Now
+                                </button>
+                              </p>
+                            </div>
+                          </motion.div>
+                        )}
 
-                              <button
-                                type="submit"
-                                className="w-full bg-white text-[#7C3AED] hover:bg-slate-50 text-xs font-bold uppercase py-2.5 rounded-xl transition-all shadow-md cursor-pointer flex items-center justify-center gap-1.5"
-                              >
-                                <span>አካውንት ፍጠር (CREATE ACCOUNT NOW)</span>
-                                <span>✨</span>
-                              </button>
-                            </form>
-                          </div>
-
-                          <div className="text-center mt-4 pt-2 border-t border-white/10">
-                            <p className="text-[10px] text-white/80">
-                              Already have an account?{' '}
-                              <button 
-                                onClick={() => {
-                                  setStaffPortalState('login');
-                                  setUnifiedError('');
-                                }}
-                                className="underline font-bold hover:text-white cursor-pointer"
-                              >
-                                Login Now
-                              </button>
-                            </p>
-                          </div>
-                        </motion.div>
-                      )}
-
+                      </div>
                     </div>
                   </div>
-
                 </div>
+                )}
 
                 {/* Elegant Dynamic Footer with Social Media & Interactive Rating */}
-                <div className="mt-12 bg-black/60 border border-white/10 rounded-3xl p-6 max-w-2xl w-full relative z-10 shadow-2xl space-y-6 text-center backdrop-blur-md">
+                <div id="entry-lodge-footer" className="mt-12 bg-[#8C1414]/95 border-2 border-[#F4C22B]/50 rounded-3xl p-6 max-w-2xl w-full relative z-10 shadow-2xl space-y-6 text-center backdrop-blur-md">
                   
                   {/* Title or Quick Greeting */}
                   <div className="space-y-1">
-                    <h4 className="text-xs uppercase tracking-widest text-[#C1FF00] font-mono font-black">
-                      {appLang === 'am' ? 'ይከተሉን (Follow Us)' : 'Stay Connected'}
+                    <h4 className="text-xs uppercase tracking-widest text-[#F4C22B] font-mono font-black">
+                      {tText({ am: 'ይከተሉን (Follow Us)', en: 'Stay Connected', or: 'Nu Hordofaa', ti: 'ሰዓቡና', sid: 'Harunsinkenni', fr: 'Suivez-nous', de: 'Folgen Sie uns', it: 'Seguici', zh: '关注我们', ar: 'تابعونا' })}
                     </h4>
-                    <p className="text-[10px] text-white/50 font-sans">
-                      {appLang === 'am' ? 'በሶሻል ሚዲያ አድራሻዎቻችን አዳዲስ መረጃዎችን እና ልዩ ቅናሾችን ያግኙ!' : 'Discover latest events, updates and luxury deals on our channels.'}
+                    <p className="text-[10px] text-[#FEF3C7] font-sans">
+                      {tText({ am: 'በሶሻል ሚዲያ አድራሻዎቻችን አዳዲስ መረጃዎችን እና ልዩ ቅናሾችን ያግኙ!', en: 'Discover latest events, updates and luxury deals on our channels.', or: 'Karaa miidiyaa hawaasaa odeeffannoo haaraa fi qophiiwwan addaa argadhaa!', ti: 'ብመራኸቢ ብዙሃን ሓድሽ ሓበሬታን ፍሉይ ቅናሻትን ርኸቡ!', sid: 'Haaro borooxonna baxxino hirro afidhate harunsinkenni!', fr: 'Découvrez nos derniers événements et offres exclusives sur nos réseaux.', de: 'Entdecken Sie aktuelle Events und Angebote auf unseren Kanälen.', it: 'Scopri gli ultimi eventi e le offerte esclusive sui nostri canali.', zh: '关注我们的官方社交平台，获取最新活动与专属优惠！', ar: 'اكتشف أحدث الفعاليات والعروض الفاخرة عبر قنواتنا.' })}
                     </p>
                   </div>
 
-                  {/* Social Media Link Icons with Neon Glow Effects */}
+                  {/* Social Media Link Icons */}
                   <div className="flex flex-wrap justify-center items-center gap-3">
                     {[
-                      { icon: <Facebook className="w-4 h-4" />, name: 'Facebook', url: 'https://facebook.com/papyruslodgehawassa', color: 'hover:text-[#1877F2] hover:border-[#1877F2]/40 hover:bg-[#1877F2]/5' },
-                      { icon: <Instagram className="w-4 h-4" />, name: 'Instagram', url: 'https://instagram.com/papyrus_lodge_hawassa', color: 'hover:text-[#E1306C] hover:border-[#E1306C]/40 hover:bg-[#E1306C]/5' },
-                      { icon: <Send className="w-4 h-4 rotate-[-30deg]" />, name: 'Telegram', url: 'https://t.me/papyrus_lodge', color: 'hover:text-[#26A5E4] hover:border-[#26A5E4]/40 hover:bg-[#26A5E4]/5' },
-                      { icon: <Youtube className="w-4 h-4" />, name: 'YouTube', url: 'https://youtube.com/@papyruslodgehawassa', color: 'hover:text-[#FF0000] hover:border-[#FF0000]/40 hover:bg-[#FF0000]/5' },
-                      { icon: <Globe className="w-4 h-4" />, name: 'Website', url: 'https://papyruslodge.com', color: 'hover:text-[#00F5FF] hover:border-[#00F5FF]/40 hover:bg-[#00F5FF]/5' }
+                      { icon: <Facebook className="w-4 h-4" />, name: 'Facebook', url: 'https://facebook.com/papyruslodgehawassa', color: 'hover:text-[#1C1917] hover:border-white hover:bg-[#F4C22B]' },
+                      { icon: <Instagram className="w-4 h-4" />, name: 'Instagram', url: 'https://instagram.com/papyrus_lodge_hawassa', color: 'hover:text-[#1C1917] hover:border-white hover:bg-[#F4C22B]' },
+                      { icon: <Send className="w-4 h-4 rotate-[-30deg]" />, name: 'Telegram', url: 'https://t.me/papyrus_lodge', color: 'hover:text-[#1C1917] hover:border-white hover:bg-[#F4C22B]' },
+                      { icon: <Youtube className="w-4 h-4" />, name: 'YouTube', url: 'https://youtube.com/@papyruslodgehawassa', color: 'hover:text-[#1C1917] hover:border-white hover:bg-[#F4C22B]' },
+                      { icon: <Globe className="w-4 h-4" />, name: 'Website', url: 'https://papyruslodge.com', color: 'hover:text-[#1C1917] hover:border-white hover:bg-[#F4C22B]' }
                     ].map((soc, idx) => (
                       <a
                         key={idx}
                         href={soc.url}
                         target="_blank"
                         rel="noreferrer"
-                        className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border border-white/10 text-white/70 bg-white/5 text-[10px] font-mono font-bold tracking-wider transition-all duration-300 ${soc.color} cursor-pointer`}
+                        className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border border-[#F4C22B]/35 text-white bg-[#7A1212] text-[10px] font-mono font-bold tracking-wider transition-all duration-300 ${soc.color} cursor-pointer`}
                       >
                         {soc.icon}
                         <span>{soc.name}</span>
@@ -5682,10 +7685,12 @@ export default function App() {
                   </div>
 
                   {/* Lodge Contacts and Hotline */}
-                  <div className="grid grid-cols-2 gap-4 pt-3 border-t border-white/5 text-left text-[9px] font-mono">
+                  <div className="grid grid-cols-2 gap-4 pt-3 border-t border-[#F4C22B]/25 text-left text-[9px] font-mono">
                     <div className="space-y-1">
-                      <span className="text-white/40 block">HOTLINE / የስልክ ቁጥር</span>
-                      <a href={`tel:${contactHotline1}`} className="text-[#C1FF00] hover:underline font-black block">
+                      <span className="text-[#FDE68A] block font-bold">
+                        {tText({ am: 'የስልክ መስመር (HOTLINE)', en: 'HOTLINE', or: 'BILBILA', ti: 'መስመር ስልኪ', sid: 'BILBILA', fr: 'LIGNE DIRECTE', de: 'HOTLINE', it: 'LINEA DIRETTA', zh: '服务热线', ar: 'الخط الساخن' })}
+                      </span>
+                      <a href={`tel:${contactHotline1}`} className="text-[#F4C22B] hover:underline font-black block">
                         {contactHotline1}
                       </a>
                       <a href={`tel:${contactHotline2}`} className="text-white hover:underline block text-[8px]">
@@ -5693,20 +7698,22 @@ export default function App() {
                       </a>
                     </div>
                     <div className="space-y-1 text-right">
-                      <span className="text-white/40 block">LOCATION / አድራሻ</span>
+                      <span className="text-[#FDE68A] block font-bold">
+                        {tText({ am: 'አድራሻ (LOCATION)', en: 'LOCATION', or: 'TEESSOO', ti: 'ኣድራሻ', sid: 'QOXXO', fr: 'ADRESSE', de: 'STANDORT', it: 'POSIZIONE', zh: '地址', ar: 'الموقع' })}
+                      </span>
                       <span className="text-white font-bold block">{contactLocation}</span>
-                      <span className="text-white/60 block text-[8px]">{contactAddress}</span>
+                      <span className="text-[#FEF3C7] block text-[8px]">{contactAddress}</span>
                     </div>
                   </div>
 
-                  <div className="pt-2 border-t border-white/10 space-y-1 text-center">
-                    <p className="text-[11px] font-bold text-white/85">
-                      © 2026 ጉራቻ ቴክኖሎጂ (Guracha Technology) • ሐዋሳ እና አዲስ አበባ 🇪🇹
+                  <div className="pt-2 border-t border-[#F4C22B]/25 space-y-1 text-center">
+                    <p className="text-[11px] font-bold text-white">
+                      {t('footer.copyright')}
                     </p>
-                    <p className="text-[10px] text-white/60">
-                      ዘመናዊ ዲጂታል ሜኑ እና የሆቴል አስተዳደር ሲስተም
+                    <p className="text-[10px] text-[#FEF3C7]">
+                      {tText({ am: 'ዘመናዊ ዲጂታል ሜኑ እና የሆቴል አስተዳደር ሲስተም', en: 'Smart Digital Menu & Hotel Management System', or: 'Meenuu Dijitaalaa fi Sirna Bulchiinsa Hoteelaa Ammayyaa', ti: 'ዘመናዊ ዲጂታል ሜኑን ስርዓት ምምሕዳር ሆቴልን', sid: 'Haaro Dijitaale Meenuunna Hoteelunnita Massago', fr: 'Menu numérique intelligent et gestion hôtelière', de: 'Intelligentes digitales Menü & Hotelverwaltung', it: 'Menu digitale intelligente e gestione alberghiera', zh: '智能数字菜单与酒店管理系统', ar: 'قائمة رقمية ذكية ونظام إدارة فندقية' })}
                     </p>
-                    <p className="text-[10px] font-mono font-black text-[#C1FF00] tracking-wider pt-0.5">
+                    <p className="text-[10px] font-mono font-black text-[#F4C22B] tracking-wider pt-0.5">
                       Powered by Guracha Tech
                     </p>
                   </div>
@@ -5735,76 +7742,139 @@ export default function App() {
                 exit={{ opacity: 0 }}
                 className="space-y-6 max-w-6xl mx-auto w-full pb-10 pt-4"
               >
-                {/* Vibrant High-End Red Hero Banner exactly matching the reference image layout */}
-                <div className="rounded-[2.5rem] overflow-hidden relative bg-[#b21f1f] p-8 sm:p-12 md:p-16 shadow-2xl flex flex-col md:flex-row justify-between items-center gap-8 text-white min-h-[380px] border-b-8 border-[#8c1414]">
+                {/* Sleek Compact Red Customer Hero Banner */}
+                <div className="rounded-3xl overflow-hidden relative bg-[#b21f1f] p-5 sm:p-7 shadow-xl flex flex-col md:flex-row justify-between items-center gap-5 text-white min-h-[205px] border-b-4 border-[#8c1414]">
                   {/* Subtle decorative vector patterns in background */}
-                  <div className="absolute top-[-10%] left-[-10%] w-[350px] h-[350px] rounded-full bg-white/5 blur-[85px] pointer-events-none" />
-                  <div className="absolute bottom-[-15%] right-[10%] w-[400px] h-[400px] rounded-full bg-yellow-400/10 blur-[100px] pointer-events-none" />
+                  <div className="absolute top-[-15%] left-[-10%] w-[260px] h-[260px] rounded-full bg-white/5 blur-[70px] pointer-events-none" />
+                  <div className="absolute bottom-[-20%] right-[10%] w-[280px] h-[280px] rounded-full bg-yellow-400/10 blur-[80px] pointer-events-none" />
 
-                  {/* Pointed red triangle matching the visual cut-out transition in Image 1 */}
-                  <div className="absolute bottom-[-14px] left-[15%] w-0 h-0 border-l-[14px] border-l-transparent border-r-[14px] border-r-transparent border-t-[14px] border-t-[#b21f1f] z-20" />
-
-                  {/* Left Column: Bold display typography and direct action */}
-                  <div className="flex-1 space-y-6 text-left z-10 w-full">
-                    <div className="inline-flex items-center gap-2 px-3.5 py-1.5 bg-yellow-400/20 border border-yellow-400/35 text-yellow-300 rounded-full font-mono font-black text-[9px] sm:text-[10px] uppercase tracking-wider shadow-sm">
+                  {/* Left Column: Crisp display typography and direct Voice + Menu CTAs */}
+                  <div className="flex-1 space-y-3 text-left z-10 w-full">
+                    <div className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-yellow-400/20 border border-yellow-400/35 text-yellow-300 rounded-lg font-mono font-black text-[9px] uppercase tracking-wider">
                       <span>🍔 MOKR SPECIAL</span>
-                      <span>{appLang === 'am' ? 'ትኩስ እና ፈጣን የክፍል መስተንግዶ' : 'Lodge Room Service'}</span>
+                      <span>• {tText({ am: 'ፈጣን የክፍል መስተንግዶ', en: 'Lodge Room Service', or: 'Tajaajila Kutaa Ariifataa', ti: 'ቅልጡፍ ኣገልግሎት ክፍሊ', sid: 'Rakkino Mini Owaante', fr: 'Service en chambre', de: 'Zimmerservice', it: 'Servizio in camera', zh: '快速客房服务', ar: 'خدمة الغرف السريعة' })}</span>
                     </div>
 
-                    <h2 className="text-4xl sm:text-5xl md:text-6xl font-black tracking-tight leading-none text-white font-sans uppercase">
-                      Order Your<br />Favorites in<br />Minutes.
+                    <h2 className="text-2xl sm:text-3xl md:text-4xl font-black tracking-tight leading-tight text-white font-sans uppercase">
+                      {tText({ am: 'የሚፈልጉትን በደቂቃዎች ይዘዙ!', en: 'Order Your Favorites in Minutes.', or: 'Kan Jaallattan Daqiiqaa Muraasatti Ajajadhaa.', ti: 'ዝፈትውዎ ብደቓይቕ ኣዝዙ!', sid: 'Baxattoota Daqiiqaho Giddo Ajaji!', fr: 'Commandez vos favoris en quelques minutes.', de: 'Bestellen Sie Ihre Favoriten in Minuten.', it: 'Ordina i tuoi piatti preferiti in pochi minuti.', zh: '几分钟内快速点选您喜爱的美食。', ar: 'اطلب أطباقك المفضلة خلال دقائق.' })}
                     </h2>
 
-                    <p className="text-white/95 text-xs sm:text-sm font-semibold max-w-lg leading-relaxed font-sans">
-                      {appLang === 'am' ? (
-                        'የክፍል አገልግሎት ትዕዛዞች በፍጥነት እና ትኩስ ሆነው እርስዎ ያሉበት ክፍል ይደርሳሉ! ለመጠቀም ቀላል እና ቀልጣፋ አማራጭ።'
-                      ) : (
-                        'To take more choice of options this delivery to get away easily. Signature dishes delivered fresh straight to your room.'
-                      )}
+                    <p className="text-white/90 text-xs font-medium max-w-lg leading-relaxed font-sans">
+                      {tText({ am: 'የሚወዷቸውን ምግቦች እና መጠጦች ከሜኑው ወይም በድምፅ ትዕዛዝ (Voice Order) በፍጥነት ወደ ክፍልዎ ይዘዙ።', en: 'Fresh dishes delivered straight to your table or room — tap below to browse or order hands-free by voice.', or: 'Nyaataa fi dhugaatii qulqulluu gara minjaala ykn kutaa keessaniitti ajajadhaa — meenuu banaa ykn sagaleedhaan ajajadhaa.', ti: 'ዝፈትውዎም መግብታትን መስተታትን ካብ ሜኑ ወይ ብድምጺ ብቅልጡፍ ናብ ክፍልኹም ኣዝዙ።', sid: 'Baxatto sagalenna agatto meenuunni woy huurranni rakkisattokki minikkira ajaji.', fr: 'Des plats frais servis à votre table ou en chambre — parcourez le menu ou commandez à la voix.', de: 'Frische Gerichte direkt an Ihren Tisch oder ins Zimmer — stöbern oder per Sprache bestellen.', it: 'Piatti freschi direttamente al tavolo o in camera — sfoglia il menu o ordina a voce.', zh: '新鲜菜肴直达您的餐桌或客房——点击浏览菜单或语音免提点餐。', ar: 'أطباق طازجة تصل مباشرة إلى طاولتك أو غرفتك — تصفح القائمة أو اطلب بالصوت.' })}
                     </p>
 
-                    <div className="pt-3 flex flex-wrap items-center gap-4">
+                    <div className="pt-1 flex flex-wrap items-center gap-2.5">
                       <button 
                         onClick={() => {
                           const catSec = document.getElementById('category-highlights-section');
                           if (catSec) catSec.scrollIntoView({ behavior: 'smooth' });
                         }}
-                        className="bg-[#f4c22b] hover:bg-white text-black hover:text-[#b21f1f] font-black text-xs px-8 py-3.5 rounded-full uppercase tracking-widest transition-all shadow-md active:scale-95 cursor-pointer border-b-4 border-[#cf9d12] hover:border-stone-200"
+                        className="bg-[#f4c22b] hover:bg-white text-black hover:text-[#b21f1f] font-black text-xs px-5 py-2.5 rounded-xl uppercase tracking-wider transition-all shadow-sm active:scale-95 cursor-pointer border-b-2 border-[#cf9d12]"
                       >
-                        {appLang === 'am' ? 'አሁን እዘዝ' : 'Exstob Now'}
+                        {tText({ am: '🍽️ ሜኑ ክፈት', en: '🍽️ Browse Menu', or: '🍽️ Meenuu Ilaali', ti: '🍽️ ሜኑ ክፈት', sid: '🍽️ Meenuu Fani', fr: '🍽️ Voir le menu', de: '🍽️ Menü ansehen', it: '🍽️ Sfoglia Menu', zh: '🍽️ 浏览菜单', ar: '🍽️ تصفح القائمة' })}
                       </button>
 
-                      <div className="flex items-center gap-2 bg-black/20 px-3.5 py-2 rounded-full border border-white/5">
-                        <span className="text-xs">🛵</span>
-                        <span className="text-[10px] font-mono font-black text-yellow-300 uppercase tracking-widest">
-                          {appLang === 'am' ? 'ፈጣን ክፍል አገልግሎት' : 'Fast Room Delivery'}
-                        </span>
-                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const voiceSec = document.getElementById('voice-ordering-standalone-section');
+                          if (voiceSec) {
+                            voiceSec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                          }
+                          const micBtn = document.getElementById('btn-voice-order-mic');
+                          if (micBtn) {
+                            setTimeout(() => micBtn.click(), 260);
+                          }
+                        }}
+                        className="bg-black/30 hover:bg-black/50 text-yellow-300 border border-yellow-300/40 font-black text-xs px-4 py-2.5 rounded-xl flex items-center gap-1.5 cursor-pointer active:scale-95 transition-all"
+                      >
+                        <span>🎙️</span>
+                        <span>{tText({ am: 'በድምፅ እዘዝ', en: 'Speak to Order', or: 'Sagaleen Ajaji', ti: 'ብድምጺ ኣዝዝ', sid: 'Huurranni Ajaji', fr: 'Commander à la voix', de: 'Per Sprache bestellen', it: 'Ordina a voce', zh: '语音点餐', ar: 'اطلب بالصوت' })}</span>
+                      </button>
                     </div>
                   </div>
 
-                  {/* Right Column: Beautiful animated overlapping signature burger image representing Mokr Express */}
-                  <div className="relative w-full md:w-[360px] flex items-center justify-center">
-                    <motion.div
-                      animate={{
-                        y: [0, -12, 0],
-                      }}
-                      transition={{
-                        repeat: Infinity,
-                        duration: 5,
-                        ease: "easeInOut"
-                      }}
-                      className="relative w-[260px] h-[260px] sm:w-[320px] sm:h-[320px] flex items-center justify-center"
-                    >
+                  {/* Right Column: Proportional signature dish showcase */}
+                  <div className="relative w-full md:w-[210px] flex items-center justify-center shrink-0">
+                    <div className="relative w-36 h-36 sm:w-44 sm:h-44 flex items-center justify-center">
                       <img 
                         src="https://images.unsplash.com/photo-1568901346375-23c9450c58cd?q=80&w=600"
                         alt="Signature Burger representation"
                         referrerPolicy="no-referrer"
-                        className="w-full h-full object-cover rounded-full border-8 border-[#f4c22b]/40 shadow-2xl"
+                        className="w-full h-full object-cover rounded-full border-4 border-[#f4c22b]/50 shadow-xl"
                       />
-                    </motion.div>
+                    </div>
                   </div>
                 </div>
+
+                {/* ASSIGNED TABLE/ROOM WAITER & MANAGER / GENERAL MANAGER / SUPPORT QUICK BAR */}
+                {(() => {
+                  const { waiterName, staffMember } = getAssignedWaiterDetails(guestLocation);
+                  const activeForLoc = assistanceCalls.filter(
+                    (c) => c.active && c.location.trim().toLowerCase() === (guestLocation || '').trim().toLowerCase(),
+                  ).length;
+                  return (
+                    <div className="bg-[#991B1B] border-2 border-[#f4c22b] rounded-3xl p-4 sm:p-5 shadow-xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4 text-left">
+                      <div className="flex items-center gap-3.5">
+                        <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-[#b21f1f] to-red-800 border-2 border-[#f4c22b] flex items-center justify-center text-2xl shadow-md shrink-0">
+                          🛎️
+                        </div>
+                        <div className="space-y-0.5">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="px-2 py-0.5 rounded-lg bg-[#f4c22b] text-red-950 font-mono font-black text-[10px]">
+                              📍 {guestLocation || 'Room 101'}
+                            </span>
+                            {activeForLoc > 0 && (
+                              <span className="px-2 py-0.5 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-400/40 font-bold text-[10px] animate-pulse">
+                                ● {tText({ am: `{n} ጥሪ በሂደት ላይ`, en: `{n} Active Call`, or: `Waamicha {n} Hojii Irra`, ti: `{n} ጻውዒት ኣብ መስርሕ`, sid: `{n} Woshshatto Loosunni`, fr: `{n} appel actif`, de: `{n} aktiver Ruf`, it: `{n} chiamata attiva`, zh: `{n} 个进行中呼叫`, ar: `{n} نداء نشط` }, { n: activeForLoc })}
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-xs sm:text-sm font-black text-white">
+                            {waiterName
+                              ? tText({ am: 'የተመደበ አስተናጋጅ፦ {w}', en: 'Assigned Waiter: {w}', or: 'Tajaajilaa Ramadame: {w}', ti: 'ዝተመደበ ኣስተናጋጅ: {w}', sid: 'Gaamo Soolaancho: {w}', fr: 'Serveur assigné : {w}', de: 'Zugewiesener Kellner: {w}', it: 'Cameriere assegnato: {w}', zh: '指派服务员：{w}', ar: 'النادل المخصص: {w}' }, { w: waiterName })
+                              : tText({ am: 'በስራ ላይ ያለ አስተናጋጅ (ለመጥራት ይጫኑ)', en: 'On-Duty Waiter Service Ready', or: 'Tajaajilli Keessummeessaa Qophaa\'aa Dha', ti: 'ኣብ ስራሕ ዘሎ ኣስተናጋጅ ድሉው እዩ', sid: 'Owaantete Soolaancho Qixxaawo', fr: 'Service serveur prêt', de: 'Kellnerservice bereit', it: 'Servizio cameriere pronto', zh: '值班服务员已就绪', ar: 'خدمة النادل المناوب جاهزة' })}
+                          </p>
+                          <p className="text-[11px] text-white/70">
+                            {waiterName
+                              ? staffMember?.phone
+                                ? `📞 ${staffMember.phone} • `
+                                : ''
+                              : ''}
+                            {tText({ am: 'ለዚህ ጠረጴዛ/ክፍል የተመደበውን አስተናጋጅ ወይም ማናጀር / ስራ አስኪያጅ / Support በቀጥታ ያግኙ።', en: 'Call your assigned waiter or contact Management & Support Team directly.', or: 'Tajaajilaa minjaala/kutaa kanaaf ramadame ykn Hoggansa & Deeggarsa qunnamaa.', ti: 'ነዚ ጣውላ/ክፍሊ ዝተመደበ ኣስተናጋጅ ወይ ኣመሓዳርን ደገፍን ብቐጥታ ርኸቡ።', sid: 'Konne xarapheessa/minira gaamo soolaancho woy massagaancho/kaa\'lote bissa xaadi.', fr: 'Appelez votre serveur dédié ou contactez directement la direction.', de: 'Rufen Sie Ihren Kellner oder kontaktieren Sie direkt das Management.', it: 'Chiama il tuo cameriere o contatta direttamente la direzione.', zh: '呼叫您的专属服务员或直接联系管理及支持团队。', ar: 'اتصل بالنادل المخصص أو تواصل مباشرة مع الإدارة والدعم.' })}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2.5 w-full md:w-auto">
+                        <button
+                          type="button"
+                          id="btn-inline-call-assigned-waiter"
+                          onClick={handleTriggerBuzzer}
+                          className="flex-1 md:flex-none px-4 py-2.5 rounded-xl bg-gradient-to-r from-[#b21f1f] to-red-600 hover:from-red-500 hover:to-red-600 text-yellow-300 font-black text-xs border border-yellow-400/70 shadow-lg flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 transition-all"
+                        >
+                          <span>🛎️</span>
+                          <span>
+                            {waiterName
+                              ? tText({ am: '{w} ን ጥራ', en: 'Call {w}', or: '{w} Waami', ti: 'ን{w} ጸውዕ', sid: '{w} Woshshi', fr: 'Appeler {w}', de: '{w} rufen', it: 'Chiama {w}', zh: '呼叫 {w}', ar: 'استدعاء {w}' }, { w: waiterName })
+                              : tText({ am: 'አስተናጋጅ ጥራ', en: 'Call Waiter', or: 'Tajaajilaa Waami', ti: 'ኣስተናጋጅ ጸውዕ', sid: 'Soolaancho Woshshi', fr: 'Appeler serveur', de: 'Kellner rufen', it: 'Chiama cameriere', zh: '呼叫服务员', ar: 'استدعاء النادل' })}
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          id="btn-inline-contact-leadership"
+                          onClick={handleOpenLeadershipContact}
+                          className="flex-1 md:flex-none px-4 py-2.5 rounded-xl bg-[#f4c22b] hover:bg-yellow-300 text-red-950 font-black text-xs border border-white/60 shadow-lg flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 transition-all"
+                        >
+                          <span>👔</span>
+                          <span>
+                            {tText({ am: 'ማናጀር / ስራ አስኪያጅ / Support', en: 'Manager / GM / Support', or: 'Hoggansa / GM / Deeggarsa', ti: 'ማናጀር / GM / ደገፍ', sid: 'Massagaancho / GM / Kaa\'lo', fr: 'Direction / Support', de: 'Management / Support', it: 'Direzione / Supporto', zh: '经理 / 总经理 / 支持', ar: 'المدير / الإدارة / الدعم' })}
+                          </span>
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 {/* LIVE GUEST ORDER TRACKER & QUEUE DISPLAY */}
                 <LiveOrderTracker
@@ -5824,9 +7894,25 @@ export default function App() {
                   onEditOrder={(ord) => setAdjustingOrder(ord)}
                   onCancelOrder={(orderId) => {
                     askConfirmAndRun(
-                      'ይህንን ትዕዛዝ ሙሉ በሙሉ መሰረዝ ይፈልጋሉ? (Are you sure you want to cancel this order?)',
+                      tText({
+                        am: 'ይህንን ትዕዛዝ ሙሉ በሙሉ መሰረዝ ይፈልጋሉ?',
+                        en: 'Are you sure you want to cancel this order?',
+                        or: 'Ajaja kana guutummaatti haquu barbaadduu?',
+                        ti: 'ነዚ ትእዛዝ ብሙሉኡ ክትስርዞ ትደሊ ዲኻ?',
+                        sid: 'Konne ajaja wo\'manka huna hasiratto?',
+                        fr: 'Voulez-vous vraiment annuler cette commande ?',
+                        de: 'Möchten Sie diese Bestellung wirklich stornieren?',
+                        it: 'Sei sicuro di voler annullare questo ordine?',
+                        zh: '确定要取消此订单吗？',
+                        ar: 'هل أنت متأكد من أنك تريد إلغاء هذا الطلب؟',
+                      }),
                       () => {
-                        setOrders((prev) => prev.filter((o) => o.id !== orderId));
+                        setOrders((prev) =>
+                          prev.map((o) =>
+                            o.id === orderId ? { ...o, status: 'Cancelled' as OrderStatus, updatedAt: Date.now() } : o
+                          )
+                        );
+                        resolveOrderAssistanceCalls(orderId, 'customer');
                         setTrackedOrderIds((prev) => prev.filter((id) => id !== orderId));
                         if (lastPlacedOrderId === orderId) setLastPlacedOrderId(null);
                       }
@@ -5836,27 +7922,157 @@ export default function App() {
                   onOpenFullModal={() => setIsLiveTrackerOpen(true)}
                 />
 
-                {/* PREMIUM HIGH-FIDELITY CULINARY CONTAINER (Clean White Background as requested) */}
-                <div id="category-highlights-section" className="relative mt-8 p-6 sm:p-10 rounded-[3rem] bg-white border-2 border-stone-200 overflow-hidden shadow-2xl text-stone-900 space-y-6">
-                  
-                  {/* Clean Light-Themed FOOD SEARCH BAR */}
+                {/* STANDALONE VOICE ORDERING & AUDIO ACCESSIBILITY SECTION (COMPLETELY SEPARATE FROM DIGITAL MENU) */}
+                <div
+                  id="voice-ordering-standalone-section"
+                  className="relative mt-4 scroll-mt-20 space-y-2"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2 px-1 min-w-0">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="px-2.5 py-1 rounded-lg bg-[#f4c22b] text-stone-950 font-black text-[10px] uppercase tracking-wider shadow-sm">
+                        {tText({ am: '🎙️ ራሱን የቻለ የድምፅ ማዘዣ', en: '🎙️ Dedicated Voice Ordering', or: '🎙️ Ajaja Sagalee Addaa', ti: '🎙️ ፍሉይ መእዘዚ ድምጺ', sid: '🎙️ Baxxino Huurro Ajaja', fr: '🎙️ Commande vocale dédiée', de: '🎙️ Sprachbestellung', it: '🎙️ Ordine Vocale Dedicato', zh: '🎙️ 专属语音点餐', ar: '🎙️ الطلب الصوتي المخصص' })}
+                      </span>
+                      <span className="text-[11px] font-bold text-[#FEF3C7] hidden sm:inline">
+                        {tText({ am: 'ከሜኑው ተነጥሎ በድምፅ የሚታዘዝበት ክፍል', en: 'Order by voice separately from browsing the visual menu', or: 'Meenuu ilaaluu irraa addatti sagaleedhaan ajajadhaa', ti: 'ካብ ሜኑ ተፈልዩ ብድምጺ ዝእዘዘሉ ክፍሊ', sid: 'Meenuunni baxxino garinni huurranni ajajammeenniwa', fr: 'Commandez à la voix séparément du menu visuel', de: 'Unabhängig vom visuellen Menü per Sprache bestellen', it: 'Ordina a voce separatamente dal menu visivo', zh: '独立于图文菜单之外的语音点餐区', ar: 'اطلب بالصوت بشكل منفصل عن تصفح القائمة' })}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const catSec = document.getElementById('category-highlights-section');
+                        if (catSec) catSec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                      }}
+                      className="text-[10px] font-black text-white hover:text-[#1C1917] bg-[#b21f1f] hover:bg-[#f4c22b] border border-[#f4c22b] px-2.5 py-1 rounded-lg cursor-pointer transition-colors shrink-0"
+                    >
+                      {tText({ am: 'ወደ ሜኑ ዝለል ↓', en: 'Jump to Menu ↓', or: 'Gara Meenuutti Darbi ↓', ti: 'ናብ ሜኑ ስገር ↓', sid: 'Meenuuwa Saa\'i ↓', fr: 'Aller au menu ↓', de: 'Zum Menü ↓', it: 'Vai al menu ↓', zh: '跳转至菜单 ↓', ar: 'الانتقال للقائمة ↓' })}
+                    </button>
+                  </div>
+
+                  {/* UNIFIED VOICE ORDERING & FULL-MENU AUDIO ACCESSIBILITY DOCK */}
+                  <MenuAudioAccessibilityBar
+                    appLang={appLang}
+                    isVoiceOverEnabled={isVoiceOverEnabled}
+                    onToggleVoiceOver={() => {
+                      const nextVal = !isVoiceOverEnabled;
+                      setIsVoiceOverEnabled(nextVal);
+                      if (nextVal) {
+                        playAccessibleChime('tour_start');
+                        runVoiceOver(
+                          tText({ am: 'የድምፅ ሜኑ ረዳት በርቷል።', en: 'Audio menu guide enabled.', or: 'Qajeelfamni meenuu sagalee banameera.', ti: 'ናይ ድምጺ ሜኑ ሓጋዚ ተኸፊቱ።', sid: 'Huurro meenuu kaa\'laancho fanamino.', fr: 'Guide vocal du menu activé.', de: 'Audio-Menüführung aktiviert.', it: 'Guida vocale menu attivata.', zh: '语音菜单向导已开启。', ar: 'تم تفعيل الدليل الصوتي للقائمة.' }),
+                          true,
+                          'Audio menu guide enabled.',
+                        );
+                      } else {
+                        stopAccessibleSpeech();
+                        playAccessibleChime('tour_end');
+                      }
+                    }}
+                    voiceSpeed={voiceSpeed}
+                    onChangeVoiceSpeed={(sp) => {
+                      setVoiceSpeed(sp);
+                      if (isVoiceOverEnabled) {
+                        playAccessibleChime('step');
+                        speakAccessibleText(
+                          tText({ am: 'የድምፅ ፍጥነት {sp} ተስተካክሏል።', en: 'Reading speed set to {sp}x.', or: 'Saffisni dubbisaa {sp}x ta\'eera.', ti: 'ፍጥነት ድምጺ {sp}x ተስተካኺሉ።', sid: 'Huurro rakkimo {sp}x qixxeessamino.', fr: 'Vitesse de lecture réglée sur {sp}x.', de: 'Lesegeschwindigkeit auf {sp}x gesetzt.', it: 'Velocità di lettura impostata a {sp}x.', zh: '朗读速度已设为 {sp}x。', ar: 'تم ضبط سرعة القراءة إلى {sp}x.' }, { sp }),
+                          appLang,
+                          { rate: sp, fallbackEnText: `Reading speed set to ${sp}x.` },
+                        );
+                      }
+                    }}
+                    categories={categories}
+                    categoryTranslations={categoryTranslations}
+                    menuItems={menuItems}
+                    promoBanners={promos}
+                    guestLocation={guestLocation}
+                    modifierOptions={modifierOptions}
+                    selectedCategory={selectedCategory}
+                    selectedMenuCardId={selectedMenuCardId}
+                    menuSearchQuery={menuSearchQuery}
+                    showSoldOutItems={stockAlertSettings.customerSoldOutMode === 'show_sold_out'}
+                    onSelectCategory={(catId) => setSelectedCategory(catId)}
+                    onSelectDish={(dish) => setSelectedMenuCardId(dish.id)}
+                    onOrderDish={(dish) => handleAddToBasket(dish.id)}
+                    onVoiceExecuteResult={handleVoiceExecuteResult}
+                    onOpenMenuSection={() => {
+                      setMenuSearchQuery('');
+                      window.setTimeout(() => {
+                        document.getElementById('category-highlights-section')?.scrollIntoView({
+                          behavior: 'smooth',
+                          block: 'start',
+                        });
+                      }, 150);
+                    }}
+                    onEnsureVoiceOverOn={() => setIsVoiceOverEnabled(true)}
+                    pendingVoiceCommand={pendingEntryVoiceCommand}
+                    onClearPendingVoiceCommand={() => setPendingEntryVoiceCommand(null)}
+                    onOpenCart={() => setIsCartOpen(true)}
+                    onCallWaiter={handleTriggerBuzzer}
+                    cart={cart}
+                    serviceChargeRate={serviceChargeRate}
+                    vatRate={vatRate}
+                    getTranslatedItemFields={getAccessibleMenuItemFields}
+                    externalTranscript={lastSpokenTranscript}
+                  />
+
+                  {/* Non-blocking Accessible Toast Confirmation */}
+                  {accessibleToast && (
+                    <div
+                      role="status"
+                      aria-live="polite"
+                      className="rounded-xl bg-[#065F46] text-white border-2 border-[#6EE7B7] px-3.5 py-2 text-xs font-black text-center shadow-sm"
+                    >
+                      {accessibleToast}
+                    </div>
+                  )}
+                </div>
+
+                {/* SEPARATE DIGITAL MENU CONTAINER */}
+                <div
+                  id="category-highlights-section"
+                  className="menu-container-scroll relative mt-5 p-3.5 sm:p-6 rounded-3xl bg-white border border-stone-200 overflow-x-clip scroll-mt-20 shadow-xl text-stone-900 space-y-3.5"
+                >
+                  {/* Clear Digital Menu Section Header */}
+                  <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-stone-200 min-w-0">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="px-2.5 py-0.5 rounded-lg bg-[#b21f1f] text-white font-black text-[10px] uppercase tracking-wider">
+                        {tText({ am: '🍽️ ዲጂታል ሜኑ', en: '🍽️ Digital Menu', or: '🍽️ Meenuu Dijitaalaa', ti: '🍽️ ዲጂታል ሜኑ', sid: '🍽️ Dijitaale Meenuu', fr: '🍽️ Menu Numérique', de: '🍽️ Digitales Menü', it: '🍽️ Menu Digitale', zh: '🍽️ 数字菜单', ar: '🍽️ القائمة الرقمية' })}
+                      </span>
+                      <span className="text-xs font-bold text-stone-600 hidden sm:inline">
+                        {tText({ am: 'ምግቦች እና መጠጦች ዝርዝር', en: 'Browse Dishes & Drinks', or: 'Tarree Nyaataa fi Dhugaatii', ti: 'ዝርዝር መግብን መስተን', sid: 'Sagaletenna Agatto Tarre', fr: 'Parcourir plats et boissons', de: 'Speisen & Getränke entdecken', it: 'Sfoglia piatti e bevande', zh: '浏览菜品与饮品', ar: 'تصفح الأطباق والمشروبات' })}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const voiceSec = document.getElementById('voice-ordering-standalone-section');
+                        if (voiceSec) voiceSec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                      }}
+                      className="text-[10px] font-black text-[#b21f1f] hover:text-stone-950 bg-stone-100 hover:bg-[#f4c22b] border border-stone-200 px-2.5 py-1 rounded-lg cursor-pointer transition-colors shrink-0"
+                    >
+                      {tText({ am: '🎙️ ወደ ድምፅ ማዘዣ ↑', en: '🎙️ Voice Order ↑', or: '🎙️ Ajaja Sagalee ↑', ti: '🎙️ መእዘዚ ድምጺ ↑', sid: '🎙️ Huurro Ajaja ↑', fr: '🎙️ Commande Vocale ↑', de: '🎙️ Sprachbestellung ↑', it: '🎙️ Ordine Vocale ↑', zh: '🎙️ 语音点餐 ↑', ar: '🎙️ الطلب الصوتي ↑' })}
+                    </button>
+                  </div>
+
+                  {/* Compact FOOD SEARCH BAR */}
                   <div className="max-w-md w-full mx-auto relative z-10 font-sans">
                     <div className="relative">
-                      <span className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-stone-500">
-                        <Search className="w-4 h-4" />
+                      <span className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-stone-500">
+                        <Search className="w-3.5 h-3.5" />
                       </span>
                       <input
                         type="text"
+                        aria-label={tText({ am: 'ምግብ ወይም መጠጥ ይፈልጉ', en: 'Search menu items', or: 'Meenuu barbaadi', ti: 'መግቢ ወይ መስተ ድለ', sid: 'Meenuu hasi', fr: 'Rechercher dans le menu', de: 'Menü durchsuchen', it: 'Cerca nel menu', zh: '搜索菜单项', ar: 'ابحث في القائمة' })}
                         value={menuSearchQuery}
                         onChange={(e) => setMenuSearchQuery(e.target.value)}
-                        placeholder={appLang === 'am' ? 'ምግብ፣ መጠጥ ወይም መክሰስ ይፈልጉ...' : 'Search delicious food, drinks, or snacks...'}
-                        className="w-full pl-10 pr-10 py-3.5 bg-stone-50 border-2 border-stone-200 hover:border-yellow-400 focus:border-[#f4c22b] text-black rounded-2xl text-xs font-bold outline-none transition-all placeholder-stone-400 shadow-sm"
+                        placeholder={tText({ am: 'ምግብ፣ መጠጥ ወይም መክሰስ ይፈልጉ...', en: 'Search delicious food, drinks, or snacks...', or: 'Nyaata, dhugaatii ykn mi\'aawaa barbaadi...', ti: 'መግቢ፣ መስተ ወይ መክሰስ ድለ...', sid: 'Sagale, agatto woy shafaxa hasi...', fr: 'Rechercher plats, boissons ou en-cas...', de: 'Speisen, Getränke oder Snacks suchen...', it: 'Cerca piatti, bevande o snack...', zh: '搜索美食、饮品或小吃...', ar: 'ابحث عن الأطباق أو المشروبات أو الوجبات الخفيفة...' })}
+                        className="w-full pl-9 pr-9 py-2.5 bg-stone-50 border border-stone-200 hover:border-yellow-400 focus:border-[#f4c22b] text-black rounded-xl text-xs font-bold outline-none transition-all placeholder-stone-400"
                       />
                       {menuSearchQuery && (
                         <button
                           type="button"
+                          aria-label={tText({ am: 'ፍለጋ አጽዳ', en: 'Clear search', or: 'Barbaacha haqi', ti: 'ድለያ ኣጽሪ', sid: 'Hasatto huni', fr: 'Effacer', de: 'Suche löschen', it: 'Cancella ricerca', zh: '清除搜索', ar: 'مسح البحث' })}
                           onClick={() => setMenuSearchQuery('')}
-                          className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-stone-400 hover:text-black font-bold"
+                          className="absolute inset-y-0 right-0 pr-3 flex items-center text-stone-400 hover:text-black font-bold"
                         >
                           ✕
                         </button>
@@ -5877,11 +8093,13 @@ export default function App() {
                     onFocusMenuItem={handleFocusMenuItemFromAssistant}
                   />
 
-                  {/* Horizontal navigation category chips with clean scrolling layout */}
+                  {/* Horizontal navigation category chips with sleek scrolling layout */}
                   <div className="relative z-10 font-sans flex items-center">
                     <div 
                       ref={categoryScrollRef}
-                      className="flex-1 flex flex-row flex-nowrap border-b border-stone-200 pb-4 gap-3 overflow-x-auto no-scrollbar scroll-smooth px-1"
+                      role="tablist"
+                      aria-label={tText({ am: 'የሜኑ ምድቦች', en: 'Menu Categories', or: 'Ramaddiiwwan Meenuu', ti: 'ምድባት ሜኑ', sid: 'Meenuu Bissa', fr: 'Catégories du menu', de: 'Menükategorien', it: 'Categorie del menu', zh: '菜单分类', ar: 'فئات القائمة' })}
+                      className="menu-horizontal-only flex-1 flex flex-row flex-nowrap border-b border-stone-200 pb-3 gap-2 overflow-x-auto overflow-y-hidden overscroll-x-contain overscroll-y-auto no-scrollbar scroll-smooth px-0.5"
                     >
                       {categories.map(cat => {
                         const transLabel = (categoryTranslations[cat.id] && categoryTranslations[cat.id][appLang]) 
@@ -5892,17 +8110,31 @@ export default function App() {
                           <button
                             key={cat.id}
                             id={`btn-cat-selector-${cat.id}`}
+                            role="tab"
+                            aria-selected={isActive}
                             onClick={() => {
                               setSelectedCategory(cat.id);
                               setMenuSearchQuery('');
+                              const catItems = menuItems.filter(m => m.cat === cat.id);
+                              const availCount = catItems.filter(m => m.available).length;
+                              if (isVoiceOverEnabled) {
+                                playAccessibleChime('select');
+                                const catPayload = buildCategorySpeechPayload({
+                                  categoryLabel: transLabel,
+                                  itemsCount: catItems.length,
+                                  availableCount: availCount,
+                                  appLang,
+                                });
+                                runVoiceOver(catPayload.nativeText, false, catPayload.fallbackEnText);
+                              }
                             }}
-                            className={`px-5 py-3 rounded-full text-xs font-black uppercase tracking-widest transition-all duration-300 flex items-center gap-2.5 shrink-0 cursor-pointer border ${
+                            className={`px-3.5 py-2 rounded-2xl text-[11px] font-black uppercase tracking-wider transition-all duration-200 flex items-center gap-1.5 shrink-0 cursor-pointer border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#b21f1f] ${
                               isActive
-                                ? 'bg-[#f4c22b] text-black border-yellow-500 shadow-lg shadow-yellow-500/20 scale-105 font-black'
-                                : 'bg-stone-100 text-stone-800 border-stone-200 hover:bg-stone-200 hover:border-stone-300'
+                                ? 'bg-[#f4c22b] text-black border-amber-500 shadow-sm'
+                                : 'bg-stone-100 text-stone-800 border-stone-200 hover:bg-stone-200'
                             }`}
                           >
-                            <span className="text-lg">{cat.icon}</span>
+                            <span className="text-sm" aria-hidden="true">{cat.icon}</span>
                             <span>{transLabel}</span>
                           </button>
                         );
@@ -5913,28 +8145,30 @@ export default function App() {
                   {/* Active search results label */}
                   {menuSearchQuery.trim() !== '' && (
                     <div className="text-center relative z-10 font-sans">
-                      <span className="text-[10px] text-amber-600 font-mono uppercase tracking-widest block mb-1 font-black">🔍 የፍለጋ ውጤቶች / Search Results</span>
-                      <h3 className="text-sm font-black text-stone-900">
-                        "{menuSearchQuery}" {appLang === 'am' ? 'የሚሉ ተዛማጅ ምግቦች' : 'matching items'}
+                      <span className="text-[10px] text-amber-600 font-mono uppercase tracking-widest block mb-0.5 font-black">
+                        {tText({ am: '🔍 የፍለጋ ውጤቶች', en: '🔍 Search Results', or: '🔍 Bu\'aa Barbaachaa', ti: '🔍 ውጽኢት ድለያ', sid: '🔍 Hasatto Guma', fr: '🔍 Résultats', de: '🔍 Suchergebnisse', it: '🔍 Risultati ricerca', zh: '🔍 搜索结果', ar: '🔍 نتائج البحث' })}
+                      </span>
+                      <h3 className="text-xs font-black text-stone-900">
+                        "{menuSearchQuery}" {tText({ am: 'የሚሉ ተዛማጅ ምግቦች', en: 'matching items', or: 'meeshaalee walsiman', ti: 'ዝመሳሰሉ መግብታት', sid: 'xaaddanno uduunna', fr: 'articles correspondants', de: 'passende Artikel', it: 'elementi corrispondenti', zh: '个匹配项', ar: 'عناصر مطابقة' })}
                       </h3>
                     </div>
                   )}
 
-                  {/* Horizontal scrolling row for menu cards with side-by-side peek view */}
-                  <div className="relative px-1 mt-6 z-10 flex items-center">
+                  {/* Horizontal scrolling row for menu cards with proportional sizing */}
+                  <div className="relative px-0.5 mt-2 z-10 flex items-center">
                     {/* Floating Left Menu Item Scroll Button */}
                     <button 
                       type="button"
                       onClick={() => scrollMenu('left')}
-                      className="absolute left-1 z-20 w-9 h-9 rounded-full bg-[#f4c22b] hover:bg-white text-black flex items-center justify-center shadow-xl cursor-pointer border border-yellow-600 font-black text-xs active:scale-95 transition-transform"
-                      title="Scroll menu left"
+                      className="absolute left-1 z-20 w-8 h-8 rounded-full bg-[#f4c22b] hover:bg-white text-black flex items-center justify-center shadow-lg cursor-pointer border border-yellow-600 font-black text-[11px] active:scale-95 transition-transform"
+                      title={tText({ am: 'ወደ ግራ አሸብልል', en: 'Scroll menu left', or: 'Gara bitaatti sochoosi', ti: 'ናብ ጸጋም ኣንሸርትት', sid: 'Gura\'ichcho higisi', fr: 'Défiler à gauche', de: 'Nach links scrollen', it: 'Scorri a sinistra', zh: '向左滚动', ar: 'التمرير لليسار' })}
                     >
                       ◀
                     </button>
 
                     <div 
                       ref={menuScrollRef}
-                      className="flex-1 flex flex-row flex-nowrap gap-x-8 gap-y-4 pt-16 pb-12 px-10 overflow-x-auto no-scrollbar scroll-smooth"
+                      className="menu-horizontal-only flex-1 flex flex-row flex-nowrap items-stretch gap-x-5 pt-14 pb-4 px-9 overflow-x-auto overflow-y-hidden overscroll-x-contain overscroll-y-auto no-scrollbar scroll-smooth"
                     >
                       {(() => {
                         const filtered = menuItems.filter(item => {
@@ -5944,7 +8178,9 @@ export default function App() {
                             (item.nameEn && item.nameEn.toLowerCase().includes(menuSearchQuery.toLowerCase())) ||
                             (item.desc && item.desc.toLowerCase().includes(menuSearchQuery.toLowerCase()));
                           
-                          return (menuSearchQuery.trim() !== '' ? matchesSearch : (matchesCategory && matchesSearch)) && item.available;
+                          const matchesAvailability =
+                            stockAlertSettings.customerSoldOutMode === 'show_sold_out' || item.available;
+                          return (menuSearchQuery.trim() !== '' ? matchesSearch : (matchesCategory && matchesSearch)) && matchesAvailability;
                         });
 
                         if (filtered.length === 0) {
@@ -5952,13 +8188,13 @@ export default function App() {
                             <div className="text-center py-16 col-span-full w-full font-sans">
                               <span className="text-4xl block mb-3">🍽️</span>
                               <p className="text-stone-500 font-bold text-sm">
-                                {appLang === 'am' ? 'ምንም ተዛማጅ ምግብ አልተገኘም!' : 'No matching delicious items found!'}
+                                {tText({ am: 'ምንም ተዛማጅ ምግብ አልተገኘም!', en: 'No matching delicious items found!', or: 'Nyaanni walsimu homtuu hin argamne!', ti: 'ዝመሳሰል መግቢ ኣይተረኽበን!', sid: 'Xaaddanno sagale dino!', fr: 'Aucun plat correspondant trouvé !', de: 'Keine passenden Gerichte gefunden!', it: 'Nessun piatto corrispondente trovato!', zh: '未找到匹配的菜品！', ar: 'لم يتم العثور على أطباق مطابقة!' })}
                               </p>
                               <button 
                                 onClick={() => setMenuSearchQuery('')}
                                 className="mt-3 px-4 py-1.5 bg-[#f4c22b] text-black hover:bg-black hover:text-white rounded-lg text-xs font-bold transition-colors border border-stone-200"
                               >
-                                {appLang === 'am' ? 'ሁሉንም አሳይ' : 'Show All'}
+                                {t('common.show_all')}
                               </button>
                             </div>
                           );
@@ -5987,71 +8223,127 @@ export default function App() {
                           // Dynamic translated properties
                           const nameToShow = (isUnedited && itemTranslations[item.id] && itemTranslations[item.id][appLang])
                             ? itemTranslations[item.id][appLang].name
-                            : (['en', 'fr', 'de', 'it'].includes(appLang) ? (item.nameEn || item.nameAm) : item.nameAm);
+                            : (['en', 'fr', 'de', 'it', 'zh', 'ar'].includes(appLang) ? (item.nameEn || item.nameAm) : item.nameAm);
 
                           const descToShow = (isUnedited && itemTranslations[item.id] && itemTranslations[item.id][appLang])
                             ? itemTranslations[item.id][appLang].desc
                             : item.desc;
 
                           const subToShow = (isUnedited && itemTranslations[item.id] && itemTranslations[item.id][appLang])
-                            ? (['en', 'fr', 'de', 'it'].includes(appLang) ? itemTranslations[item.id].am.name : itemTranslations[item.id].en.name)
-                            : (['en', 'fr', 'de', 'it'].includes(appLang) ? item.nameAm : (item.nameEn || ''));
+                            ? (['en', 'fr', 'de', 'it', 'zh', 'ar'].includes(appLang) ? itemTranslations[item.id].am.name : itemTranslations[item.id].en.name)
+                            : (['en', 'fr', 'de', 'it', 'zh', 'ar'].includes(appLang) ? item.nameAm : (item.nameEn || ''));
 
-                          // Red background by default with white text, turning Yellow with dark text when tapped/clicked
-                          const cardBg = isSelected
-                            ? 'bg-[#f4c22b] text-black border-4 border-amber-600 shadow-2xl scale-[1.02]'
-                            : 'bg-[#b21f1f] text-white border-2 border-red-800 hover:border-yellow-400 hover:shadow-xl transition-all duration-300';
+                          const isSoldOut = !item.available;
 
-                          const textColor = isSelected ? 'text-black font-black text-lg' : 'text-white font-black text-lg drop-shadow-md';
-                          const descColor = isSelected ? 'text-stone-900 font-bold text-xs leading-relaxed' : 'text-white font-bold text-xs leading-relaxed drop-shadow-sm';
-                          const subColor = isSelected ? 'text-[#8c1414] font-mono text-[10px] font-black uppercase tracking-wider' : 'text-[#f4c22b] font-mono text-[10px] font-black uppercase tracking-wider';
-                          const inputBg = isSelected ? 'bg-white border-amber-400 text-stone-900 placeholder-stone-500 focus:border-[#8c1414]' : 'bg-black/40 border-white/30 text-white placeholder-white/60 focus:border-[#f4c22b]';
-                          const btnActive = isSelected ? 'bg-[#8c1414] text-white font-black shadow-sm' : 'bg-[#f4c22b] text-black font-black shadow-sm';
-                          const btnInactive = isSelected ? 'bg-amber-100 hover:bg-amber-200 text-stone-800 border border-amber-300' : 'bg-black/40 hover:bg-black/60 text-white border border-white/20';
+                          // Red background by default with white text, turning Yellow with dark text when tapped/clicked; darkened red lock when Sold Out
+                          const cardBg = isSoldOut
+                            ? 'bg-[#2a0a0a] text-white border-2 border-red-500/80 opacity-90 transition-all duration-200'
+                            : isSelected
+                              ? 'bg-[#f4c22b] text-black border-2 border-amber-600 shadow-xl'
+                              : 'bg-[#b21f1f] text-white border border-red-800 hover:border-yellow-400 hover:shadow-lg transition-all duration-200';
+
+                          const textColor = isSoldOut ? 'text-red-200 font-black text-base' : isSelected ? 'text-black font-black text-base' : 'text-white font-black text-base drop-shadow-xs';
+                          const descColor = isSoldOut ? 'text-red-100/70 font-semibold text-[11px] leading-snug' : isSelected ? 'text-stone-800 font-semibold text-[11px] leading-snug' : 'text-white/90 font-semibold text-[11px] leading-snug';
+                          const subColor = isSoldOut ? 'text-red-400 font-mono text-[9px] font-black uppercase tracking-wider' : isSelected ? 'text-[#8c1414] font-mono text-[9px] font-black uppercase tracking-wider' : 'text-[#f4c22b] font-mono text-[9px] font-black uppercase tracking-wider';
+                          const inputBg = isSelected && !isSoldOut ? 'bg-white border-amber-400 text-stone-900 placeholder-stone-500 focus:border-[#8c1414]' : 'bg-black/40 border-white/30 text-white placeholder-white/60 focus:border-[#f4c22b]';
+                          const btnActive = isSelected && !isSoldOut ? 'bg-[#8c1414] text-white font-black shadow-xs' : 'bg-[#f4c22b] text-black font-black shadow-xs';
+                          const btnInactive = isSelected && !isSoldOut ? 'bg-amber-100 hover:bg-amber-200 text-stone-800 border border-amber-300' : 'bg-black/40 hover:bg-black/60 text-white border border-white/20';
 
                           return (
                             <div 
                               key={item.id} 
                               id={`menu-card-item-${item.id}`}
-                              onClick={() => setSelectedMenuCardId(item.id)}
-                              className={`rounded-[2rem] flex flex-col justify-between overflow-visible relative pt-20 pb-6 px-5 cursor-pointer w-[290px] sm:w-[320px] shrink-0 ${cardBg}`}
+                              role="article"
+                              tabIndex={0}
+                              aria-label={`${nameToShow}, ${item.price} ${currency}, ${isSoldOut ? tText({ am: 'አልቋል', en: 'Sold out', or: 'Dhumeera', ti: 'ወዲኡ', sid: 'Goofino', fr: 'Épuisé', de: 'Ausverkauft', it: 'Esaurito', zh: '已售罄', ar: 'نفد' }) : tText({ am: 'አለ', en: 'Available', or: 'Ni jira', ti: 'ኣሎ', sid: 'Noo', fr: 'Disponible', de: 'Verfügbar', it: 'Disponibile', zh: '有货', ar: 'متوفر' })}. ${descToShow || ''}`}
+                              onClick={() => {
+                                if (!isSoldOut) {
+                                  setSelectedMenuCardId(item.id);
+                                }
+                                const idxInList = filtered.findIndex((f) => f.id === item.id);
+                                speakMenuItemDetails(item, idxInList >= 0 ? idxInList : undefined, filtered.length);
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                  e.preventDefault();
+                                  if (!isSoldOut) setSelectedMenuCardId(item.id);
+                                  const idxInList = filtered.findIndex((f) => f.id === item.id);
+                                  speakMenuItemDetails(item, idxInList >= 0 ? idxInList : undefined, filtered.length, true);
+                                }
+                              }}
+                              className={`rounded-3xl flex flex-col justify-between overflow-visible relative pt-14 pb-4 px-4 w-[248px] sm:w-[272px] shrink-0 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-stone-950 ${isSoldOut ? 'cursor-not-allowed' : 'cursor-pointer'} ${cardBg}`}
                             >
-                              {/* Overlapping circular plate image */}
-                              <div className="absolute -top-12 left-1/2 -translate-x-1/2 z-20 select-none">
-                                <div className={`w-32 h-32 rounded-full overflow-hidden border-4 shadow-md transition-all duration-300 ${
-                                  isSelected ? 'border-red-700 bg-white ring-4 ring-yellow-300' : 'border-[#f4c22b] bg-white ring-2 ring-red-900/50'
+                              {/* Overlapping circular plate image (proportional sizing) */}
+                              <div className="absolute -top-10 left-1/2 -translate-x-1/2 z-20 select-none">
+                                <div className={`w-24 h-24 rounded-full overflow-hidden border-[3px] shadow-md transition-all duration-300 relative ${
+                                  isSoldOut
+                                    ? 'border-red-500 bg-black ring-2 ring-red-600/50'
+                                    : isSelected
+                                      ? 'border-red-700 bg-white ring-2 ring-yellow-300'
+                                      : 'border-[#f4c22b] bg-white ring-2 ring-red-900/40'
                                 }`}>
                                   <img 
                                     src={item.image} 
                                     onError={(e) => {
                                       (e.currentTarget as HTMLImageElement).src = 'https://images.unsplash.com/photo-1544025162-d76694265947?w=400';
                                     }}
-                                    className="w-full h-full object-cover transition-all duration-300 hover:scale-110" 
-                                    alt={item.nameAm} 
+                                    className={`w-full h-full object-cover transition-all duration-300 ${isSoldOut ? 'grayscale opacity-60' : 'hover:scale-110'}`} 
+                                    alt={nameToShow} 
                                     referrerPolicy="no-referrer"
                                   />
+                                  {isSoldOut && (
+                                    <div className="absolute inset-0 bg-red-950/65 flex items-center justify-center">
+                                      <span className="bg-red-600 text-white font-mono text-[9px] font-black px-1.5 py-0.5 rounded uppercase tracking-wider border border-white/40">
+                                        {tText({ am: 'አልቋል', en: 'SOLD OUT', or: 'DHUMEERA', ti: 'ወዲኡ', sid: 'GOOFINO', fr: 'ÉPUISÉ', de: 'AUSVERKAUFT', it: 'ESAURITO', zh: '已售罄', ar: 'نفد' })}
+                                      </span>
+                                    </div>
+                                  )}
                                 </div>
                               </div>
 
+                              {/* Dedicated Listen / Audio button on top-left of card */}
+                              <button
+                                type="button"
+                                id={`btn-listen-item-${item.id}`}
+                                aria-label={`${getAccessibleString('listen_card', appLang)}: ${nameToShow}`}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  const idxInList = filtered.findIndex((f) => f.id === item.id);
+                                  speakMenuItemDetails(item, idxInList >= 0 ? idxInList : undefined, filtered.length, true);
+                                }}
+                                className={`absolute top-3 left-3 z-10 px-2 py-1 rounded-lg text-[9px] font-black flex items-center gap-1 cursor-pointer shadow-xs border transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white ${
+                                  isSelected && !isSoldOut
+                                    ? 'bg-stone-950 text-[#f4c22b] border-stone-900 hover:bg-stone-800'
+                                    : 'bg-black/55 text-white border-white/25 hover:bg-black/80'
+                                }`}
+                              >
+                                <Volume2 className="w-2.5 h-2.5" />
+                                <span>{getAccessibleString('listen_card', appLang).replace('🔊', '').trim()}</span>
+                              </button>
+
                               {/* Overlaid index status badge on card top right */}
-                              <div className={`absolute top-4 right-4 z-10 font-mono text-[8px] px-2.5 py-1 rounded-full uppercase tracking-wider font-extrabold shadow-sm ${
-                                isSelected ? 'bg-red-700 text-white border border-red-800' : 'bg-[#f4c22b] text-black border border-yellow-500'
+                              <div className={`absolute top-3 right-3 z-10 font-mono text-[8px] px-2 py-0.5 rounded-lg uppercase tracking-wider font-extrabold shadow-xs ${
+                                isSoldOut
+                                  ? 'bg-red-600 text-white border border-red-300'
+                                  : isSelected
+                                    ? 'bg-red-700 text-white border border-red-800'
+                                    : 'bg-[#f4c22b] text-black border border-yellow-500'
                               }`}>
-                                {item.cat}__00{item.id.replace(/\D/g,'')}
+                                {isSoldOut ? `🛑 ${tText({ am: 'አልቋል', en: 'SOLD OUT', or: 'DHUMEERA', ti: 'ወዲኡ', sid: 'GOOFINO', fr: 'ÉPUISÉ', de: 'AUSVERKAUFT', it: 'ESAURITO', zh: '已售罄', ar: 'نفد' })}` : `#${item.id.replace(/\D/g,'')}`}
                               </div>
 
                               {/* Food details description */}
-                              <div className="flex-1 flex flex-col justify-between pt-2 font-sans">
+                              <div className="flex-1 flex flex-col justify-between pt-1.5 font-sans">
                                 <div className="text-center">
-                                  <h4 className={`mb-1 leading-tight ${textColor}`}>
+                                  <h4 className={`mb-0.5 leading-tight ${textColor}`}>
                                     {nameToShow}
                                   </h4>
-                                  <p className={`mb-2 ${subColor}`}>
+                                  <p className={`mb-1 ${subColor}`}>
                                     {subToShow}
                                   </p>
                                   
-                                  <p className={`my-2 mx-auto px-1 min-h-[2.8rem] ${descColor}`}>
-                                    {descToShow || (appLang === 'am' ? 'በጥራት የተዘጋጀ ጣፋጭ ምግብ' : 'Freshly prepared delicious item')}
+                                  <p className={`my-1.5 mx-auto px-0.5 min-h-[2.1rem] line-clamp-2 ${descColor}`}>
+                                    {descToShow || tText({ am: 'በጥራት የተዘጋጀ ጣፋጭ ምግብ', en: 'Freshly prepared delicious item', or: 'Nyaata qulqullinnaan qophaa\'e', ti: 'ብጽሬት ዝተዳለወ ጥዑም መግቢ', sid: 'Dancha gede qixxeessantino sagale', fr: 'Plat délicieux fraîchement préparé', de: 'Frisch zubereitetes Gericht', it: 'Piatto delizioso preparato al momento', zh: '新鲜烹制的美味菜肴', ar: 'طبق لذيذ محضر طازجاً' })}
                                   </p>
                                 </div>
 
@@ -6075,10 +8367,10 @@ export default function App() {
                                   const isFood = !isBurger && (item.customizable || item.cat === 'food' || item.cat === 'traditional');
 
                                   const labelColor = isSelected ? 'text-[#8c1414] font-extrabold' : 'text-[#f4c22b] font-extrabold';
-                                  const modBoxBg = isSelected ? 'bg-white border-2 border-amber-500 text-stone-900 shadow-inner' : 'bg-black/40 border border-white/20 text-white';
+                                  const modBoxBg = isSelected ? 'bg-white border border-amber-500 text-stone-900 shadow-inner' : 'bg-black/40 border border-white/20 text-white';
 
                                   return (
-                                    <div className={`p-3.5 rounded-2xl space-y-3 text-[11px] font-black mt-3 transition-all ${modBoxBg}`}>
+                                    <div className={`p-2.5 rounded-xl space-y-2 text-[10px] font-black mt-2 transition-all ${modBoxBg} ${isSoldOut ? 'pointer-events-none opacity-45' : ''}`}>
                                       {isFood && (
                                         <>
                                           <div className="flex justify-between items-center">
@@ -6146,7 +8438,7 @@ export default function App() {
                                               >
                                                 +
                                               </button>
-                                              <span className="text-[9px] opacity-80">(+{Number(modifierOptions.daboPrice || 0)} ብር)</span>
+                                              <span className="text-[9px] opacity-80">(+{Number(modifierOptions.daboPrice || 0)} {currency})</span>
                                             </div>
                                           </div>
                                         </>
@@ -6154,15 +8446,27 @@ export default function App() {
 
                                       {isTraditional && (
                                         <div className={`flex justify-between items-center border-t pt-2 ${isSelected ? 'border-amber-200' : 'border-white/20'}`}>
-                                          <span className={`flex items-center gap-1 font-bold ${labelColor}`}>🫓 {appLang === 'am' ? 'የቆጮ ጭማሪ' : 'Extra Kocho'}:</span>
+                                          <span className={`flex items-center gap-1 font-bold ${labelColor}`}>🫓 {tText({ am: 'የቆጮ ጭማሪ', en: 'Extra Kocho', or: 'Dabalata Qoocoo', ti: 'ተወሳኺ ቆጮ', sid: 'Leddo Waasa', fr: 'Supplément Kocho', de: 'Extra Kocho', it: 'Extra Kocho', zh: '加份可乔饼', ar: 'كوتشو إضافي' })}:</span>
                                           <button
                                             type="button"
+                                            aria-pressed={Boolean(mod.kocho)}
                                             onClick={(e) => {
                                               e.stopPropagation();
+                                              const nextKocho = !customModifiers[item.id]?.kocho;
                                               setCustomModifiers(prev => ({
                                                 ...prev,
-                                                [item.id]: { ...prev[item.id], kocho: !prev[item.id]?.kocho }
+                                                [item.id]: { ...prev[item.id], kocho: nextKocho }
                                               }));
+                                              if (isVoiceOverEnabled) {
+                                                playAccessibleChime('step');
+                                                runVoiceOver(
+                                                  nextKocho
+                                                    ? tText({ am: 'ተጨማሪ ቆጮ ተመርጧል፣ +{p} {c}።', en: 'Extra Kocho added (+{p} {c}).', or: 'Qoocoon dabalataa dabalameera (+{p} {c}).', ti: 'ተወሳኺ ቆጮ ተመሪጹ (+{p} {c})።', sid: 'Leddo waasi ledamino (+{p} {c}).', fr: 'Supplément Kocho ajouté (+{p} {c}).', de: 'Extra Kocho hinzugefügt (+{p} {c}).', it: 'Extra Kocho aggiunto (+{p} {c}).', zh: '已添加可乔饼 (+{p} {c})。', ar: 'تمت إضافة كوتشو إضافي (+{p} {c}).' }, { p: modifierOptions.kochoPrice || 45, c: currency })
+                                                    : tText({ am: 'ተጨማሪ ቆጮ ተነስቷል።', en: 'Extra Kocho removed.', or: 'Qoocoon dabalataa haqameera.', ti: 'ተወሳኺ ቆጮ ተኣልዩ።', sid: 'Leddo waasi hunamino.', fr: 'Supplément Kocho retiré.', de: 'Extra Kocho entfernt.', it: 'Extra Kocho rimosso.', zh: '已移除可乔饼。', ar: 'تمت إزالة الكوتشو الإضافي.' }),
+                                                  false,
+                                                  nextKocho ? `Extra Kocho added, plus ${modifierOptions.kochoPrice || 45} ${currency}.` : 'Extra Kocho removed.',
+                                                );
+                                              }
                                             }}
                                             className={`px-3 py-1.5 rounded-lg text-xs font-bold font-mono transition-all border cursor-pointer ${
                                               mod.kocho
@@ -6170,22 +8474,34 @@ export default function App() {
                                                 : (isSelected ? 'bg-amber-50 border-stone-300 text-stone-800' : 'bg-black/40 border-white/20 text-white')
                                             }`}
                                           >
-                                            {mod.kocho ? '✓ ' : ''}{appLang === 'am' ? 'ቆጮ' : 'Kocho'} (+{modifierOptions.kochoPrice || 45} ብር)
+                                            {mod.kocho ? '✓ ' : ''}{tText({ am: 'ቆጮ', en: 'Kocho', or: 'Qoocoo', ti: 'ቆጮ', sid: 'Waasa', fr: 'Kocho', de: 'Kocho', it: 'Kocho', zh: '可乔饼', ar: 'كوتشو' })} (+{modifierOptions.kochoPrice || 45} {currency})
                                           </button>
                                         </div>
                                       )}
 
                                       {isBurger && (
                                         <div className={`flex justify-between items-center border-t pt-2 ${isSelected ? 'border-amber-200' : 'border-white/20'}`}>
-                                          <span className={`flex items-center gap-1 font-bold ${labelColor}`}>🧴 {appLang === 'am' ? 'የማዮኔዝ ጭማሪ' : 'Extra Mayonnaise'}:</span>
+                                          <span className={`flex items-center gap-1 font-bold ${labelColor}`}>🧴 {tText({ am: 'የማዮኔዝ ጭማሪ', en: 'Extra Mayonnaise', or: 'Maayooniiz Dabalataa', ti: 'ተወሳኺ ማዮኔዝ', sid: 'Leddo Maayonizi', fr: 'Supplément Mayonnaise', de: 'Extra Mayonnaise', it: 'Extra Maionese', zh: '加蛋黄酱', ar: 'مايونيز إضافي' })}:</span>
                                           <button
                                             type="button"
+                                            aria-pressed={Boolean(mod.mayo)}
                                             onClick={(e) => {
                                               e.stopPropagation();
+                                              const nextMayo = !customModifiers[item.id]?.mayo;
                                               setCustomModifiers(prev => ({
                                                 ...prev,
-                                                [item.id]: { ...prev[item.id], mayo: !prev[item.id]?.mayo }
+                                                [item.id]: { ...prev[item.id], mayo: nextMayo }
                                               }));
+                                              if (isVoiceOverEnabled) {
+                                                playAccessibleChime('step');
+                                                runVoiceOver(
+                                                  nextMayo
+                                                    ? tText({ am: 'ተጨማሪ ማዮኔዝ ተመርጧል፣ +{p} {c}።', en: 'Extra mayonnaise added (+{p} {c}).', or: 'Maayooniiz dabalataa dabalameera (+{p} {c}).', ti: 'ተወሳኺ ማዮኔዝ ተመሪጹ (+{p} {c})።', sid: 'Leddo maayonizi ledamino (+{p} {c}).', fr: 'Supplément mayonnaise ajouté (+{p} {c}).', de: 'Extra Mayonnaise hinzugefügt (+{p} {c}).', it: 'Extra maionese aggiunta (+{p} {c}).', zh: '已添加蛋黄酱 (+{p} {c})。', ar: 'تمت إضافة مايونيز إضافي (+{p} {c}).' }, { p: modifierOptions.mayoPrice || 20, c: currency })
+                                                    : tText({ am: 'ተጨማሪ ማዮኔዝ ተነስቷል።', en: 'Extra mayonnaise removed.', or: 'Maayooniiz dabalataa haqameera.', ti: 'ተወሳኺ ማዮኔዝ ተኣልዩ።', sid: 'Leddo maayonizi hunamino.', fr: 'Supplément mayonnaise retiré.', de: 'Extra Mayonnaise entfernt.', it: 'Extra maionese rimossa.', zh: '已移除蛋黄酱。', ar: 'تمت إزالة المايونيز الإضافي.' }),
+                                                  false,
+                                                  nextMayo ? `Extra mayonnaise added, plus ${modifierOptions.mayoPrice || 20} ${currency}.` : 'Extra mayonnaise removed.',
+                                                );
+                                              }
                                             }}
                                             className={`px-3 py-1.5 rounded-lg text-xs font-bold font-mono transition-all border cursor-pointer ${
                                               mod.mayo
@@ -6193,18 +8509,18 @@ export default function App() {
                                                 : (isSelected ? 'bg-amber-50 border-stone-300 text-stone-800' : 'bg-black/40 border-white/20 text-white')
                                             }`}
                                           >
-                                            {mod.mayo ? '✓ ' : ''}{appLang === 'am' ? 'ማዮኔዝ' : 'Mayo'} (+{modifierOptions.mayoPrice || 20} ብር)
+                                            {mod.mayo ? '✓ ' : ''}{tText({ am: 'ማዮኔዝ', en: 'Mayo', or: 'Maayoo', ti: 'ማዮኔዝ', sid: 'Maayoo', fr: 'Mayo', de: 'Mayo', it: 'Maionese', zh: '蛋黄酱', ar: 'مايونيز' })} (+{modifierOptions.mayoPrice || 20} {currency})
                                           </button>
                                         </div>
                                       )}
 
-                                      <div className={`flex flex-col gap-1 border-t pt-2 ${isSelected ? 'border-amber-200' : 'border-white/20'}`}>
-                                        <span className={`text-[10px] uppercase font-black tracking-wide ${labelColor}`}>
-                                          {appLang === 'am' ? `➕ ተጨማሪዎች (Custom - +${modifierOptions.customAdditionsPrice || 35} ብር) :` : `➕ Custom (+${modifierOptions.customAdditionsPrice || 35} Birr) :`}
+                                      <div className={`flex flex-col gap-1 border-t pt-1.5 ${isSelected ? 'border-amber-200' : 'border-white/20'}`}>
+                                        <span className={`text-[9px] uppercase font-black tracking-wide ${labelColor}`}>
+                                          {tText({ am: '➕ ተጨማሪዎች (+{p} {c})', en: '➕ Custom (+{p} {c})', or: '➕ Dabalata (+{p} {c})', ti: '➕ ተወሳኺ (+{p} {c})', sid: '➕ Leddo (+{p} {c})', fr: '➕ Personnalisé (+{p} {c})', de: '➕ Extras (+{p} {c})', it: '➕ Extra (+{p} {c})', zh: '➕ 自定义配料 (+{p} {c})', ar: '➕ إضافات مخصصة (+{p} {c})' }, { p: modifierOptions.customAdditionsPrice || 35, c: currency })}
                                         </span>
                                         <input
                                           type="text"
-                                          placeholder={appLang === 'am' ? 'ለምሳሌ፦ ቺዝ፣ ስጋ፣ ማዮኔዝ...' : 'e.g. extra cheese, beef, mayo...'}
+                                          placeholder={tText({ am: 'ለምሳሌ፦ ቺዝ፣ ስጋ፣ ማዮኔዝ...', en: 'e.g. extra cheese, beef, mayo...', or: 'fkn. chiiizii, foon, maayooniiz...', ti: 'ንኣብነት: ቺዝ፣ ስጋ፣ ማዮኔዝ...', sid: 'Lawishsha: chiizi, maala, maayoo...', fr: 'ex. fromage, bœuf, mayo...', de: 'z.B. Käse, Rind, Mayo...', it: 'es. formaggio, manzo, maionese...', zh: '例如：加芝士、牛肉、蛋黄酱...', ar: 'مثال: جبن إضافي، لحم، مايونيز...' })}
                                           value={mod.customInstructions || ''}
                                           onChange={(e) => {
                                             e.stopPropagation();
@@ -6214,7 +8530,7 @@ export default function App() {
                                             }));
                                           }}
                                           onClick={(e) => e.stopPropagation()}
-                                          className={`w-full px-3 py-2 rounded-xl text-xs font-bold outline-none border transition-all ${inputBg}`}
+                                          className={`w-full px-2.5 py-1.5 rounded-lg text-[11px] font-bold outline-none border transition-all ${inputBg}`}
                                         />
                                       </div>
                                     </div>
@@ -6222,48 +8538,77 @@ export default function App() {
                                 })()}
 
                                 {/* Bottom action row: Price and Order button */}
-                                <div className="mt-4 flex justify-between items-center select-none gap-2">
+                                <div className="mt-3 flex justify-between items-center select-none gap-2">
                                   {/* Price nicely displayed */}
                                   <div className="text-left">
-                                    <span className={`text-[8px] uppercase tracking-wider font-mono font-black block ${isSelected ? 'text-stone-800' : 'text-white/70'}`}>PRICE</span>
-                                    <span className={`text-base font-mono font-black ${isSelected ? 'text-red-900' : 'text-yellow-300'}`}>{item.price} ብር</span>
+                                    <span className={`text-[8px] uppercase tracking-wider font-mono font-black block ${isSelected ? 'text-stone-800' : 'text-white/70'}`}>
+                                      {tText({ am: 'ዋጋ', en: 'PRICE', or: 'GATII', ti: 'ዋጋ', sid: 'WAAGA', fr: 'PRIX', de: 'PREIS', it: 'PREZZO', zh: '价格', ar: 'السعر' })}
+                                    </span>
+                                    <span className={`text-sm sm:text-base font-mono font-black tabular-nums ${isSelected ? 'text-red-900' : 'text-yellow-300'}`}>{item.price} {currency}</span>
                                   </div>
 
-                                  {/* Button for order / customize */}
+                                  {/* Button for order / customize (Locked when Sold Out) */}
                                   <div className="flex items-center gap-1">
                                     <button
                                       id={`btn-add-to-basket-${item.id}`}
                                       type="button"
+                                      disabled={isSoldOut}
                                       onClick={(e) => { 
                                         e.stopPropagation(); 
+                                        if (isSoldOut) {
+                                          speakMenuItemDetails(item);
+                                          return;
+                                        }
                                         if (isSelected) {
                                           handleAddToBasket(item.id); 
                                         } else {
                                           setSelectedMenuCardId(item.id);
+                                          const idxInList = filtered.findIndex((f) => f.id === item.id);
+                                          speakMenuItemDetails(item, idxInList >= 0 ? idxInList : undefined, filtered.length);
                                         }
                                       }}
-                                      className={`font-sans font-black text-xs px-4 py-2.5 rounded-full uppercase tracking-wider transition-all shadow-md active:scale-95 cursor-pointer ${
-                                        isSelected 
-                                          ? 'bg-red-700 hover:bg-red-800 text-white border-b-2 border-red-900 shadow-red-900/40' 
-                                          : 'bg-[#f4c22b] hover:bg-yellow-300 text-black border-b-2 border-yellow-600'
+                                      aria-label={`${isSoldOut ? tText({ am: 'አልቋል', en: 'Sold out', or: 'Dhumeera', ti: 'ወዲኡ', sid: 'Goofino', fr: 'Épuisé', de: 'Ausverkauft', it: 'Esaurito', zh: '已售罄', ar: 'نفد' }) : isSelected ? tText({ am: 'ወደ ዘንቢል ጨምር', en: 'Add to order', or: 'Gara ajajaatti dabali', ti: 'ናብ ትእዛዝ ወስኽ', sid: 'Ajajaho ledi', fr: 'Ajouter', de: 'Bestellen', it: 'Aggiungi', zh: '加入订单', ar: 'أضف للطلب' }) : tText({ am: 'ምረጥ', en: 'Select', or: 'Filadhu', ti: 'ምረጽ', sid: 'Doori', fr: 'Sélectionner', de: 'Auswählen', it: 'Seleziona', zh: '选择', ar: 'اختر' })}: ${nameToShow}, ${item.price} ${currency}`}
+                                      className={`font-sans font-black text-[11px] px-3.5 py-2 rounded-xl uppercase tracking-wider transition-all shadow-sm ${
+                                        isSoldOut
+                                          ? 'bg-red-900/80 text-red-200 border border-red-500 cursor-not-allowed opacity-90'
+                                          : isSelected 
+                                            ? 'bg-red-700 hover:bg-red-800 text-white border-b-2 border-red-900 active:scale-95 cursor-pointer' 
+                                            : 'bg-[#f4c22b] hover:bg-yellow-300 text-black border-b-2 border-yellow-600 active:scale-95 cursor-pointer'
                                       }`}
                                     >
-                                      <span>🛒 {isSelected ? (menuUiTranslation.add_to_order_btn[appLang] || 'እዘዝ').replace('🛒', '').trim() : (appLang === 'am' ? 'ምረጥ' : 'Order')}</span>
+                                      <span>
+                                        {isSoldOut
+                                          ? `🛑 ${tText({ am: 'አልቋል', en: 'SOLD OUT', or: 'DHUMEERA', ti: 'ወዲኡ', sid: 'GOOFINO', fr: 'ÉPUISÉ', de: 'AUSVERKAUFT', it: 'ESAURITO', zh: '已售罄', ar: 'نفد' })}`
+                                          : `🛒 ${isSelected ? (menuUiTranslation.add_to_order_btn[appLang] || 'እዘዝ').replace('🛒', '').trim() : tText({ am: 'ምረጥ', en: 'Order', or: 'Ajaji', ti: 'ኣዝዝ', sid: 'Ajaji', fr: 'Commander', de: 'Bestellen', it: 'Ordina', zh: '点单', ar: 'اطلب' })}`}
+                                      </span>
                                     </button>
 
                                     {/* Favorite/Wishlist Heart Toggle Button */}
                                     <button
                                       type="button"
+                                      aria-pressed={menuFavorites.includes(item.id)}
+                                      aria-label={menuFavorites.includes(item.id) ? `Remove ${nameToShow} from favorites` : `Add ${nameToShow} to favorites`}
                                       onClick={(e) => {
                                         e.stopPropagation();
+                                        const willFav = !menuFavorites.includes(item.id);
                                         setMenuFavorites(prev => 
                                           prev.includes(item.id) ? prev.filter(id => id !== item.id) : [...prev, item.id]
                                         );
+                                        if (isVoiceOverEnabled) {
+                                          playAccessibleChime('step');
+                                          runVoiceOver(
+                                            willFav
+                                              ? tText({ am: '{n} ተወዳጅ ዝርዝር ውስጥ ታክሏል።', en: '{n} added to favorites.', or: '{n} tarree jaallatamoo keessatti dabalameera.', ti: '{n} ኣብ ዝፈተዉዎ ተወሲኹ።', sid: '{n} baxamino tarre giddo ledamino.', fr: '{n} ajouté aux favoris.', de: '{n} zu Favoriten hinzugefügt.', it: '{n} aggiunto ai preferiti.', zh: '{n} 已加入收藏。', ar: 'تمت إضافة {n} إلى المفضلة.' }, { n: nameToShow })
+                                              : tText({ am: '{n} ከተወዳጅ ዝርዝር ተነስቷል።', en: '{n} removed from favorites.', or: '{n} tarree jaallatamoo keessaa haqameera.', ti: '{n} ካብ ዝፈተዉዎ ተኣልዩ።', sid: '{n} baxamino tarrenni hunamino.', fr: '{n} retiré des favoris.', de: '{n} aus Favoriten entfernt.', it: '{n} rimosso dai preferiti.', zh: '{n} 已从收藏移除。', ar: 'تمت إزالة {n} من المفضلة.' }, { n: nameToShow }),
+                                            false,
+                                            willFav ? `${item.nameEn || nameToShow} added to favorites.` : `${item.nameEn || nameToShow} removed from favorites.`,
+                                          );
+                                        }
                                       }}
-                                      className={`p-2 rounded-full border transition-all duration-200 cursor-pointer flex items-center justify-center ${
+                                      className={`p-1.5 rounded-xl border transition-all duration-200 cursor-pointer flex items-center justify-center ${
                                         menuFavorites.includes(item.id) 
-                                          ? 'bg-rose-50 border-rose-500 text-rose-500 shadow-sm' 
-                                          : 'border-stone-200 text-stone-400 hover:text-rose-500 hover:border-rose-200'
+                                          ? 'bg-rose-50 border-rose-500 text-rose-500 shadow-xs' 
+                                          : 'border-white/25 text-white/70 hover:text-rose-400 hover:border-rose-300'
                                       }`}
                                     >
                                       <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill={menuFavorites.includes(item.id) ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2.5"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg>
@@ -6271,25 +8616,27 @@ export default function App() {
                                   </div>
                                 </div>
 
-                                {/* Active quantity selection overlay shown only when selected */}
-                                {isSelected && (
-                                  <div className="mt-3.5 flex justify-between items-center border-t border-stone-200 pt-3">
-                                    <span className="text-[10px] text-stone-500 font-bold uppercase tracking-wider">QUANTITY</span>
-                                    <div className="flex items-center border border-stone-200 rounded-xl bg-stone-50 px-1 py-0.5">
+                                {/* Active quantity selection overlay shown only when selected & in stock */}
+                                {isSelected && !isSoldOut && (
+                                  <div className="mt-2.5 flex justify-between items-center border-t border-amber-400/50 pt-2">
+                                    <span className="text-[9px] text-stone-700 font-black uppercase tracking-wider">
+                                      {tText({ am: 'ብዛት', en: 'QUANTITY', or: 'BAAYYINA', ti: 'ብዝሒ', sid: 'KIRO', fr: 'QUANTITÉ', de: 'MENGE', it: 'QUANTITÀ', zh: '数量', ar: 'الكمية' })}
+                                    </span>
+                                    <div className="flex items-center border border-amber-400/70 rounded-lg bg-white px-1 py-0.5">
                                       <button 
                                         id={`btn-qty-dec-${item.id}`}
                                         type="button"
                                         onClick={(e) => { e.stopPropagation(); handleModifyQty(item.id, -1); }}
-                                        className="w-6 h-6 rounded-lg hover:bg-stone-100 text-stone-850 flex items-center justify-center font-bold cursor-pointer"
+                                        className="w-5 h-5 rounded hover:bg-stone-100 text-stone-900 flex items-center justify-center font-bold cursor-pointer text-xs"
                                       >
                                         -
                                       </button>
-                                      <span className="text-stone-900 font-mono text-xs font-black w-6 text-center">{mod?.qty || 1}</span>
+                                      <span className="text-stone-900 font-mono text-xs font-black w-5 text-center">{mod?.qty || 1}</span>
                                        <button 
                                          id={`btn-qty-inc-${item.id}`}
                                          type="button"
                                          onClick={(e) => { e.stopPropagation(); handleModifyQty(item.id, 1); }}
-                                         className="w-6 h-6 rounded-lg hover:bg-stone-100 text-[#b21f1f] flex items-center justify-center font-bold cursor-pointer"
+                                         className="w-5 h-5 rounded hover:bg-stone-100 text-[#b21f1f] flex items-center justify-center font-bold cursor-pointer text-xs"
                                        >
                                          +
                                        </button>
@@ -6306,7 +8653,7 @@ export default function App() {
                      <button 
                        type="button"
                        onClick={() => scrollMenu('right')}
-                       className="absolute right-1 z-20 w-9 h-9 rounded-full bg-[#f4c22b] hover:bg-white text-black flex items-center justify-center shadow-xl cursor-pointer border border-yellow-600 font-black text-xs active:scale-95 transition-transform"
+                       className="absolute right-1 z-20 w-8 h-8 rounded-full bg-[#f4c22b] hover:bg-white text-black flex items-center justify-center shadow-lg cursor-pointer border border-yellow-600 font-black text-[11px] active:scale-95 transition-transform"
                        title="Scroll menu right"
                      >
                        ▶
@@ -6314,14 +8661,8 @@ export default function App() {
                    </div>
                  </div>
 
-                 {/* HIGH-FIDELITY LUXURY DELIVERY ADVERTISEMENT SECTION - ULTRA COMPACT & ELEGANT */}
-                 <motion.div
-                   initial={{ opacity: 0, y: 15 }}
-                   whileInView={{ opacity: 1, y: 0 }}
-                   viewport={{ once: true }}
-                   transition={{ duration: 0.5, ease: "easeOut" }}
-                   className="rounded-2xl overflow-hidden relative border border-[#b21f1f]/40 flex flex-col md:flex-row justify-between items-center p-6 sm:p-8 md:p-10 lg:p-12 shadow-xl gap-6 md:gap-8 min-h-[220px] text-white bg-gradient-to-tr from-[#8c1414] via-[#b21f1f] to-[#5c0b0b] backdrop-blur-md mt-6 max-w-5xl mx-auto w-full animate-fade-in"
-                 >
+                 {/* HIGH-FIDELITY LUXURY DELIVERY ADVERTISEMENT SECTION - ULTRA COMPACT & SETTLED */}
+                 <div className="rounded-2xl overflow-hidden relative border border-[#b21f1f]/40 flex flex-col md:flex-row justify-between items-center p-6 sm:p-8 md:p-10 lg:p-12 shadow-xl gap-6 md:gap-8 min-h-[220px] text-white bg-gradient-to-tr from-[#8c1414] via-[#b21f1f] to-[#5c0b0b] backdrop-blur-md mt-6 max-w-5xl mx-auto w-full">
                    {/* Organic Warm Background Mesh Blurs - Enlarged */}
                    <div className="absolute top-[-30%] right-[-10%] w-[250px] h-[250px] rounded-full bg-white/5 blur-[60px] pointer-events-none" />
                    <div className="absolute bottom-[-30%] left-[-10%] w-[250px] h-[250px] rounded-full bg-[#f4c22b]/10 blur-[60px] pointer-events-none" />
@@ -6332,99 +8673,66 @@ export default function App() {
                      <div className="inline-flex items-center gap-2 px-3.5 py-1 bg-white/20 border border-white/30 text-white rounded-full font-mono font-black text-[9px] sm:text-[10px] uppercase tracking-wider shadow-sm">
                        <span>🍎</span>
                        <span>
-                         {appLang === 'am' ? 'ፈጣን ክፍል መስተንግዶ' : 'Express Room Delivery'}
+                         {tText({ am: 'ፈጣን ክፍል መስተንግዶ', en: 'Express Room Delivery', or: 'Geessuu Kutaa Ariifataa', ti: 'ቅልጡፍ ኣገልግሎት ክፍሊ', sid: 'Rakkino Mini Owaante', fr: 'Livraison express en chambre', de: 'Express-Zimmerservice', it: 'Consegna espressa in camera', zh: '客房极速送餐', ar: 'توصيل سريع للغرف' })}
                        </span>
                      </div>
 
-                     {/* Highly Engaging Dual-Language Main Heading with dynamic typography */}
+                     {/* Highly Engaging Multi-Language Main Heading with dynamic typography */}
                      <h2 className="text-xl sm:text-2xl md:text-3xl lg:text-4xl font-black tracking-tight leading-tight text-white font-sans uppercase">
-                      {appLang === 'am' ? (
-                        <>
-                          በፍጥነት እና <span className="text-[#f4c22b]">ትኩስ</span> ሆኖ እርስዎ ያሉበት ክፍል ድረስ!
-                        </>
-                      ) : (
-                        <>
-                          Make your life <span className="text-[#f4c22b]">healthy</span> with <span className="text-[#f4c22b]">fresh</span> lodge dining
-                        </>
-                      )}
+                      {tText({ am: 'በፍጥነት እና ትኩስ ሆኖ እርስዎ ያሉበት ክፍል ድረስ!', en: 'Make your life healthy with fresh lodge dining', or: 'Nyaata qulqulluu fi ho\'aa gara kutaa keessaniitti ariitiin!', ti: 'ብቅልጡፍን ውዑይን ናብ ዘለኹምዎ ክፍሊ!', sid: 'Rakkinoonni iibbinoonni minikkira geessineemmo!', fr: 'Savourez une cuisine fraîche et saine servie chez vous', de: 'Genießen Sie frische, gesunde Küche im Lodge-Stil', it: 'Rendi la tua giornata sana con piatti freschi del lodge', zh: '新鲜美味佳肴，极速热腾腾送达您的客房', ar: 'استمتع بأطباق طازجة وصحية تصل إلى غرفتك بسرعة' })}
                     </h2>
 
                     {/* Sub-text description */}
                     <p className="text-white/90 text-xs sm:text-sm md:text-base leading-relaxed max-w-2xl font-semibold">
-                      {appLang === 'am' ? (
-                        'የሃዋሳ ፓፒረስ ሎጅ ምርጥ ምግቦች በጥንቃቄ ተዘጋጅተው በፍጥነት ባሉበት ሆነው ይዘዙ።'
-                      ) : (
-                        'Hawassa Papyrus Lodge signature cuisines prepared with the finest organic ingredients, delivered hot straight to your room.'
-                      )}
+                      {tText({ am: 'የሃዋሳ ፓፒረስ ሎጅ ምርጥ ምግቦች በጥንቃቄ ተዘጋጅተው በፍጥነት ባሉበት ሆነው ይዘዙ።', en: 'Hawassa Papyrus Lodge signature cuisines prepared with the finest organic ingredients, delivered hot straight to your room.', or: 'Nyaanni addaa Hawassa Papyrus Lodge qulqullinaan qophaa\'ee ariitiin isin qaqqaba.', ti: 'ፍሉያት መግብታት ሃዋሳ ፓፒረስ ሎጅ ብጥንቃቐ ተዳልዮም ኣብ ዘለኹምዎ ብቅልጡፍ ኣዝዙ።', sid: 'Hawaasi Papyrus Lodge baxxino sagale keere qixxeessante rakkinoonni iillitannohe.', fr: 'Les spécialités du Hawassa Papyrus Lodge préparées avec des ingrédients frais et livrées chaudes en chambre.', de: 'Die Spezialitäten der Hawassa Papyrus Lodge, frisch zubereitet und heiß aufs Zimmer geliefert.', it: 'Le specialità del Hawassa Papyrus Lodge preparate con ingredienti freschi e consegnate calde in camera.', zh: '阿瓦萨纸莎草山庄精选天然食材现做美食，热气腾腾直送房间。', ar: 'أطباق نزل هاواسا بابيروس المميزة محضرة بأجود المكونات الطازجة وتصلك ساخنة إلى غرفتك.' })}
                     </p>
 
                     {/* Dynamic Action Buttons & Location Info Bar */}
                     <div className="flex flex-wrap items-center gap-3 pt-1">
-                      <motion.button
-                        whileHover={{ scale: 1.02 }}
-                        whileTap={{ scale: 0.98 }}
+                      <button
+                        type="button"
                         onClick={() => {
                           const element = document.getElementById('btn-basket-react');
                           if (element) {
                             element.scrollIntoView({ behavior: 'smooth' });
                           }
                         }}
-                        className="px-6 py-3 bg-[#f4c22b] hover:bg-white text-black font-mono text-xs font-black uppercase tracking-wider rounded-lg shadow-md cursor-pointer text-center border border-white/10"
+                        className="px-6 py-3 bg-[#f4c22b] hover:bg-white text-black font-mono text-xs font-black uppercase tracking-wider rounded-lg shadow-md cursor-pointer text-center border border-white/10 active:scale-95 transition-transform"
                       >
-                        {appLang === 'am' ? 'አሁን ይዘዙ ➔' : 'Order Now ➔'}
-                      </motion.button>
+                        {tText({ am: 'አሁን ይዘዙ ➔', en: 'Order Now ➔', or: 'Amma Ajaji ➔', ti: 'ሕጂ ኣዝዝ ➔', sid: 'Xa Ajaji ➔', fr: 'Commander ➔', de: 'Jetzt bestellen ➔', it: 'Ordina ora ➔', zh: '立即点单 ➔', ar: 'اطلب الآن ➔' })}
+                      </button>
 
                       {/* Glassmorphic Live Stats Badge: Fast Delivery */}
                       <div className="bg-white/10 backdrop-blur-md px-3.5 py-2.5 rounded-lg border border-white/20 shadow-sm flex items-center gap-2">
-                        <span className="text-sm sm:text-base animate-bounce">🛵</span>
+                        <span className="text-sm sm:text-base">🛵</span>
                         <div>
                           <span className="text-white font-extrabold text-[10px] sm:text-xs block leading-none">
-                            {appLang === 'am' ? 'ፈጣን መስተንግዶ' : 'Fast Delivery'}
+                            {tText({ am: 'ፈጣን መስተንግዶ', en: 'Fast Delivery', or: 'Geessuu Ariifataa', ti: 'ቅልጡፍ ኣገልግሎት', sid: 'Rakkino Owaante', fr: 'Livraison rapide', de: 'Schnelle Lieferung', it: 'Consegna rapida', zh: '极速配送', ar: 'توصيل سريع' })}
                           </span>
                         </div>
                       </div>
                     </div>
                   </div>
 
-                  {/* RIGHT COLUMN: Elegant Chef & Fresh Salad Frame Layout - Enlarged and balanced */}
+                  {/* RIGHT COLUMN: Settled Delivery Scooter Emblem */}
                   <div className="relative w-[150px] sm:w-[180px] md:w-[200px] flex items-center justify-center min-h-[140px] shrink-0">
-                    
-                    {/* Background Circle Frames removed for clean look */}
-                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none" />
-
-                    {/* Central Masterpiece Chef Portrait with premium drop shadow */}
-                    <motion.div
-                      style={{
-                        x: mousePos.x * 4,
-                        y: mousePos.y * 4,
-                      }}
-                      animate={{
-                        y: [0, -3, 0],
-                      }}
-                      transition={{
-                        duration: 5,
-                        repeat: Infinity,
-                        ease: "easeInOut"
-                      }}
-                      className="relative w-[90px] h-[90px] sm:w-[110px] sm:h-[110px] md:w-[120px] md:h-[120px] z-10 flex items-center justify-center rounded-full shadow-lg"
-                    >
+                    <div className="relative w-[90px] h-[90px] sm:w-[110px] sm:h-[110px] md:w-[120px] md:h-[120px] z-10 flex items-center justify-center rounded-full shadow-lg">
                       <img
                         src={deliveryScooterIllustration}
                         alt="Lodge Delivery Scooter"
                         referrerPolicy="no-referrer"
                         className="w-full h-full object-cover rounded-full border-4 border-white dark:border-stone-800 shadow-md"
                       />
-                    </motion.div>
-
-                    {/* Glassmorphic 100% Fresh checkmark card exactly matching the reference design */}
-                    <div className="absolute top-2 left-2 bg-white/85 dark:bg-stone-800/90 backdrop-blur-md px-2 py-1 rounded-md border border-white/40 dark:border-stone-700/40 shadow-sm z-20 flex items-center gap-1 max-w-[75px] text-center">
-                      <span className="text-stone-950 dark:text-white font-black text-[9px] tracking-tight">
-                        {appLang === 'am' ? '100% ትকুስ' : '100% Fresh'}
-                      </span>
                     </div>
 
+                    {/* Glassmorphic 100% Fresh checkmark card */}
+                    <div className="absolute top-2 left-2 bg-white/85 dark:bg-stone-800/90 backdrop-blur-md px-2 py-1 rounded-md border border-white/40 dark:border-stone-700/40 shadow-sm z-20 flex items-center gap-1 max-w-[75px] text-center">
+                      <span className="text-stone-950 dark:text-white font-black text-[9px] tracking-tight">
+                        {tText({ am: '100% ትኩስ', en: '100% Fresh', or: '100% Qulqulluu', ti: '100% ሓድሽ', sid: '100% Haaro', fr: '100% Frais', de: '100% Frisch', it: '100% Fresco', zh: '100% 新鲜', ar: '100% طازج' })}
+                      </span>
+                    </div>
                   </div>
-                </motion.div>
+                </div>
 
                 {/* Photo Gallery Showcase - Papyrus 3D Cover Flow Gallery */}
                 {galleryItems && galleryItems.length > 0 && (
@@ -6440,7 +8748,7 @@ export default function App() {
                         <span className="text-lg sm:text-xl">🖼️</span>
                         <div>
                           <h4 className="text-xs font-black text-white uppercase tracking-widest drop-shadow-md">
-                            {appLang === 'am' ? 'የፓፒረስ ማዕከለ-ስዕላት' : 'Papyrus Gallery Showcase'}
+                            {tText({ am: 'የፓፒረስ ማዕከለ-ስዕላት', en: 'Papyrus Gallery Showcase', or: 'Galarii Suuraa Papyrus', ti: 'ማዕከን ስእልታት ፓፒረስ', sid: 'Papyrus Misillete Minira', fr: 'Galerie Papyrus', de: 'Papyrus-Galerie', it: 'Galleria Papyrus', zh: '纸莎草画廊展示', ar: 'معرض صور بابيروس' })}
                           </h4>
                           <span className="text-[9px] text-amber-200/80 font-mono font-bold block leading-none">
                             3D Cover Flow Gallery
@@ -6527,14 +8835,14 @@ export default function App() {
                             <div className="relative w-full h-[72%] rounded-[0.9rem] overflow-hidden bg-black/40 border border-white/20 shadow-inner group">
                               <img
                                 src={item.image_url}
-                                alt={appLang === 'am' ? item.title_am : item.title_en}
+                                alt={appLang === 'am' || appLang === 'ti' ? item.title_am : (item.title_en || item.title_am)}
                                 className="w-full h-full object-cover rounded-[0.9rem] transition-transform duration-500 group-hover:scale-105"
                                 referrerPolicy="no-referrer"
                               />
 
                               {isCentered && (
                                 <div className="absolute top-1 right-1 bg-black/70 backdrop-blur-md text-[#f4c22b] px-1.5 py-0.5 rounded-full text-[7px] font-mono font-extrabold uppercase border border-amber-400/50 shadow-md">
-                                  🔍 {appLang === 'am' ? 'እይ' : 'Expand'}
+                                  🔍 {tText({ am: 'እይ', en: 'Expand', or: 'Guddisi', ti: 'ርአይ', sid: 'La\'i', fr: 'Agrandir', de: 'Vergrößern', it: 'Espandi', zh: '放大', ar: 'تكبير' })}
                                 </div>
                               )}
 
@@ -6548,7 +8856,7 @@ export default function App() {
                               <h4 className={`text-[10px] sm:text-[11px] font-black leading-tight line-clamp-1 ${
                                 isCentered ? 'text-stone-900' : 'text-amber-100'
                               }`}>
-                                {appLang === 'am' ? item.title_am : item.title_en}
+                                {appLang === 'am' || appLang === 'ti' ? item.title_am : (item.title_en || item.title_am)}
                               </h4>
                               <span className={`text-[8px] sm:text-[9px] font-bold leading-tight line-clamp-1 ${
                                 isCentered ? 'text-amber-900/90' : 'text-amber-300/90'
@@ -6594,7 +8902,7 @@ export default function App() {
                     </p>
                     <div className="flex gap-2 pt-2">
                       <a href="tel:+251919629347" className="flex-1 bg-[#f4c22b] hover:bg-white text-black text-center py-2 text-[10px] uppercase font-black font-mono rounded-lg transition-colors">
-                        {appLang === 'am' ? 'ያግኙን' : 'CONTACT US'}
+                        {tText({ am: 'ያግኙን', en: 'CONTACT US', or: 'NU QUNNAMAA', ti: 'ርኸቡና', sid: 'XAADEENKE', fr: 'CONTACTEZ-NOUS', de: 'KONTAKT', it: 'CONTATTACI', zh: '联系我们', ar: 'اتصل بنا' })}
                       </a>
                       {!isFromQr && (
                         <button 
@@ -6602,7 +8910,7 @@ export default function App() {
                           onClick={() => setActiveRole('entry')} 
                           className="flex-1 bg-white/10 hover:bg-white/20 text-white py-2 text-[10px] uppercase font-mono font-bold rounded-lg transition-colors"
                         >
-                          {appLang === 'am' ? 'ዋና ፖርታሎች' : 'MAIN PORTALS'}
+                          {tText({ am: 'ዋና ፖርታሎች', en: 'MAIN PORTALS', or: 'POORTAALIIWWAN IJOO', ti: 'ዋና ፖርታላት', sid: 'QARRA POORTALoota', fr: 'PORTAILS PRINCIPAUX', de: 'HAUPTPORTALE', it: 'PORTALI PRINCIPALI', zh: '主入口', ar: 'البوابات الرئيسية' })}
                         </button>
                       )}
                     </div>
@@ -6680,7 +8988,9 @@ export default function App() {
                         📶
                       </div>
                       <div className="flex-1 space-y-1">
-                        <span className="text-[10px] font-mono text-white/60 uppercase block">WiFi ACCESS / ዋይፋይ</span>
+                        <span className="text-[10px] font-mono text-white/60 uppercase block">
+                          {tText({ am: 'ዋይፋይ (WiFi ACCESS)', en: 'WiFi ACCESS', or: 'HAYYAMA WiFi', ti: 'WiFi መራኸቢ', sid: 'WiFi FANO', fr: 'ACCÈS WiFi', de: 'WLAN-ZUGANG', it: 'ACCESSO WiFi', zh: 'WiFi 接入', ar: 'واي فاي' })}
+                        </span>
                         <p className="text-xs text-white font-bold">SSID: <span className="text-[#f4c22b]">{wifiGuestSsid}</span></p>
                         <p className="text-[10px] text-white/90">PASS: <code className="bg-black/30 px-1 py-0.5 rounded text-[#f4c22b]">{wifiGuestPassword}</code></p>
                       </div>
@@ -6692,21 +9002,31 @@ export default function App() {
                         🍳
                       </div>
                       <div className="flex-1 space-y-1">
-                        <span className="text-[10px] font-mono text-white/60 uppercase block">DINING HOURS / የምግብ ሰዓት</span>
-                        <p className="text-xs text-white font-bold">{appLang === 'am' ? diningBreakfastTitleAm : diningBreakfastTitleEn}</p>
-                        <p className="text-[10px] text-white/90">{appLang === 'am' ? diningBreakfastHoursAm : diningBreakfastHoursEn}</p>
+                        <span className="text-[10px] font-mono text-white/60 uppercase block">
+                          {tText({ am: 'የምግብ ሰዓት (DINING HOURS)', en: 'DINING HOURS', or: 'SA\'AATII NYAATAA', ti: 'ሰዓታት መግቢ', sid: 'SAGALETE SAATE', fr: 'HORAIRES DES REPAS', de: 'ESSENSZEITEN', it: 'ORARI RISTORANTE', zh: '用餐时间', ar: 'ساعات الطعام' })}
+                        </span>
+                        <p className="text-xs text-white font-bold">{appLang === 'am' || appLang === 'ti' ? diningBreakfastTitleAm : diningBreakfastTitleEn}</p>
+                        <p className="text-[10px] text-white/90">{appLang === 'am' || appLang === 'ti' ? diningBreakfastHoursAm : diningBreakfastHoursEn}</p>
                       </div>
                     </div>
 
-                    {/* Room Assistance & Security */}
+                    {/* Room Assistance, Leadership & Support */}
                     <div className="bg-gradient-to-tr from-[#8c1414] to-[#b21f1f] border border-[#b21f1f]/30 rounded-2xl p-4 flex items-start gap-3 shadow-lg">
                       <div className="w-8 h-8 rounded-lg bg-white/20 flex items-center justify-center text-[#f4c22b]">
-                        🛎️
+                        👔
                       </div>
-                      <div className="flex-1 space-y-1">
-                        <span className="text-[10px] font-mono text-white/60 uppercase block">RECEPTION / ሪሴብሽን</span>
-                        <p className="text-xs text-white font-bold">{appLang === 'am' ? receptionAssistanceAm : receptionAssistanceEn}</p>
-                        <p className="text-[10px] text-white/90">Emergency Hotline: <span className="text-[#f4c22b] font-bold">{receptionEmergency}</span></p>
+                      <div className="flex-1 space-y-1.5 text-left">
+                        <span className="text-[10px] font-mono text-white/60 uppercase block">
+                          {tText({ am: 'ሪሴብሽን፣ ማናጀር እና ድጋፍ', en: 'RECEPTION, MANAGER & SUPPORT', or: 'RESEEPSHINII, HOGGANSA & DEEGGARSA', ti: 'ሪሴፕሽን፣ ማናጀርን ደገፍን', sid: 'RESEEPSHINEE, MASSAGAANCHO & KAA\'LO', fr: 'RÉCEPTION, DIRECTION & SUPPORT', de: 'REZEPTION, MANAGEMENT & SUPPORT', it: 'RECEPTION, DIREZIONE & SUPPORTO', zh: '前台、经理与支持', ar: 'الاستقبال والإدارة والدعم' })}
+                        </span>
+                        <p className="text-xs text-white font-bold">{appLang === 'am' || appLang === 'ti' ? receptionAssistanceAm : receptionAssistanceEn}</p>
+                        <button
+                          type="button"
+                          onClick={handleOpenLeadershipContact}
+                          className="mt-1 px-2.5 py-1 rounded-lg bg-[#f4c22b] hover:bg-white text-red-950 font-black text-[10px] cursor-pointer transition-colors"
+                        >
+                          {tText({ am: '📩 ከማናጀር / ስራ አስኪያጅ / Support ጋር ተገናኝ', en: '📩 Contact Manager / GM / Support', or: '📩 Hoggansa / GM / Deeggarsa Qunnamaa', ti: '📩 ምስ ማናጀር / GM / ደገፍ ተራኸቡ', sid: '📩 Massagaancho / GM / Kaa\'lo Xaaddu', fr: '📩 Contacter Direction / Support', de: '📩 Management / Support kontaktieren', it: '📩 Contatta Direzione / Supporto', zh: '📩 联系经理 / 总经理 / 支持', ar: '📩 تواصل مع الإدارة / الدعم' })}
+                        </button>
                       </div>
                     </div>
 
@@ -6716,10 +9036,10 @@ export default function App() {
                   <div className="bg-gradient-to-b from-[#8c1414] to-[#5c0b0b] border border-[#b21f1f]/30 rounded-2xl p-5 text-center space-y-4 shadow-xl">
                     <div className="space-y-1">
                       <h4 className="text-xs uppercase font-mono font-black text-[#f4c22b] tracking-wider">
-                        {appLang === 'am' ? 'የሃዋሳ ፓፒረስ ሎጅ ሶሻል ሚዲያ ሊንኮች' : 'Hawassa Papyrus Lodge Official Channels'}
+                        {tText({ am: 'የሃዋሳ ፓፒረስ ሎጅ ሶሻል ሚዲያ ሊንኮች', en: 'Hawassa Papyrus Lodge Official Channels', or: 'Chaanaalota Idilee Hawassa Papyrus Lodge', ti: 'ወግዓዊ መራኸቢታት ሃዋሳ ፓፒረስ ሎጅ', sid: 'Hawaasi Papyrus Lodge Woggaawe Borooxo', fr: 'Chaînes officielles Hawassa Papyrus Lodge', de: 'Offizielle Kanäle der Hawassa Papyrus Lodge', it: 'Canali ufficiali Hawassa Papyrus Lodge', zh: '阿瓦萨纸莎草山庄官方渠道', ar: 'القنوات الرسمية لنزل هاواسا بابيروس' })}
                       </h4>
                       <p className="text-[10px] text-white/90">
-                        {appLang === 'am' ? 'በሁሉም የሶሻል ሚዲያ ገጾቻችን ይከተሉን! አዳዲስ ዝግጅቶችን ይከታተሉ' : 'Follow us across all major networks to witness premium visual stories and weekly events.'}
+                        {tText({ am: 'በሁሉም የሶሻል ሚዲያ ገጾቻችን ይከተሉን! አዳዲስ ዝግጅቶችን ይከታተሉ', en: 'Follow us across all major networks to witness premium visual stories and weekly events.', or: 'Miidiyaa hawaasaa keenya hunda irratti nu hordofaa! Qophiiwwan haaraa ilaalaa.', ti: 'ኣብ ኩሎም ማሕበራዊ መራኸቢታትና ሰዓቡና! ሓደሽቲ መደባት ተኸታተሉ።', sid: 'Borooxonna garinni harunsinkenni! Haaro qixxaawo la\'e.', fr: 'Suivez-nous sur nos réseaux pour découvrir nos histoires et événements hebdomadaires.', de: 'Folgen Sie uns auf allen Kanälen für Eindrücke und wöchentliche Events.', it: 'Seguici su tutti i canali per storie visive ed eventi settimanali.', zh: '关注我们的官方社交平台，了解精彩动态和每周活动。', ar: 'تابعنا عبر جميع الشبكات لمشاهدة القصص والفعاليات الأسبوعية.' })}
                       </p>
                     </div>
 
@@ -6747,10 +9067,10 @@ export default function App() {
 
                     <div className="pt-3 border-t border-white/15 space-y-1 text-center">
                       <p className="text-[11px] font-bold text-white/95">
-                        © 2026 ጉራቻ ቴክኖሎጂ (Guracha Technology) • ሐዋሳ እና አዲስ አበባ 🇪🇹
+                        {t('footer.copyright')}
                       </p>
                       <p className="text-[10px] text-white/75">
-                        ዘመናዊ ዲጂታል ሜኑ እና የሆቴል አስተዳደር ሲስተም
+                        {tText({ am: 'ዘመናዊ ዲጂታል ሜኑ እና የሆቴል አስተዳደር ሲስተም', en: 'Smart Digital Menu & Hotel Management System', or: 'Meenuu Dijitaalaa fi Sirna Bulchiinsa Hoteelaa Ammayyaa', ti: 'ዘመናዊ ዲጂታል ሜኑን ስርዓት ምምሕዳር ሆቴልን', sid: 'Haaro Dijitaale Meenuunna Hoteelunnita Massago', fr: 'Menu numérique intelligent et gestion hôtelière', de: 'Intelligentes digitales Menü & Hotelverwaltung', it: 'Menu digitale intelligente e gestione alberghiera', zh: '智能数字菜单与酒店管理系统', ar: 'قائمة رقمية ذكية ونظام إدارة فندقية' })}
                       </p>
                       <p className="text-[10px] font-mono font-black text-[#f4c22b] tracking-wider pt-0.5">
                         Powered by Guracha Tech
@@ -6760,39 +9080,48 @@ export default function App() {
 
                 </div>
 
-                {/* FLOATING ACTION WAITER BUZZER */}
+                {/* FLOATING ACTION WAITER BUZZER & LEADERSHIP SUPPORT */}
                 <div className="fixed bottom-6 right-6 z-50 flex flex-col items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleOpenLeadershipContact}
+                    className="w-11 h-11 rounded-full bg-gradient-to-r from-[#f4c22b] to-amber-500 hover:from-yellow-300 hover:to-amber-400 text-red-950 flex items-center justify-center shadow-[0_4px_16px_rgba(244,194,43,0.45)] duration-300 hover:scale-110 active:scale-95 cursor-pointer border-2 border-white"
+                    title={tText({ am: 'የማናጀር / የስራ አስኪያጅ / Support መገናኛ', en: 'Contact Manager / GM / Support', or: 'Hoggansa / GM / Deeggarsa Qunnamaa', ti: 'መራኸቢ ማናጀር / GM / ደገፍ', sid: 'Massagaancho / GM / Kaa\'lo Xaadote', fr: 'Contacter Direction / Support', de: 'Management / Support kontaktieren', it: 'Contatta Direzione / Supporto', zh: '联系经理 / 总经理 / 支持', ar: 'تواصل مع الإدارة / الدعم' })}
+                  >
+                    <span className="text-lg">👔</span>
+                  </button>
                   <button
                     type="button"
                     onClick={handleTriggerBuzzer}
                     className="w-14 h-14 rounded-full bg-gradient-to-r from-pink-600 to-red-600 hover:from-pink-500 hover:to-red-500 text-white flex items-center justify-center shadow-[0_4px_20px_rgba(219,39,119,0.4)] hover:shadow-[0_4px_24px_rgba(219,39,119,0.6)] duration-300 hover:scale-110 active:scale-95 cursor-pointer relative group border-2 border-pink-400"
-                    title="አስተናጋጅ ጥራ (CALL WAITER)"
+                    title={tText({ am: 'የተመደበ አስተናጋጅ ጥራ (CALL WAITER)', en: 'Call Assigned Waiter', or: 'Tajaajilaa Ramadame Waami', ti: 'ዝተመደበ ኣስተናጋጅ ጸውዕ', sid: 'Gaamo Soolaancho Woshshi', fr: 'Appeler votre serveur', de: 'Zugewiesenen Kellner rufen', it: 'Chiama il tuo cameriere', zh: '呼叫专属服务员', ar: 'استدعاء النادل المخصص' })}
                   >
-                    <span className="w-2.5 h-2.5 bg-[#C1FF00] rounded-full absolute -top-0.5 -right-0.5 animate-ping"></span>
                     <span className="w-2.5 h-2.5 bg-[#C1FF00] rounded-full absolute -top-0.5 -right-0.5"></span>
-                    <span className="text-2xl animate-pulse">🛎️</span>
+                    <span className="text-2xl">🛎️</span>
                   </button>
-                  <span className="bg-black/80 text-white font-sans text-[8px] font-black uppercase px-2 py-1 rounded border border-white/10 tracking-widest leading-none select-none shadow">
-                    አስተናጋጅ ጥራ (CALL)
+                  <span className="bg-black/85 text-yellow-300 font-sans text-[8px] font-black uppercase px-2 py-1 rounded border border-yellow-400/40 tracking-wider leading-none select-none shadow">
+                    {getAssignedWaiterForTable(guestLocation)
+                      ? `🛎️ ${getAssignedWaiterForTable(guestLocation)}`
+                      : tText({ am: 'አስተናጋጅ ጥራ', en: 'Call Waiter', or: 'Tajaajilaa Waami', ti: 'ኣስተናጋጅ ጸውዕ', sid: 'Soolaancho Woshshi', fr: 'Appeler serveur', de: 'Kellner rufen', it: 'Chiama cameriere', zh: '呼叫服务员', ar: 'اطلب النادل' })}
                   </span>
                 </div>
 
-                {/* FLOATING ACTION ORDER BASKET BUTTON */}
+                {/* FLOATING ACTION ORDER BASKET BUTTON (settled, steady position while scrolling) */}
                 <div className="fixed bottom-6 left-6 z-50">
                   <button
                     id="btn-floating-cart-basket"
                     type="button"
                     onClick={() => setIsCartOpen(true)}
-                    className="bg-gradient-to-r from-yellow-400 via-white to-red-600 hover:from-yellow-300 hover:via-amber-50 hover:to-red-500 text-red-950 border-2 border-red-600 shadow-[0_8px_25px_rgba(220,38,38,0.5)] font-black text-xs uppercase tracking-wider px-4 py-3 rounded-2xl flex items-center gap-2.5 cursor-pointer active:scale-95 transition-all animate-bounce"
+                    className="bg-gradient-to-r from-yellow-400 via-white to-red-600 hover:from-yellow-300 hover:via-amber-50 hover:to-red-500 text-red-950 border-2 border-red-600 shadow-[0_8px_25px_rgba(220,38,38,0.5)] font-black text-xs uppercase tracking-wider px-4 py-3 rounded-2xl flex items-center gap-2.5 cursor-pointer active:scale-95 transition-colors"
                   >
                     <div className="w-7 h-7 rounded-full bg-red-600 text-yellow-300 flex items-center justify-center border border-white shadow">
                       <ShoppingCart className="w-4 h-4 text-yellow-300 fill-yellow-300" />
                     </div>
                     <span className="hidden sm:inline">
-                      {appLang === 'am' ? 'የትእዛዝ ማስቀመጫ ዘንቢል' : 'Order Basket'}
+                      {tText({ am: 'የትእዛዝ ማስቀመጫ ዘንቢል', en: 'Order Basket', or: 'Gaarii Ajajaa', ti: 'ዘንቢል ትእዛዝ', sid: 'Ajaju Qooxxo', fr: 'Panier', de: 'Bestellkorb', it: 'Carrello Ordini', zh: '点餐篮', ar: 'سلة الطلب' })}
                     </span>
                     <span className="sm:hidden">
-                      {appLang === 'am' ? 'ዘንቢል' : 'Basket'}
+                      {t('header.cart')}
                     </span>
                     {cart.length > 0 && (
                       <span className="bg-red-600 text-white px-2 py-0.5 text-[10px] font-mono font-black rounded-full border-2 border-white shadow">
@@ -6813,27 +9142,27 @@ export default function App() {
                 className="space-y-6 max-w-6xl mx-auto w-full pb-10"
               >
                 {/* Header banner */}
-                <div className="bg-[#141414] border border-white/10 p-4 shrink-0 flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
+                <div className="papyrus-menu-hero rounded-3xl border-b-4 p-5 shrink-0 flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
                   <div>
-                    <h3 className="text-sm font-black uppercase text-yellow-400">
-                      አስተናጋጅ ዳሽቦርድ (Waiter Monitor)
+                    <h3 className="text-base sm:text-lg font-black uppercase text-[#f4c22b]">
+                      🏃 አስተናጋጅ ዳሽቦርድ (Waiter Monitor)
                     </h3>
-                    <p className="font-mono text-[9px] uppercase text-white/70">
-                      Serving Active Guests (Signed in as: <strong className="text-yellow-300 font-bold">{currentUser?.name || 'Waiter Staff'}</strong>)
+                    <p className="font-mono text-[10px] uppercase text-white/85 mt-0.5">
+                      Serving Active Guests (Signed in as: <strong className="text-[#f4c22b] font-bold">{currentUser?.name || 'Waiter Staff'}</strong>)
                     </p>
                   </div>
 
                   <div className="flex items-center gap-2 flex-wrap">
-                    <div className="flex items-center gap-1.5 bg-red-950/80 border border-yellow-400/50 px-3 py-1.5 rounded-lg shadow-sm">
-                      <span className="text-[10px] text-yellow-400 font-mono font-bold flex items-center gap-1">🔒 በስራ ላይ ያለ አስተናጋጅ:</span>
-                      <span className="text-[11px] font-black font-mono text-white bg-black/60 px-2 py-0.5 rounded border border-red-500/50">
+                    <div className="hero-subglass flex items-center gap-1.5 border px-3 py-1.5 rounded-xl shadow-sm">
+                      <span className="text-[10px] text-[#f4c22b] font-mono font-bold flex items-center gap-1">🔒 በስራ ላይ ያለ አስተናጋጅ:</span>
+                      <span className="hero-gold-badge text-[11px] font-black font-mono px-2 py-0.5 rounded-lg border">
                         🏃 {currentUser?.name || 'አስተናጋጅ'}
                       </span>
                     </div>
 
                     <button 
                       onClick={handleLogout}
-                      className="px-2.5 py-1 bg-red-500/10 hover:bg-red-500/20 text-red-400 text-[9px] font-mono uppercase font-black tracking-wider border border-red-500/20 cursor-pointer"
+                      className="hero-logout-btn px-3.5 py-1.5 rounded-xl text-[10px] font-mono uppercase font-black tracking-wider border cursor-pointer transition-colors shadow-xs"
                     >
                       🚪 Logout
                     </button>
@@ -6842,42 +9171,59 @@ export default function App() {
 
                 {renderWiFiClockInWidget()}
 
-                {/* Assigned Tables Widget */}
+                {/* Assigned Tables & Rooms Widget */}
                 {(() => {
+                  const supervisorUser = isSupervisorRole(currentUser);
+                  const myWaiterLocations = getStaffAssignedLocations(
+                    currentUser?.name || '',
+                    'waiter',
+                    shiftAssignments,
+                    tableAssignments
+                  );
+                  const displayedAssignments = supervisorUser
+                    ? shiftAssignments.filter((a) => a.active && a.staffRole === 'waiter')
+                    : myWaiterLocations;
+
                   return (
                     <div className="bg-[#141414] border border-yellow-400/20 p-4 rounded-xl flex flex-col justify-between items-start gap-3">
                       <div className="w-full flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-white/5 pb-2">
                         <div>
-                          <span className="text-[9px] text-yellow-400 font-mono font-bold tracking-widest block uppercase">TODAY'S TABLE ASSIGNMENTS WITH WAITER NAMES</span>
+                          <span className="text-[9px] text-yellow-400 font-mono font-bold tracking-widest block uppercase">
+                            {supervisorUser ? 'ALL ACTIVE WAITER SHIFT ASSIGNMENTS' : 'YOUR DESIGNATED TABLES & ROOMS'}
+                          </span>
                           <h4 className="text-sm font-black text-white uppercase mt-0.5">
-                            📋 የዛሬ የጠረጴዛ ምደባዎች እና የተመደቡ አስተናጋጆች
+                            {supervisorUser
+                              ? '📋 የዛሬ የጠረጴዛና ክፍል ምደባዎች'
+                              : `🔒 ለእርስዎ (${currentUser?.name || 'Waiter'}) የተመደቡ ጠረጴዛዎችና ክፍሎች`}
                           </h4>
                         </div>
-                        <span className="text-[10px] bg-yellow-400/10 text-yellow-400 border border-yellow-400/30 px-2 py-0.5 rounded font-mono font-bold">
-                          {tableAssignments.length} ጠረጴዛዎች ተመድበዋል
+                        <span className="text-[10px] bg-yellow-400/10 text-yellow-400 border border-yellow-400/30 px-2 py-0.5 rounded font-mono font-bold tabular-nums">
+                          {displayedAssignments.length} ቦታዎች ተመድበዋል
                         </span>
                       </div>
 
                       <div className="flex flex-wrap gap-2 w-full pt-1">
-                        {tableAssignments.length === 0 ? (
-                          <span className="text-xs text-stone-500 font-mono italic py-2">ምንም የተመደበ ጠረጴዛ የለም (No tables assigned yet today)</span>
+                        {displayedAssignments.length === 0 ? (
+                          <span className="text-xs text-stone-400 font-sans py-2">
+                            ለእርስዎ የተመደበ ጠረጴዛ ወይም ክፍል የለም። እባክዎ ማናጀሩ በ Shift Management እንዲመድብልዎ ይጠይቁ።
+                          </span>
                         ) : (
-                          tableAssignments.map((ta) => {
-                            const isMine = (ta.waiterName || '').trim().toLowerCase() === (currentUser?.name || '').trim().toLowerCase();
+                          displayedAssignments.map((ta) => {
+                            const isMine = (ta.staffName || '').trim().toLowerCase() === (currentUser?.name || '').trim().toLowerCase();
                             return (
                               <div
                                 key={ta.id}
-                                className={`px-3 py-1.5 text-xs font-black font-mono rounded-lg border flex items-center gap-2 shadow-sm transition-all ${
+                                className={`px-3 py-1.5 text-xs font-black font-mono rounded-lg border flex items-center gap-2 shadow-sm ${
                                   isMine
-                                    ? 'bg-[#C1FF00] text-black border-black ring-2 ring-yellow-400 shadow-lg'
+                                    ? 'bg-[#C1FF00] text-black border-black'
                                     : 'bg-stone-900 text-stone-200 border-white/10'
                                 }`}
                               >
-                                <span>🍽️ {ta.tableNumber}</span>
+                                <span>{ta.locationType === 'room' ? '🏨' : '🍽️'} {ta.location}</span>
                                 <span className={`text-[10px] px-1.5 py-0.5 rounded uppercase font-bold ${
                                   isMine ? 'bg-black text-[#C1FF00]' : 'bg-white/10 text-yellow-300'
                                 }`}>
-                                  👤 {ta.waiterName} {isMine ? '(የእርስዎ)' : ''}
+                                  {ta.staffName} · {ta.shiftPeriod}
                                 </span>
                               </div>
                             );
@@ -6888,94 +9234,247 @@ export default function App() {
                   );
                 })()}
 
-                {/* Active buzzer tables calling */}
-                {assistanceCalls.length > 0 && (
-                  <div className="bg-[#141414] border border-red-500/30 p-4">
-                    <h4 className="text-xs font-black uppercase text-red-500 mb-3 flex items-center gap-1.5">
-                      <span className="w-2 h-2 bg-red-500 rounded-full animate-ping"></span>
-                      🔔 ንቁ የክፍል ጥሪዎች (Active Room Assistance Calls)
-                    </h4>
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                      {assistanceCalls.map(c => {
-                        const isPickup = c.type === 'pickup';
-                        return (
-                          <div 
-                            key={c.id} 
-                            className={`p-3 flex flex-col justify-between items-center text-center border ${
-                              isPickup 
-                                ? 'bg-emerald-950/20 border-emerald-500/40 text-emerald-300' 
-                                : 'bg-red-950/20 border-red-500/20'
-                            }`}
-                          >
-                            <span className={`font-mono text-xs font-black block ${isPickup ? 'text-emerald-400' : 'text-[#C1FF00]'}`}>{c.location}</span>
-                            <span className="font-mono text-[9px] text-white/40 mb-1">Time: {c.time}</span>
-                            {c.message ? (
-                              <p className="text-[10px] font-bold text-white/90 mb-2 leading-tight uppercase font-sans">{c.message}</p>
-                            ) : (
-                              <p className="text-[10px] text-red-400 font-bold mb-2 uppercase font-sans animate-pulse">📢 ጥሪ (CALL)</p>
-                            )}
-                            <button 
-                              id={`btn-resolve-buzzer-${c.id}`}
-                              onClick={() => handleResolveBuzzer(c.id)}
-                              className={`font-mono text-[8px] uppercase font-black px-2.5 py-1.5 cursor-pointer transition-colors ${
-                                isPickup 
-                                  ? 'bg-emerald-600 hover:bg-emerald-700 text-white' 
-                                  : 'bg-red-500 hover:bg-red-600 text-white'
+                {/* Active waiter calls & kitchen pickup alerts — deduplicated (1 per room/table call or orderId) and compact */}
+                {assistanceCalls.some(c => c.active !== false && c.type !== 'new_order') && (() => {
+                  const supervisorUser = isSupervisorRole(currentUser);
+                  const myName = (currentUser?.name || '').trim().toLowerCase();
+                  const isAssignedCallToMe = (c: AssistanceCall) => {
+                    if (c.active === false || c.type === 'new_order' || c.targetRole === 'chef') return false;
+                    if (supervisorUser) return true;
+                    if (!myName) return false;
+                    const explicit = (c.targetWaiter || '').trim().toLowerCase();
+                    if (explicit) return explicit === myName;
+                    const lookup = (getAssignedWaiterForTable(c.location) || '').trim().toLowerCase();
+                    if (lookup) return lookup === myName;
+                    // Unassigned location/pickup alerts remain visible to active waiters so food never sits unclaimed
+                    return true;
+                  };
+                  const visibleCalls = deduplicateAssistanceCalls(assistanceCalls.filter(isAssignedCallToMe))
+                    .filter(c => c.active !== false);
+                  if (visibleCalls.length === 0) return null;
+                  const sortedCalls = [...visibleCalls].sort((a, b) => {
+                    const aPickup = a.type === 'pickup' ? 1 : 0;
+                    const bPickup = b.type === 'pickup' ? 1 : 0;
+                    if (aPickup !== bPickup) return bPickup - aPickup;
+                    const aExplicit = (a.targetWaiter || '').trim().toLowerCase() === myName ? 1 : 0;
+                    const bExplicit = (b.targetWaiter || '').trim().toLowerCase() === myName ? 1 : 0;
+                    return bExplicit - aExplicit;
+                  });
+                  return (
+                    <div className="bg-[#141414] border border-red-500/40 px-3 py-2.5 rounded-xl">
+                      <div className="flex items-center justify-between gap-2 mb-2">
+                        <h4 className="text-[11px] font-black uppercase text-red-400 flex items-center gap-1.5 truncate">
+                          🔔 {tText({
+                            am: 'የእርስዎ የተመደቡ ጥሪዎች እና ከኩሽና የደረሱ ማንቂያዎች (Calls & Kitchen Pickups)',
+                            en: 'Your Table Calls & Kitchen Ready Alerts',
+                            or: 'Waamicha Minjaalaa fi Beeksisa Kushiinaa',
+                            ti: 'ናትኩም ጻውዒት ጣውላን ምልክታ ክሽነን',
+                            sid: 'Xarapheessu Woshshonna Kushiinete Egensiisa',
+                            fr: 'Appels de table et alertes cuisine prêts',
+                            de: 'Tischrufe & fertige Küchenbestellungen',
+                            it: 'Chiamate al tavolo e avvisi cucina pronti',
+                            zh: '餐桌呼叫与厨房出餐提醒',
+                            ar: 'نداءات الطاولات وتنبيهات المطبخ الجاهزة',
+                          })}
+                        </h4>
+                        <span className="shrink-0 px-2 py-0.5 rounded-full bg-red-500/20 border border-red-400/40 text-red-300 font-mono text-[10px] font-black">
+                          {sortedCalls.length}
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2 max-h-44 overflow-y-auto pr-0.5">
+                        {sortedCalls.map((c) => {
+                          const isPickup = c.type === 'pickup';
+                          const assignedTarget = c.targetWaiter || getAssignedWaiterForTable(c.location);
+                          const mine = (assignedTarget || '').trim().toLowerCase() === myName;
+                          const repeatCount = c.repeatCount || 1;
+                          return (
+                            <div
+                              key={c.id}
+                              className={`px-2.5 py-2 rounded-lg flex items-center justify-between gap-2.5 border transition-all text-left ${
+                                isPickup
+                                  ? 'bg-emerald-950/75 border-emerald-400/70 text-white'
+                                  : mine
+                                    ? 'bg-amber-950/75 border-yellow-400/70 text-white'
+                                    : 'bg-red-950/65 border-red-400/60 text-white'
                               }`}
                             >
-                              DISMISS
-                            </button>
-                          </div>
-                        );
-                      })}
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span className={`text-[9px] font-black px-1.5 py-0.5 rounded uppercase shrink-0 ${
+                                    isPickup ? 'bg-emerald-400 text-black' : 'bg-yellow-400 text-black'
+                                  }`}>
+                                    {isPickup
+                                      ? tText({
+                                          am: '🍲 ይውሰዱ',
+                                          en: '🍲 PICK UP',
+                                          or: '🍲 FUDHADHU',
+                                          ti: '🍲 ውሰድ',
+                                          sid: '🍲 ADHI',
+                                          fr: '🍲 PRÊT',
+                                          de: '🍲 FERTIG',
+                                          it: '🍲 PRONTO',
+                                          zh: '🍲 取餐',
+                                          ar: '🍲 استلم',
+                                        })
+                                      : '📢 CALL'}
+                                  </span>
+                                  <span className={`font-mono text-xs font-black truncate ${isPickup ? 'text-emerald-300' : 'text-[#C1FF00]'}`}>
+                                    {c.location}
+                                  </span>
+                                  <span className="font-mono text-[10px] text-white/60 shrink-0">
+                                    · {c.time}
+                                  </span>
+                                  {repeatCount > 1 && (
+                                    <span className="font-mono text-[9px] font-black px-1.5 py-0.5 rounded bg-white/15 text-yellow-200 shrink-0">
+                                      ×{repeatCount}
+                                    </span>
+                                  )}
+                                  {assignedTarget && (
+                                    <span className="text-[10px] font-bold text-yellow-300 truncate">
+                                      · 👤 {assignedTarget}
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="text-[10px] font-semibold text-white/85 truncate mt-0.5 font-sans">
+                                  {c.message || tText({
+                                    am: '📢 የደንበኛ ጥሪ (CALL)',
+                                    en: '📢 Customer Call',
+                                    or: '📢 Waamicha Maamilaa',
+                                    ti: '📢 ጻውዒት ዓሚል',
+                                    sid: '📢 Maamalu Woshshatto',
+                                    fr: '📢 Appel client',
+                                    de: '📢 Gast-Ruf',
+                                    it: '📢 Chiamata cliente',
+                                    zh: '📢 顾客呼叫',
+                                    ar: '📢 نداء العميل',
+                                  })}
+                                </p>
+                              </div>
+                              <button
+                                id={`btn-resolve-buzzer-${c.id}`}
+                                onClick={() => handleResolveBuzzer(c.id)}
+                                className={`shrink-0 font-mono text-[10px] uppercase font-black px-2.5 py-1.5 rounded-md cursor-pointer transition-colors whitespace-nowrap ${
+                                  isPickup
+                                    ? 'bg-emerald-400 hover:bg-white text-black'
+                                    : mine
+                                      ? 'bg-yellow-400 hover:bg-white text-black'
+                                      : 'bg-red-500 hover:bg-red-600 text-white'
+                                }`}
+                              >
+                                ✔ {isPickup
+                                  ? tText({
+                                      am: 'ተቀብያለሁ',
+                                      en: 'Acknowledge',
+                                      or: 'Fudhadhe',
+                                      ti: 'ተቐቢለ',
+                                      sid: 'Adhoommo',
+                                      fr: 'Reçu',
+                                      de: 'Erhalten',
+                                      it: 'Ricevuto',
+                                      zh: '已收到',
+                                      ar: 'تم الاستلام',
+                                    })
+                                  : tText({
+                                      am: 'ተቀብያለሁ',
+                                      en: 'Resolved',
+                                      or: 'Deebi\'e',
+                                      ti: 'ተቐቢለ',
+                                      sid: 'Loosoommo',
+                                      fr: 'Résolu',
+                                      de: 'Erledigt',
+                                      it: 'Risolto',
+                                      zh: '已处理',
+                                      ar: 'تم الحل',
+                                    })}
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
-                  </div>
-                )}
+                  );
+                })()}
 
-                {/* Orders flow list */}
-                {/* Shift Selector Banner for Waiter */}
-                <div className="bg-[#181818] border border-yellow-400/30 p-3 rounded-xl flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-black text-yellow-400">👤 የፈረቃ ትዕዛዞች መክፈያ (Shift Work Isolation):</span>
-                    <select
-                      value={selectedWaiterShiftStaff}
-                      onChange={(e) => setSelectedWaiterShiftStaff(e.target.value)}
-                      className="bg-black border border-yellow-400 text-yellow-300 text-xs px-2.5 py-1 rounded font-bold outline-none cursor-pointer"
-                    >
-                      <option key="waiter-shift-my" value="my_shift">👤 የእኔ የጠረጴዛዎች/ትዕዛዞች ብቻ ({currentUser?.name || 'My Shift'})</option>
-                      <option key="waiter-shift-all" value="all">🌐 የሁሉም አስተናጋጆች ትዕዛዝ (All Waiters)</option>
-                      {staff.filter(s => (s.role || '').toLowerCase() === 'waiter' || (s.accessPrivilege || '').toLowerCase() === 'waiter').map((s, idx) => (
-                        <option key={`waiter-shift-${s.id || s.name || idx}`} value={s.name}>🏃 {s.name}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <span className="text-[10px] text-stone-400 font-mono">
-                    {selectedWaiterShiftStaff === 'my_shift' ? '🔒 የእርስዎ ትዕዛዝ ብቻ እየታየ ነው (Isolated to your shift)' : '🌐 የሁሉም አስተናጋጆች ትዕዛዝ እየታየ ነው'}
-                  </span>
-                </div>
+                {/* Strict Shift Access Banner for Waiter */}
+                {(() => {
+                  const supervisorUser = isSupervisorRole(currentUser);
+                  return (
+                    <div className="bg-[#181818] border border-yellow-400/30 p-3 rounded-xl flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-xs font-black text-yellow-400">
+                          🔒 የፈረቃ ትዕዛዝ መዳረሻ (Strict Shift Isolation):
+                        </span>
+                        {supervisorUser ? (
+                          <select
+                            value={selectedWaiterShiftStaff}
+                            onChange={(e) => setSelectedWaiterShiftStaff(e.target.value)}
+                            className="bg-black border border-yellow-400 text-yellow-300 text-xs px-2.5 py-1 rounded font-bold outline-none cursor-pointer"
+                          >
+                            <option key="waiter-shift-my" value="my_shift">👤 የእኔ ትዕዛዞች ብቻ ({currentUser?.name || 'My Shift'})</option>
+                            <option key="waiter-shift-all" value="all">🌐 የሁሉም አስተናጋጆች ትዕዛዝ (Supervisor View)</option>
+                            {staff.filter(s => (s.role || '').toLowerCase() === 'waiter' || (s.accessPrivilege || '').toLowerCase() === 'waiter').map((s, idx) => (
+                              <option key={`waiter-shift-${s.name}-${idx}`} value={s.name}>🏃 {s.name}</option>
+                            ))}
+                          </select>
+                        ) : (
+                          <span className="text-xs font-bold text-white bg-black/60 border border-yellow-400/30 px-2.5 py-1 rounded">
+                            {currentUser?.name || 'Waiter'} — የተመደቡልዎት ጠረጴዛዎችና ክፍሎች ብቻ
+                          </span>
+                        )}
+                      </div>
+                      <span className="text-[10px] text-stone-400 font-mono">
+                        {supervisorUser && selectedWaiterShiftStaff !== 'my_shift'
+                          ? 'Supervisor Shift Inspection Active'
+                          : '🔒 ለእርስዎ የተመደቡ ትዕዛዞች ብቻ ይታያሉ እና ይስተካከላሉ'}
+                      </span>
+                    </div>
+                  );
+                })()}
 
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                   
                   {/* Left columns: Orders in progress */}
                   {(() => {
-                    const allInPrepOrders = orders.filter(o => (o.cookingStatus || (o.status === 'Paid' ? 'Pending' : o.status)) === 'Pending' || (o.cookingStatus || (o.status === 'Paid' ? 'Pending' : o.status)) === 'Preparing');
-                    
+                    const supervisorUser = isSupervisorRole(currentUser);
+                    const allInPrepOrders = orders.filter(o => {
+                      const stage = getEffectiveCookingStatus(o);
+                      return stage === 'Pending' || stage === 'Preparing';
+                    });
+
                     const isOrderAssignedToTargetStaff = (ord: Order, staffName: string) => {
-                      if (!staffName) return false;
-                      const orderWaiter = (ord.waiter || '').trim().toLowerCase();
-                      const targetName = staffName.trim().toLowerCase();
-                      if (orderWaiter === targetName) return true;
-                      
-                      const tableWaiter = getAssignedWaiterForTable(ord.location).trim().toLowerCase();
-                      return tableWaiter === targetName;
+                      const syntheticUser: StaffMember = {
+                        name: staffName,
+                        role: 'waiter',
+                        accessPrivilege: 'waiter',
+                        pin: '',
+                        active: true,
+                      };
+                      return canStaffAccessOrder(syntheticUser, ord, shiftAssignments, tableAssignments).allowed;
                     };
 
-                    const isOrderAssignedToMe = (ord: Order) => isOrderAssignedToTargetStaff(ord, currentUser?.name || '');
+                    const isOrderAssignedToMe = (ord: Order) => {
+                      if (supervisorUser && selectedWaiterShiftStaff === 'all') return true;
+                      if (supervisorUser && selectedWaiterShiftStaff !== 'my_shift') {
+                        return isOrderAssignedToTargetStaff(ord, selectedWaiterShiftStaff);
+                      }
+                      return canStaffAccessOrder(
+                        currentUser ? { ...currentUser, role: 'waiter', accessPrivilege: 'waiter' } : null,
+                        ord,
+                        shiftAssignments,
+                        tableAssignments
+                      ).allowed;
+                    };
 
                     const filterOrdersByShift = (rawOrders: Order[]) => {
+                      if (!supervisorUser) {
+                        // Strict enforcement: regular waiters ONLY see & edit their own designated orders (or unassigned)
+                        return rawOrders.filter(o =>
+                          canStaffAccessOrder(currentUser, o, shiftAssignments, tableAssignments).allowed
+                        );
+                      }
                       if (selectedWaiterShiftStaff === 'my_shift') {
                         const myName = currentUser?.name || '';
-                        if (!myName) return rawOrders;
+                        if (!myName) return [];
                         return rawOrders.filter(o => isOrderAssignedToTargetStaff(o, myName));
                       } else if (selectedWaiterShiftStaff !== 'all') {
                         return rawOrders.filter(o => isOrderAssignedToTargetStaff(o, selectedWaiterShiftStaff));
@@ -6984,7 +9483,7 @@ export default function App() {
                     };
 
                     const inPrepOrders = filterOrdersByShift(allInPrepOrders);
-                    const allReadyOrders = orders.filter(o => (o.cookingStatus || o.status) === 'Completed' && !o.servedByWaiter);
+                    const allReadyOrders = orders.filter(o => getEffectiveCookingStatus(o) === 'Completed' && !o.servedByWaiter);
                     const readyToDeliverOrders = filterOrdersByShift(allReadyOrders);
 
                     return (
@@ -6992,27 +9491,40 @@ export default function App() {
                         {/* Two-part grid inside the waiter's left pan */}
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                           
-                          {/* Column A: In Progress orders (cooking or pending) */}
+                          {/* Column A: In Kitchen Progress (monitored by Waiter while Chef cooks) */}
                           <div className="bg-[#121212] border border-white/10 p-4 space-y-3">
                             <div className="flex justify-between items-center border-b border-white/5 pb-2">
                               <h3 className="text-xs font-black uppercase text-white/80">
-                                🍳 በዝግጅት ላይ ያሉ (In Prep & Cooking)
+                                🍳 {tText({
+                                  am: 'በኩሽና እየተሰሩ ያሉ (In Kitchen Progress)',
+                                  en: 'In Kitchen Preparation',
+                                  or: 'Kushiinaa Keessatti Qophaa\'aa Jira',
+                                  ti: 'ኣብ ክሽነ ዝዳለዉ ዘለዉ',
+                                  sid: 'Kushiinete Qixxaawanni No',
+                                  fr: 'En préparation en cuisine',
+                                  de: 'In der Küche in Zubereitung',
+                                  it: 'In preparazione in cucina',
+                                  zh: '厨房制作中订单',
+                                  ar: 'قيد التحضير في المطبخ',
+                                })}
                               </h3>
-                              <span className="text-[10px] bg-amber-500/10 text-amber-500 border border-amber-500/20 px-2 py-0.5 rounded font-bold font-mono">
+                              <span className="text-[10px] bg-amber-500/10 text-amber-500 border border-amber-500/20 px-2 py-0.5 rounded font-bold font-mono tabular-nums">
                                 {inPrepOrders.length} ACTIVE
                               </span>
                             </div>
 
                             {inPrepOrders.length === 0 ? (
-                              <p className="text-white/30 text-[11px] py-10 text-center font-semibold">
-                                በዝግጅት ላይ ያለ ትዕዛዝ የለም።
+                              <p className="text-white/40 text-[11px] py-10 text-center font-semibold">
+                                ለእርስዎ ጠረጴዛ/ክፍል የተመደበ በኩሽና እየተሰራ ያለ ትዕዛዝ የለም።
                               </p>
                             ) : (
                               <div className="space-y-3">
                                 {inPrepOrders.map(ord => {
                                   const tableWaiter = getAssignedWaiterForTable(ord.location) || ord.waiter;
+                                  const cookStage = getEffectiveCookingStatus(ord);
+                                  const isPreparingNow = cookStage === 'Preparing';
                                   return (
-                                    <div key={ord.id} className="bg-[#181818] border border-white/5 p-3 flex flex-col justify-between gap-3">
+                                    <div key={ord.id} className="bg-[#181818] border border-white/5 p-3 flex flex-col justify-between gap-3 rounded-lg">
                                       <div className="flex justify-between items-start border-b border-white/5 pb-1.5">
                                         <div>
                                           <span className="font-mono text-[11px] font-black text-[#C1FF00]">{ord.id}</span>
@@ -7028,132 +9540,6 @@ export default function App() {
                                         </div>
                                       </div>
 
-                                    <div className="space-y-1">
-                                      {ord.items.map((i, idx) => (
-                                        <p key={idx} className="text-xs font-bold text-white/90">
-                                          • {i.qty} × {i.name}
-                                        </p>
-                                      ))}
-                                    </div>
-
-                                    <div className="flex justify-between items-center pt-1.5 border-t border-white/5 text-[9px] font-mono">
-                                      <span className="text-white/40">Pay: {ord.payment}</span>
-                                      <span className="font-black text-white/80">Total: {ord.total} ETB</span>
-                                    </div>
-
-                                    <div className="flex flex-col gap-1.5">
-                                      {(ord.cookingStatus || (ord.status === 'Paid' ? 'Pending' : ord.status)) === 'Pending' ? (
-                                        <button
-                                          id={`btn-waiter-prep-${ord.id}`}
-                                          onClick={() => handleUpdateOrderStatus(ord.id, 'Preparing')}
-                                          className="w-full bg-[#C1FF00] hover:bg-white text-black py-1.5 text-[9px] uppercase font-black font-mono transition-colors cursor-pointer rounded"
-                                        >
-                                          የማብሰል ስራ ጀምር (Start Cooking)
-                                        </button>
-                                      ) : (
-                                        <button
-                                          id={`btn-waiter-ready-${ord.id}`}
-                                          onClick={() => handleUpdateOrderStatus(ord.id, 'Completed')}
-                                          className="w-full bg-emerald-500 hover:bg-emerald-600 text-white py-1.5 text-[9px] uppercase font-black font-mono transition-colors cursor-pointer rounded animate-pulse"
-                                        >
-                                          አብስለህ ጨርስ (Mark Cooked ➔)
-                                        </button>
-                                      )}
-                                      
-                                      <button
-                                        onClick={() => setAdjustingOrder(ord)}
-                                        className="w-full bg-sky-500/10 hover:bg-sky-500 text-sky-400 hover:text-black border border-sky-500/20 py-1 text-[9px] uppercase font-black font-mono transition-colors cursor-pointer rounded"
-                                      >
-                                        ✏️ ትዕዛዝ ማስተካከያ (Adjust Order)
-                                      </button>
-                                    </div>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                            )}
-                          </div>
-
-                          {/* Column B: Chef Ready, awaiting waiter delivery confirmation */}
-                          <div className="bg-[#121212] border border-white/10 p-4 space-y-3">
-                            <div className="flex justify-between items-center border-b border-white/5 pb-2">
-                              <h3 className="text-xs font-black uppercase text-[#01f5ff] font-sans">
-                                🍲 ከኩሽና ያለቁ / ማረጋገጫ የሚጠብቁ (Ready - Pending Delivery)
-                              </h3>
-                              <span className="text-[10px] bg-purple-500/10 text-purple-400 border border-purple-500/20 px-2 py-0.5 rounded font-bold font-mono">
-                                {readyToDeliverOrders.length} WAITING
-                              </span>
-                            </div>
-
-                            {/* Toggle for My Deliveries vs All */}
-                            {currentUser?.name && (
-                              <div className="flex gap-2 pb-1">
-                                <button
-                                  onClick={() => setShowMyReadyDeliveriesOnly(false)}
-                                  className={`flex-1 py-1.5 px-2 font-mono text-[9px] font-black uppercase tracking-wider rounded border cursor-pointer transition-all ${
-                                    !showMyReadyDeliveriesOnly
-                                      ? 'bg-[#01f5ff]/20 text-[#01f5ff] border-[#01f5ff]/40'
-                                      : 'bg-transparent text-stone-400 border-white/5 hover:bg-white/5'
-                                  }`}
-                                >
-                                  {appLang === 'am' ? 'ሁሉንም አሳይ' : 'All Deliveries'}
-                                </button>
-                                <button
-                                  onClick={() => setShowMyReadyDeliveriesOnly(true)}
-                                  className={`flex-1 py-1.5 px-2 font-mono text-[9px] font-black uppercase tracking-wider rounded border cursor-pointer transition-all ${
-                                    showMyReadyDeliveriesOnly
-                                      ? 'bg-yellow-400/20 text-yellow-400 border-yellow-400/40 shadow-[0_0_8px_rgba(250,204,21,0.15)]'
-                                      : 'bg-transparent text-stone-400 border-white/5 hover:bg-white/5'
-                                  }`}
-                                >
-                                  {appLang === 'am' ? 'የእኔ ምድቦች ብቻ 🎯' : 'My Tables Only 🎯'}
-                                </button>
-                              </div>
-                            )}
-
-                            {readyToDeliverOrders.length === 0 ? (
-                              <p className="text-white/30 text-[11px] py-10 text-center font-semibold">
-                                {showMyReadyDeliveriesOnly 
-                                  ? (appLang === 'am' ? 'ለእርስዎ የተመደበ ያለቀ ምግብ የለም።' : 'No ready deliveries assigned to your tables today.')
-                                  : (appLang === 'am' ? 'ከኩሽና ያለቀ የሚላክ ምግብ የለም።' : 'No ready deliveries from kitchen.')}
-                              </p>
-                            ) : (
-                              <div className="space-y-3">
-                                {readyToDeliverOrders.map(ord => {
-                                  const isAssigned = isOrderAssignedToMe(ord);
-                                  const assignedToName = ord.waiter || getAssignedWaiterForTable(ord.location);
-                                  return (
-                                    <div 
-                                      key={ord.id} 
-                                      className={`p-3 flex flex-col justify-between gap-3 transition-all rounded-lg border ${
-                                        isAssigned 
-                                          ? 'bg-yellow-400/5 border-yellow-400/40 shadow-[0_0_12px_rgba(250,204,21,0.08)]' 
-                                          : 'bg-purple-950/10 border border-purple-500/20 shadow-[0_0_8px_rgba(168,85,247,0.05)]'
-                                      }`}
-                                    >
-                                      {assignedToName && (
-                                        <div className={`text-[9px] font-mono font-black uppercase px-2 py-1 rounded border tracking-wider flex items-center justify-between ${
-                                          isAssigned 
-                                            ? 'bg-yellow-400/20 text-yellow-400 border-yellow-400/30' 
-                                            : 'bg-stone-500/10 text-stone-400 border-white/10'
-                                        }`}>
-                                          <span>🏃 DELIVERER: {assignedToName}</span>
-                                          {isAssigned && <span className="bg-yellow-400 text-black px-1 rounded text-[8px] font-black">YOURS 🎯</span>}
-                                        </div>
-                                      )}
-
-                                      <div className="flex justify-between items-start border-b border-white/5 pb-1.5">
-                                        <div>
-                                          <span className="font-mono text-[11px] font-black text-purple-400">{ord.id}</span>
-                                          <span className="text-[9px] uppercase font-mono text-white/40 block">Time: {ord.time}</span>
-                                        </div>
-                                        <div className="text-right">
-                                          <span className={`font-black text-xs block font-sans ${isAssigned ? 'text-yellow-400 text-sm' : 'text-purple-300'}`}>
-                                            🍽️ {ord.location}
-                                          </span>
-                                        </div>
-                                      </div>
-
                                       <div className="space-y-1">
                                         {ord.items.map((i, idx) => (
                                           <p key={idx} className="text-xs font-bold text-white/90">
@@ -7163,29 +9549,228 @@ export default function App() {
                                       </div>
 
                                       <div className="flex justify-between items-center pt-1.5 border-t border-white/5 text-[9px] font-mono">
-                                        <span className="text-purple-300/60 font-sans">ከኩሽና አልቋል (Cooked)</span>
-                                        <span className="font-black text-white/80 font-mono">Total: {ord.total} ETB</span>
+                                        <span className={ord.status === 'Paid' ? 'text-emerald-400 font-bold' : 'text-amber-300'}>
+                                          {ord.status === 'Paid' ? '💳 PAID ✓' : `⏳ ${String(ord.payment || 'cash').toUpperCase()}`}
+                                        </span>
+                                        <span className="font-black text-white/80 tabular-nums">{tText({ am: 'ጠቅላላ', en: 'Total', or: 'Waligala', ti: 'ድምር', sid: 'Xaphooma', fr: 'Total', de: 'Gesamt', it: 'Totale', zh: '总计', ar: 'المجموع' })}: {ord.total} {currency}</span>
+                                      </div>
+
+                                      <div className="flex flex-col gap-1.5">
+                                        <div className={`w-full py-1.5 px-2 text-[9px] font-mono font-black rounded border flex items-center justify-between ${
+                                          isPreparingNow
+                                            ? 'bg-orange-500/15 border-orange-500/30 text-orange-300'
+                                            : 'bg-white/5 border-white/10 text-white/70'
+                                        }`}>
+                                          <span>
+                                            {isPreparingNow
+                                              ? `🔥 ${tText({ am: 'ሼፍ እያበሰለ ነው', en: 'Chef Cooking Now', or: 'Sheefiin Qopheessaa Jira', ti: 'ሼፍ የዳሉ ኣሎ', sid: 'Sheefu Qixxeessanni No', fr: 'En cuisson par le chef', de: 'Koch bereitet zu', it: 'In cottura dallo chef', zh: '厨师正在烹饪', ar: 'الطاهي يقوم بالتحضير' })}`
+                                              : `⏳ ${tText({ am: 'በሼፍ ወረፋ ላይ', en: 'Queued in Kitchen', or: 'Toora Kushiinaa Keessa', ti: 'ኣብ መስርዕ ክሽነ', sid: 'Kushiinete Tarrenni', fr: 'En file cuisine', de: 'In Küchen-Warteschlange', it: 'In coda cucina', zh: '厨房排队中', ar: 'في قائمة انتظار المطبخ' })}`}
+                                          </span>
+                                          {ord.chefName && <span className="text-[8px] opacity-80">👨‍🍳 {ord.chefName}</span>}
+                                        </div>
+
+                                        {cookStage === 'Pending' && (
+                                          <button
+                                            onClick={() => handleOpenOrderAdjustment(ord)}
+                                            className="w-full bg-sky-500/10 hover:bg-sky-500 text-sky-400 hover:text-black border border-sky-500/20 py-1 text-[9px] uppercase font-black font-mono transition-colors cursor-pointer rounded"
+                                          >
+                                            ✏️ ትዕዛዝ ማስተካከያ (Adjust Order)
+                                          </button>
+                                        )}
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Column B: Chef Ready — Waiter verifies items & delivers to Customer */}
+                          <div className="bg-[#121212] border border-emerald-500/25 p-4 space-y-3">
+                            <div className="flex justify-between items-center border-b border-white/5 pb-2">
+                              <h3 className="text-xs font-black uppercase text-[#01f5ff] font-sans">
+                                🍲 {tText({
+                                  am: 'ከኩሽና የደረሱ — ቼክ አድርገው ያድርሱ (Check & Deliver)',
+                                  en: 'Ready from Kitchen — Check & Deliver',
+                                  or: 'Kushiinaarraa Qophaa\'e — Mirkaneeffadhuu Geessi',
+                                  ti: 'ካብ ክሽነ ዝተዳለወ — ኣረጋጊጽካ ኣብጽሕ',
+                                  sid: 'Kushiinunni Qixxaawo — Buuxxe Iillishi',
+                                  fr: 'Prêt en cuisine — Vérifier & Servir',
+                                  de: 'Fertig aus Küche — Prüfen & Servieren',
+                                  it: 'Pronto in cucina — Controlla e Servi',
+                                  zh: '厨房已出餐 — 核对并送达顾客',
+                                  ar: 'جاهز من المطبخ — تحقق وسلّم للعميل',
+                                })}
+                              </h3>
+                              <span className="text-[10px] bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded font-bold font-mono tabular-nums">
+                                {readyToDeliverOrders.length} READY
+                              </span>
+                            </div>
+
+                            {readyToDeliverOrders.length === 0 ? (
+                              <p className="text-white/40 text-[11px] py-10 text-center font-semibold">
+                                {tText({ am: 'ለእርስዎ የተመደበ ከኩሽና ያለቀ ምግብ የለም።', en: 'No ready deliveries assigned to your tables/rooms.', or: 'Nyaanni qophaa\'ee minjaala/kutaa keessaniif ramadame hin jiru.', ti: 'ናብ ጣውላ/ክፍልኹም ዝተመደበ ዝተዳለወ መግቢ የለን።', sid: 'Xarapheessikkira/minikkira qixxaawo sagale dino.', fr: 'Aucune livraison prête assignée à vos tables/chambres.', de: 'Keine fertigen Lieferungen für Ihre Tische/Zimmer.', it: 'Nessuna consegna pronta assegnata ai tuoi tavoli/camere.', zh: '暂无分配给您餐桌/客房的待送菜品。', ar: 'لا توجد طلبات جاهزة مخصصة لطاولاتك/غرفك.' })}
+                              </p>
+                            ) : (
+                              <div className="space-y-3">
+                                {readyToDeliverOrders.map(ord => {
+                                  const isAssigned = isOrderAssignedToMe(ord);
+                                  const assignedToName = (!isGenericWaiterLabel(ord.waiter) ? ord.waiter : '') || getAssignedWaiterForTable(ord.location) || currentUser?.name;
+                                  const checkedMap = waiterCheckedItems[ord.id] || {};
+                                  const checkedCount = ord.items.filter((_, idx) => Boolean(checkedMap[idx])).length;
+                                  const allChecked = ord.items.length > 0 && checkedCount === ord.items.length;
+
+                                  return (
+                                    <div 
+                                      key={ord.id} 
+                                      className={`p-3 flex flex-col justify-between gap-3 transition-all rounded-lg border ${
+                                        isAssigned 
+                                          ? 'bg-emerald-950/20 border-emerald-400/50' 
+                                          : 'bg-purple-950/15 border-purple-500/30'
+                                      }`}
+                                    >
+                                      <div className="flex flex-wrap items-center justify-between gap-1.5 text-[9px] font-mono font-black uppercase">
+                                        {assignedToName && (
+                                          <span className="bg-yellow-400/20 text-yellow-300 border border-yellow-400/30 px-2 py-0.5 rounded">
+                                            🏃 {assignedToName}
+                                          </span>
+                                        )}
+                                        <span className={`px-2 py-0.5 rounded border ${
+                                          ord.status === 'Paid'
+                                            ? 'bg-emerald-500/20 text-emerald-300 border-emerald-400/30'
+                                            : 'bg-amber-500/20 text-amber-300 border-amber-400/30'
+                                        }`}>
+                                          {ord.status === 'Paid' ? '💳 PAID ✓' : `💵 UNPAID (${String(ord.payment || 'cash').toUpperCase()})`}
+                                        </span>
+                                      </div>
+
+                                      <div className="flex justify-between items-start border-b border-white/5 pb-1.5">
+                                        <div>
+                                          <span className="font-mono text-[11px] font-black text-emerald-300">{ord.id}</span>
+                                          <span className="text-[9px] uppercase font-mono text-white/50 block">
+                                            {ord.chefName ? `👨‍🍳 ${ord.chefName} · ` : ''}
+                                            {ord.readyAt || ord.time}
+                                          </span>
+                                        </div>
+                                        <div className="text-right">
+                                          <span className="font-black text-sm block font-sans text-yellow-400">
+                                            🍽️ {ord.location}
+                                          </span>
+                                        </div>
+                                      </div>
+
+                                      {/* Waiter Verification Checklist */}
+                                      <div className="space-y-1.5 bg-black/35 p-2 rounded-lg border border-white/5">
+                                        <div className="flex items-center justify-between text-[9px] font-mono text-emerald-300/90 font-bold pb-1 border-b border-white/5">
+                                          <span>✓ {tText({ am: 'ከማድረስ በፊት ቼክ ያድርጉ', en: 'Verify Items Before Serving', or: 'Otoo Hin Geessin Mirkaneeffadhu', ti: 'ቅድሚ ምብጻሕ ኣረጋግጽ', sid: 'Iillishate Albaanni Buuxi', fr: 'Vérifier avant de servir', de: 'Vor dem Servieren prüfen', it: 'Verifica prima di servire', zh: '送达前逐项核对', ar: 'تحقق من الأصناف قبل التقديم' })}</span>
+                                          <span>{checkedCount}/{ord.items.length}</span>
+                                        </div>
+                                        {ord.items.map((i, idx) => {
+                                          const isTicked = Boolean(checkedMap[idx]);
+                                          return (
+                                            <label
+                                              key={idx}
+                                              className={`flex items-center gap-2 text-xs font-bold cursor-pointer py-0.5 rounded px-1 transition-colors ${
+                                                isTicked ? 'text-emerald-300 bg-emerald-500/10' : 'text-white/90 hover:bg-white/5'
+                                              }`}
+                                            >
+                                              <input
+                                                type="checkbox"
+                                                checked={isTicked}
+                                                onChange={() =>
+                                                  setWaiterCheckedItems(prev => ({
+                                                    ...prev,
+                                                    [ord.id]: {
+                                                      ...(prev[ord.id] || {}),
+                                                      [idx]: !isTicked,
+                                                    },
+                                                  }))
+                                                }
+                                                className="accent-emerald-400 w-3.5 h-3.5 cursor-pointer"
+                                              />
+                                              <span className={isTicked ? 'line-through opacity-85' : ''}>
+                                                {i.qty} × {i.name}
+                                              </span>
+                                            </label>
+                                          );
+                                        })}
+                                      </div>
+
+                                      <div className="flex justify-between items-center pt-1.5 border-t border-white/5 text-[9px] font-mono">
+                                        <span className="text-emerald-300/80 font-sans">
+                                          {tText({ am: 'ከኩሽና አልቋል — ለአስተናጋጅ ቼክ ዝግጁ', en: 'Ready from Kitchen · Verify & Serve', or: 'Kushiinaarraa Qophaa\'e · Mirkaneeffadhu', ti: 'ካብ ክሽነ ተዳልዩ · ኣረጋግጽ', sid: 'Kushiinunni Qixxaawo · Buuxi', fr: 'Prêt en cuisine · Vérifier & Servir', de: 'Aus Küche fertig · Prüfen & Servieren', it: 'Pronto · Verifica e Servi', zh: '厨房已完成 · 核对并上菜', ar: 'جاهز من المطبخ · تحقق وقدّم' })}
+                                        </span>
+                                        <span className="font-black text-white/80 font-mono tabular-nums">{tText({ am: 'ጠቅላላ', en: 'Total', or: 'Waligala', ti: 'ድምር', sid: 'Xaphooma', fr: 'Total', de: 'Gesamt', it: 'Totale', zh: '总计', ar: 'المجموع' })}: {ord.total} {currency}</span>
                                       </div>
 
                                       <div className="flex flex-col gap-1.5">
                                         <button
                                           id={`btn-waiter-confirm-delivery-${ord.id}`}
                                           onClick={() => {
-                                            setOrders(prev => prev.map(o => o.id === ord.id ? { ...o, servedByWaiter: true } : o));
-                                            playVoiceAlert(`Delivery confirmation sent to table ${ord.location} for order ${ord.id}.`);
-                                            alert(`✔ ማረጋገጫ ለደንበኛው ተልኳል! ደንበኛው ምግብ መድረሱን በስልኩ እንዲያረጋግጥ ተደርጓል።`);
+                                            const access = canStaffAccessOrder(currentUser, ord, shiftAssignments, tableAssignments);
+                                            if (!supervisorUser && !access.allowed) {
+                                              setAccessibleToast(`🔒 የፈረቃ መዳረሻ ተከልክሏል: ${access.reason}`);
+                                              setTimeout(() => setAccessibleToast(''), 4000);
+                                              return;
+                                            }
+                                            const nowMs = Date.now();
+                                            const servedTime = new Date(nowMs).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
+                                            const deliveringWaiter =
+                                              (!isGenericWaiterLabel(ord.waiter) ? ord.waiter : '') ||
+                                              currentUser?.name ||
+                                              ord.waiter;
+
+                                            setOrders(prev => prev.map(o => o.id === ord.id ? {
+                                              ...o,
+                                              servedByWaiter: true,
+                                              checkedByWaiter: true,
+                                              servedAt: servedTime,
+                                              cookingStatus: 'Completed',
+                                              status: o.status === 'Paid' ? 'Paid' : 'Completed',
+                                              waiter: deliveringWaiter,
+                                              updatedAt: nowMs,
+                                            } : o));
+
+                                            resolveOrderAssistanceCalls(ord.id, currentUser?.name || deliveringWaiter);
+                                            playVoiceAlert(`Order ${ord.id.replace('#', '')} verified and delivered to ${ord.location}.`);
+                                            setAccessibleToast(
+                                              tText({
+                                                am: `✅ ትዕዛዝ ${ord.id} (${ord.location}) ቼክ ተደርጎ ለደንበኛው ደርሷል!`,
+                                                en: `✅ Order ${ord.id} (${ord.location}) checked & delivered to customer!`,
+                                                or: `✅ Ajajni ${ord.id} (${ord.location}) mirkanaa'ee maamila bira gaheera!`,
+                                                ti: `✅ ትእዛዝ ${ord.id} (${ord.location}) ተረጋጊጹ ናብ ዓሚል በጺሑ!`,
+                                                sid: `✅ Hajajo ${ord.id} (${ord.location}) buuxame maamilaho iillino!`,
+                                                fr: `✅ Commande ${ord.id} (${ord.location}) vérifiée et livrée au client !`,
+                                                de: `✅ Bestellung ${ord.id} (${ord.location}) geprüft & an den Gast geliefert!`,
+                                                it: `✅ Ordine ${ord.id} (${ord.location}) verificato e consegnato al cliente!`,
+                                                zh: `✅ 订单 ${ord.id}（${ord.location}）已核对并送达顾客！`,
+                                                ar: `✅ تم التحقق من الطلب ${ord.id} (${ord.location}) وتسليمه للعميل!`,
+                                              })
+                                            );
+                                            setTimeout(() => setAccessibleToast(''), 4500);
                                           }}
-                                          className={`w-full py-2 text-[10px] uppercase font-black font-mono transition-transform active:scale-95 cursor-pointer rounded ${
-                                            isAssigned 
-                                              ? 'bg-yellow-400 text-black hover:bg-white shadow-[0_0_10px_rgba(250,204,21,0.2)]'
-                                              : 'bg-purple-600 hover:bg-purple-500 text-white'
+                                          className={`w-full py-2 px-2 text-[10px] uppercase font-black font-mono transition-transform active:scale-95 cursor-pointer rounded ${
+                                            allChecked
+                                              ? 'bg-emerald-400 text-black hover:bg-white'
+                                              : 'bg-yellow-400 text-black hover:bg-white'
                                           }`}
                                         >
-                                          🚀 ማረጋገጫ ላክ / ምግብ አቅርብ (Send Confirmation)
+                                          ✅ {tText({
+                                            am: 'ቼክ አድርጌ አድርሻለሁ (Check & Deliver)',
+                                            en: 'Verify Check & Deliver to Customer',
+                                            or: 'Mirkaneessiitii Maamilatti Geessi',
+                                            ti: 'ኣረጋጊጽካ ናብ ዓሚል ኣብጽሕ',
+                                            sid: 'Buuxxe Maamilaho Iillishi',
+                                            fr: 'Vérifier & Livrer au client',
+                                            de: 'Prüfen & an Gast liefern',
+                                            it: 'Verifica e Consegna',
+                                            zh: '核对完成并送达顾客',
+                                            ar: 'تأكيد التحقق والتسليم للعميل',
+                                          })}
                                         </button>
 
                                         <button
-                                          onClick={() => setAdjustingOrder(ord)}
+                                          onClick={() => handleOpenOrderAdjustment(ord)}
                                           className="w-full bg-sky-500/10 hover:bg-sky-500 text-sky-400 hover:text-black border border-sky-500/20 py-1 text-[9px] uppercase font-black font-mono transition-colors cursor-pointer rounded"
                                         >
                                           ✏️ ትዕዛዝ ማስተካከያ (Adjust Order)
@@ -7212,7 +9797,7 @@ export default function App() {
                       <div className="bg-[#181818] p-3 border border-white/5">
                         <span className="font-mono text-[9px] uppercase text-white/40 block">የዛሬ ያደረሱት ብዛት (DELIVERED)</span>
                         <h4 className="text-2xl font-black mt-1 text-[#C1FF00]">
-                          {orders.filter(o => o.status === 'Completed').length}
+                          {orders.filter(o => Boolean(o.servedByWaiter)).length}
                         </h4>
                       </div>
                       <div className="bg-[#181818] p-3 border border-white/5">
@@ -7275,42 +9860,74 @@ export default function App() {
               const dishConfig = {
                 tibs: {
                   emoji: '🥩',
-                  label: appLang === 'am' ? 'ሥጋ ጥብስ (Sizzling Tibs)' : 'Sizzling Tibs',
+                  label: tText({ am: 'ሥጋ ጥብስ (Sizzling Tibs)', en: 'Sizzling Tibs', or: 'Tibsiin Foonii', ti: 'ጥብሲ ስጋ', sid: 'Shaashshino Maala', fr: 'Tibs grésillant', de: 'Brutzelnedes Tibs', it: 'Tibs sfrigolante', zh: '铁板烤肉', ar: 'تيبس مقلي ساخن' }),
                   color: 'from-amber-600 via-red-700 to-amber-900',
                   ingredients: ['🥩', '🧅', '🌶️', '🌿', '🧈'],
                   statusText: {
                     am: 'ሥጋው በሽንኩርትና በቃሪያ በከፍተኛ እሳት እየተጠበሰ ነው! 🔥',
-                    en: 'Searing succulent beef chunks with fresh rosemary & spicy green chilies!'
+                    en: 'Searing succulent beef chunks with fresh rosemary & spicy green chilies!',
+                    or: 'Foon loonii roozmeerii fi qaariyaa wajjin ibidda cimaa irratti waadamaa jira! 🔥',
+                    ti: 'ስጋ ብሽንጉርትን ቃርያን ኣብ ልዑል ሓዊ ይጥበስ ኣሎ! 🔥',
+                    sid: 'Maalu shunqurtonna qaariyanni giirate aanira sholanno! 🔥',
+                    fr: 'Saisie de morceaux de bœuf au romarin frais et piments verts ! 🔥',
+                    de: 'Saftiges Rindfleisch mit frischem Rosmarin und grünen Chilis scharf angebraten! 🔥',
+                    it: 'Scottatura di teneri bocconcini di manzo con rosmarino fresco e peperoncini! 🔥',
+                    zh: '鲜嫩牛肉块正与迷迭香和青椒大火快炒！🔥',
+                    ar: 'تحمير قطع اللحم الطرية مع إكليل الجبل والفلفل الحار! 🔥'
                   }
                 },
                 shiro: {
                   emoji: '🥘',
-                  label: appLang === 'am' ? 'የሸክላ ሽሮ (Simmering Clay Shiro)' : 'Clay Shiro',
+                  label: tText({ am: 'የሸክላ ሽሮ (Simmering Clay Shiro)', en: 'Clay Shiro', or: 'Shiroo Okkotee', ti: 'ሽሮ ሸኽላ', sid: 'Sheklate Shiro', fr: 'Shiro en terre cuite', de: 'Tontopf-Shiro', it: 'Shiro in terracotta', zh: '瓦罐希罗豆泥', ar: 'شيرو بالفخار' }),
                   color: 'from-orange-500 via-amber-600 to-red-800',
                   ingredients: ['🥘', '🌶️', '🧅', '🧈', '🧄'],
                   statusText: {
                     am: 'ሽሮው በሸክላ ድስት እየተንተከተከ በቅቤ እየተገነፈለ ነው! ♨️',
-                    en: 'Traditional clay-pot Shiro simmering & boiling to thick spiced perfection!'
+                    en: 'Traditional clay-pot Shiro simmering & boiling to thick spiced perfection!',
+                    or: 'Shiroon okkotee suphee keessatti dhadhaa wajjin bilchaachaa jira! ♨️',
+                    ti: 'ሽሮ ኣብ ሸኽላ ድስቲ ብጠስሚ ይፈልሕ ኣሎ! ♨️',
+                    sid: 'Shiro sheklate diste giddo buuranni ganfilantino! ♨️',
+                    fr: 'Shiro traditionnel mijotant dans son pot en terre cuite aux épices ! ♨️',
+                    de: 'Traditionelles Shiro köchelt im Tontopf zu würziger Perfektion! ♨️',
+                    it: 'Shiro tradizionale che sobbolle nel coccio con spezie profumate! ♨️',
+                    zh: '传统陶罐希罗豆泥正与香料黄油慢火熬煮！♨️',
+                    ar: 'شيرو تقليدي يُطهى ببطء في قدر الفخار مع التوابل الغنية! ♨️'
                   }
                 },
                 injera: {
                   emoji: '🥞',
-                  label: appLang === 'am' ? 'እንጀራ መጋገር (Baking Injera)' : 'Baking Injera',
+                  label: tText({ am: 'እንጀራ መጋገር (Baking Injera)', en: 'Baking Injera', or: 'Buddeena Tolchuu', ti: 'መጋገር እንጀራ', sid: 'Wasila Gagara', fr: 'Cuisson d\'Injera', de: 'Injera backen', it: 'Cottura Injera', zh: '烤英吉拉饼', ar: 'خبز الإنجيرا' }),
                   color: 'from-stone-500 via-stone-700 to-stone-900',
                   ingredients: ['🥞', '🌾', '💨', '🔥', '✨'],
                   statusText: {
                     am: 'እንጀራው በምጣዱ ላይ እጅግ የሚያምር ዓይን እያወጣ ነው! 🥞',
-                    en: 'Baking soft, spongy, authentic sourdough injera on the hot clay griddle!'
+                    en: 'Baking soft, spongy, authentic sourdough injera on the hot clay griddle!',
+                    or: 'Buddeenichi eelee hoo\'aa irratti qulqullinaan tolchamaa jira! 🥞',
+                    ti: 'እንጀራ ኣብ ሞጎጎ ጽቡቕ ዓይኒ የውጽእ ኣሎ! 🥞',
+                    sid: 'Wasilu mitadete aanira biifa illa fushshanni noo! 🥞',
+                    fr: 'Cuisson d\'injera moelleuse et authentique sur la plaque en argile ! 🥞',
+                    de: 'Weiches, authentisches Injera-Fladenbrot wird auf dem heißen Tonofen gebacken! 🥞',
+                    it: 'Cottura di morbida injera autentica sulla piastra calda in argilla! 🥞',
+                    zh: '正在热陶盘上烘烤松软地道的苔麸英吉拉薄饼！🥞',
+                    ar: 'خبز الإنجيرا الطري والأصلي على الصاج الفخاري الساخن! 🥞'
                   }
                 },
                 coffee: {
                   emoji: '☕',
-                  label: appLang === 'am' ? 'የፓፒረስ ጀበና ቡና (Brewing Buna)' : 'Brewing Buna',
+                  label: tText({ am: 'የፓፒረስ ጀበና ቡና (Brewing Buna)', en: 'Brewing Buna', or: 'Buna Jabanaa', ti: 'ቡን ጀበና', sid: 'Jebanate Buna', fr: 'Café Jebena', de: 'Jebena-Kaffee', it: 'Caffè Jebena', zh: '杰贝纳壶煮咖啡', ar: 'قهوة الجبنة' }),
                   color: 'from-amber-800 via-amber-950 to-stone-950',
                   ingredients: ['☕', '🔥', '🌿', '💨', '✨'],
                   statusText: {
                     am: 'ቡናው በጀበና እየፈላ ነው፤ እጣኑና የጫቱ ጠረን ይሸታል! ☕',
-                    en: 'Traditional coffee brewing inside clay jebena with fragrant frankincense smoke!'
+                    en: 'Traditional coffee brewing inside clay jebena with fragrant frankincense smoke!',
+                    or: 'Bunni jabanaa keessatti danfaa jira; fooliin ixaanaa urgaa\'a! ☕',
+                    ti: 'ቡን ኣብ ጀበና ይፈልሕ ኣሎ፤ ጥዑም ጨና ዕጣን ይሽትት! ☕',
+                    sid: 'Bunu jebanate giddo ganfilanni noo; ixaannu su\'na babbaxxa! ☕',
+                    fr: 'Café traditionnel infusant en jebena avec parfum d\'encens ! ☕',
+                    de: 'Traditioneller Kaffee kocht in der Ton-Jebena mit feinem Weihrauchduft! ☕',
+                    it: 'Caffè tradizionale in ebollizione nella jebena con aroma d\'incenso! ☕',
+                    zh: '传统陶壶杰贝纳咖啡正在煮沸，伴随乳香芬芳！☕',
+                    ar: 'قهوة تقليدية تغلي في الجبنة الفخارية مع عبير البخور! ☕'
                   }
                 }
               };
@@ -7324,150 +9941,90 @@ export default function App() {
                   animate={{ opacity: 1 }}
                   className="space-y-6 max-w-6xl mx-auto w-full pb-10 relative p-1"
                 >
-                  {/* Floating Kitchen Embers background effect */}
-                  <div className="absolute inset-0 pointer-events-none overflow-hidden -z-10 rounded-3xl">
-                    <div className="absolute inset-0 bg-gradient-to-b from-[#18120e] via-[#0f0b08] to-[#080605] opacity-95" />
-                    {/* Subtle repeating organic grid texture */}
-                    <div className="absolute inset-0 opacity-[0.05] bg-[radial-gradient(#C1FF00_1px,transparent_1px)] [background-size:24px_24px]" />
-                    {/* Glowing warm light leaks from stoves */}
-                    <div className="absolute top-[20%] left-[-10%] w-[350px] h-[350px] rounded-full bg-orange-600/10 blur-[80px] animate-pulse" style={{ animationDuration: '8s' }} />
-                    <div className="absolute bottom-[20%] right-[-10%] w-[350px] h-[350px] rounded-full bg-emerald-500/5 blur-[80px] animate-pulse" style={{ animationDuration: '10s' }} />
-                    
-                    {/* Glowing fire sparks floating upward */}
-                    {[...Array(15)].map((_, i) => (
-                      <motion.div
-                        key={i}
-                        animate={{
-                          y: [600, -50],
-                          x: [Math.sin(i) * 50, Math.sin(i + 1) * 50],
-                          opacity: [0, 0.7, 0],
-                          scale: [0.6, 1.3, 0.6]
-                        }}
-                        transition={{
-                          duration: 8 + i * 1.5,
-                          repeat: Infinity,
-                          ease: "linear"
-                        }}
-                        className="absolute bottom-0 text-[8px] select-none text-orange-500/20"
-                        style={{ left: `${8 + i * 8}%` }}
-                      >
-                        🔥
-                      </motion.div>
-                    ))}
-                  </div>
+                  {/* Warm Menu Ivory & Gold ambient kitchen frame (replaces dark charcoal ember backdrop) */}
+                  <div className="hidden" aria-hidden="true" />
 
                   {/* HIGH-FIDELITY LUXURY CHEF WORKSPACE SHOWCASE & HEADER */}
                   <motion.div
                     initial={{ opacity: 0, y: -15 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ duration: 0.5, ease: "easeOut" }}
-                    className="rounded-3xl overflow-hidden relative flex flex-col md:flex-row justify-between items-center p-6 sm:p-8 shadow-[0_20px_50px_rgba(0,0,0,0.4)] gap-6 md:gap-8 text-stone-100 bg-gradient-to-tr from-black/80 via-[#1b1715]/90 to-[#261f1b]/90 border border-white/10 w-full animate-fade-in"
+                    className="papyrus-menu-hero rounded-3xl border-b-4 overflow-hidden relative flex flex-col md:flex-row justify-between items-center p-6 sm:p-8 gap-6 md:gap-8 text-white w-full animate-fade-in"
                   >
-                    {/* Glowing background highlights */}
-                    <div className="absolute top-[-30%] right-[-10%] w-[250px] h-[250px] rounded-full bg-[#C1FF00]/5 blur-[60px] pointer-events-none" />
-                    <div className="absolute bottom-[-30%] left-[-10%] w-[250px] h-[250px] rounded-full bg-emerald-500/5 blur-[60px] pointer-events-none" />
-
                     {/* LEFT SIDE: Premium Typography & Work Status */}
                     <div className="flex-1 space-y-4 relative z-10 text-left w-full">
                       <div className="flex flex-wrap items-center gap-2">
-                        <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-[#C1FF00]/10 border border-[#C1FF00]/20 text-[#C1FF00] rounded-full font-mono font-black text-[9px] uppercase tracking-wider shadow-sm">
+                        <div className="hero-gold-badge inline-flex items-center gap-1.5 px-3 py-1 rounded-full font-mono font-black text-[10px] uppercase tracking-wider shadow-sm border">
                           <span>🍳</span>
                           <span>
-                            {appLang === 'am' ? 'የፓፒረስ ማስተር ሼፍ' : 'Papyrus Master Chef'}
+                            {tText({ am: 'የፓፒረስ ማስተር ሼፍ', en: 'Papyrus Master Chef', or: 'Maastar Sheefii Papyrus', ti: 'ማስተር ሼፍ ፓፒረስ', sid: 'Papyrus Maastar Sheefe', fr: 'Maître Chef Papyrus', de: 'Papyrus Küchenchef', it: 'Master Chef Papyrus', zh: '纸莎草主厨', ar: 'كبير طهاة بابيروس' })}
                           </span>
                         </div>
-                        <span className="font-mono text-[9px] bg-red-950/85 text-red-400 border border-red-500/30 px-2 py-1 uppercase font-bold tracking-widest rounded-full">
+                        <span className="hero-subglass font-mono text-[9px] border px-2.5 py-1 uppercase font-bold tracking-widest rounded-full">
                           CHEF EXECUTIVE
                         </span>
                       </div>
 
                       <div className="space-y-1">
                         <h2 className="text-2xl sm:text-3xl font-black tracking-tight text-white uppercase leading-tight">
-                          {appLang === 'am' ? 'የኩሽና ሜካናይዝድ ሰሌዳ' : 'Kitchen Display System'}
+                          {tText({ am: 'የኩሽና ሜካናይዝድ ሰሌዳ', en: 'Kitchen Display System', or: 'Gabatee Hojii Kushiinaa', ti: 'ሰሌዳ ትእዛዝ ክሽነ', sid: 'Kushiinete Loosote Biilla', fr: 'Écran de Cuisine (KDS)', de: 'Küchen-Display-System', it: 'Sistema Display Cucina', zh: '厨房显示系统', ar: 'شاشة عرض المطبخ' })}
                         </h2>
-                        <p className="text-stone-400 text-xs font-mono max-w-xl">
-                          {appLang === 'am' ? (
-                            'ለሎጁ እንግዶች በከፍተኛ ክህሎት እና በፍቅር የተሰሩ ምርጥ ምግቦችን በቅጽበት የሚያዘጋጁበት መቆጣጠሪያ ሰሌዳ።'
-                          ) : (
-                            'Live food preparation pipeline. Blend local flavors with international expertise for an unparalleled dining experience.'
-                          )}
+                        <p className="text-white/85 text-xs font-medium max-w-xl">
+                          {tText({ am: 'ለሎጁ እንግዶች በከፍተኛ ክህሎት እና በፍቅር የተሰሩ ምርጥ ምግቦችን በቅጽበት የሚያዘጋጁበት መቆጣጠሪያ ሰሌዳ።', en: 'Live food preparation pipeline. Blend local flavors with international expertise for an unparalleled dining experience.', or: 'Toora qophii nyaataa kallattiin. Dhandhama aadaa fi ogummaa idil-addunyaa walitti fiduun tajaajila olaanaa kennaa.', ti: 'ቀጥታዊ መስርሕ ምድላው መግቢ። ባህላዊ ጣዕምን ዓለምለኻዊ ክእለትን ብምውሃድ ብሉጽ ኣገልግሎት ሃቡ።', sid: 'Sagale qixxeessate harunso. Gobbaanna kalqete ogimmanni keere owaante uyi.', fr: 'Flux de préparation en direct. Alliez saveurs locales et savoir-faire international.', de: 'Live-Zubereitungsübersicht. Verbinden Sie lokale Aromen mit internationaler Kochkunst.', it: 'Flusso di preparazione in tempo reale. Unisci sapori locali e maestria internazionale.', zh: '实时出餐流水线。融合本地风味与国际技艺，打造卓越餐饮体验。', ar: 'سير عمل تحضير الطعام المباشر. اجمع بين النكهات المحلية والخبرة العالمية.' })}
                         </p>
                       </div>
 
                       {/* Live Stats Row */}
                       <div className="flex flex-wrap items-center gap-3 pt-1">
-                        <div className="bg-black/40 border border-white/5 px-3.5 py-2 rounded-xl flex items-center gap-2.5">
-                          <span className="relative flex h-2 w-2">
-                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                            <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-                          </span>
+                        <div className="hero-subglass border px-3.5 py-2 rounded-xl flex items-center gap-2.5">
                           <div className="text-left font-mono leading-none">
-                            <span className="text-[9px] text-stone-400 block uppercase font-bold">{appLang === 'am' ? 'የሼፍ ስም' : 'Chef Name'}</span>
-                            <span className="text-[11px] text-yellow-300 font-black block mt-0.5">{currentUser?.name || 'Chef Executive'}</span>
+                            <span className="text-[9px] text-white/75 block uppercase font-bold">{tText({ am: 'የሼፍ ስም', en: 'Chef Name', or: 'Maqaa Sheefii', ti: 'ሽም ሼፍ', sid: 'Sheefu Su\'ma', fr: 'Nom du Chef', de: 'Kochname', it: 'Nome Chef', zh: '厨师姓名', ar: 'اسم الطاهي' })}</span>
+                            <span className="text-[11px] text-[#f4c22b] font-black block mt-0.5">{currentUser?.name || 'Chef Executive'}</span>
                           </div>
                         </div>
 
                         {/* Chef Active Staff Badge */}
-                        <div className="bg-red-950/80 border border-yellow-400/50 px-3 py-1.5 rounded-xl flex items-center gap-2">
-                          <span className="text-[10px] text-yellow-400 font-mono font-bold uppercase whitespace-nowrap flex items-center gap-1">🔒 በስራ ላይ ያለ ሼፍ:</span>
-                          <span className="text-xs font-black font-mono text-white bg-black/60 px-2 py-0.5 rounded border border-red-500/50">
+                        <div className="hero-subglass border px-3 py-1.5 rounded-xl flex items-center gap-2">
+                          <span className="text-[10px] text-[#f4c22b] font-mono font-bold uppercase whitespace-nowrap flex items-center gap-1">🔒 {tText({ am: 'በስራ ላይ ያለ ሼፍ:', en: 'Active Chef:', or: 'Sheefii Hojii Irra:', ti: 'ኣብ ስራሕ ዘሎ ሼፍ:', sid: 'Loosunni Noo Sheefe:', fr: 'Chef actif :', de: 'Aktiver Koch:', it: 'Chef attivo:', zh: '当班厨师：', ar: 'الطاهي المناوب:' })}</span>
+                          <span className="hero-gold-badge text-xs font-black font-mono px-2 py-0.5 rounded border">
                             👨‍🍳 {currentUser?.name || 'Chef Executive'}
                           </span>
                         </div>
 
-                        <div className="bg-black/40 border border-white/5 px-3.5 py-2 rounded-xl flex items-center gap-2.5">
+                        <div className="hero-subglass border px-3.5 py-2 rounded-xl flex items-center gap-2.5">
                           <span className="text-xs">⏱️</span>
                           <div className="text-left font-mono leading-none">
-                            <span className="text-[9px] text-stone-500 block uppercase font-bold">{appLang === 'am' ? 'የስራ ሁኔታ' : 'Duty Status'}</span>
+                            <span className="text-[9px] text-white/75 block uppercase font-bold">{tText({ am: 'የስራ ሁኔታ', en: 'Duty Status', or: 'Haala Hojii', ti: 'ኩነታት ስራሕ', sid: 'Loosote Gari', fr: 'Statut', de: 'Dienststatus', it: 'Stato servizio', zh: '在岗状态', ar: 'حالة العمل' })}</span>
                             <span className="text-[11px] text-white font-black block mt-0.5">ACTIVE ON DUTY</span>
                           </div>
                         </div>
 
                         <button 
                           onClick={handleLogout}
-                          className="px-4 py-2.5 bg-red-500/10 hover:bg-red-500/20 text-red-400 text-[10px] font-mono uppercase font-black tracking-widest border border-red-500/20 rounded-xl transition-all duration-200 flex items-center gap-1.5 cursor-pointer ml-auto md:ml-0"
+                          className="hero-logout-btn px-4 py-2.5 text-[10px] font-mono uppercase font-black tracking-widest border rounded-xl transition-all duration-200 flex items-center gap-1.5 cursor-pointer ml-auto md:ml-0 shadow-xs"
                         >
-                          🚪 {appLang === 'am' ? 'ውጣ' : 'Logout'}
+                          🚪 {tText({ am: 'ውጣ', en: 'Logout', or: 'Bahi', ti: 'ውጻእ', sid: 'Fuli', fr: 'Déconnexion', de: 'Abmelden', it: 'Esci', zh: '退出', ar: 'خروج' })}
                         </button>
                       </div>
                     </div>
 
                     {/* RIGHT SIDE: Beautiful Chef Illustration Frame */}
                     <div className="relative w-full md:w-[180px] lg:w-[220px] flex items-center justify-center shrink-0 mt-2 md:mt-0">
-                      {/* Background frames */}
-                      <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                        <div className="w-[140px] h-[140px] lg:w-[170px] lg:h-[170px] rounded-full border border-dashed border-[#C1FF00]/20 animate-[spin_60s_linear_infinite]" />
-                      </div>
-
-                      {/* Image display */}
-                      <motion.div
-                        style={{
-                          x: mousePos.x * 3,
-                          y: mousePos.y * 3,
-                        }}
-                        className="relative w-[120px] h-[120px] lg:w-[150px] lg:h-[150px] z-10 flex items-center justify-center rounded-2xl shadow-xl overflow-hidden border-2 border-white/10"
-                      >
+                      <div className="relative w-[120px] h-[120px] lg:w-[150px] lg:h-[150px] z-10 flex items-center justify-center rounded-2xl shadow-xl overflow-hidden border-2 border-[#f4c22b]">
                         <img
                           src={deliveryChef}
                           alt="Papyrus Lodge Premium Chef"
                           referrerPolicy="no-referrer"
                           className="w-full h-full object-cover transform hover:scale-105 transition-transform duration-500"
                         />
-                      </motion.div>
+                      </div>
 
-                      {/* Floating mini badge */}
-                      <motion.div
-                        style={{
-                          x: mousePos.x * -2,
-                          y: mousePos.y * -2,
-                        }}
-                        className="absolute bottom-1 right-1 bg-black/90 border border-[#C1FF00]/30 px-2 py-1 rounded-lg shadow-lg z-20 flex items-center gap-1"
-                      >
-                        <span className="text-emerald-400 text-[10px]">✓</span>
-                        <span className="text-white font-mono text-[8px] font-black uppercase tracking-wider">
+                      <div className="hero-gold-badge absolute bottom-1 right-1 border px-2 py-1 rounded-lg shadow-lg z-20 flex items-center gap-1">
+                        <span className="text-[10px]">✓</span>
+                        <span className="font-mono text-[8px] font-black uppercase tracking-wider">
                           MASTER
                         </span>
-                      </motion.div>
+                      </div>
                     </div>
                   </motion.div>
 
@@ -7476,7 +10033,7 @@ export default function App() {
                     initial={{ opacity: 0, y: 15 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: 0.1, duration: 0.5 }}
-                    className="bg-gradient-to-r from-[#1f1510] to-[#120c09] border border-[#ff5722]/30 rounded-3xl p-6 relative overflow-hidden shadow-2xl"
+                    className="bg-white border-2 border-[#f4c22b]/70 rounded-3xl p-6 relative overflow-hidden shadow-sm"
                   >
                     {/* Grill/mitad background texture */}
                     <div className="absolute inset-0 opacity-[0.03] bg-[radial-gradient(#ff5722_1px,transparent_1px)] [background-size:16px_16px]" />
@@ -7511,14 +10068,14 @@ export default function App() {
                     <div className="relative z-10 flex flex-col md:flex-row items-center justify-between gap-6">
                       <div className="text-left space-y-2">
                         <span className="text-[10px] font-mono text-orange-400 font-bold tracking-widest uppercase">
-                          {appLang === 'am' ? 'የምጣድ/ምድጃ ሲሙሌተር' : 'GRILL / STOVE SIMULATOR'}
+                          {tText({ am: 'የምጣድ/ምድጃ ሲሙሌተር', en: 'GRILL / STOVE SIMULATOR', or: 'SIMULEETARA EELEE', ti: 'ሲሙሌተር ሞጎጎ/ምድጃ', sid: 'GIIRATE SIMULEETERE', fr: 'SIMULATEUR GRILL', de: 'GRILL-SIMULATOR', it: 'SIMULATORE GRIGLIA', zh: '炉灶模拟器', ar: 'محاكي الشواية والموقد' })}
                         </span>
-                        <h3 className="text-xl font-black text-white uppercase tracking-tight flex items-center gap-2">
+                        <h3 className="text-xl font-black text-stone-900 uppercase tracking-tight flex items-center gap-2">
                           <span>{currentDish.emoji}</span>
                           <span>{currentDish.label}</span>
                         </h3>
-                        <p className="text-xs text-stone-300 font-mono max-w-md">
-                          {appLang === 'am' ? currentDish.statusText.am : currentDish.statusText.en}
+                        <p className="text-xs text-stone-700 font-mono max-w-md">
+                          {tText(currentDish.statusText)}
                         </p>
                       </div>
 
@@ -7545,150 +10102,462 @@ export default function App() {
                     </div>
                   </motion.div>
 
-                  {/* CHEF ACTIVE ORDERS BOARD */}
-                  <div className="bg-[#121212] border border-white/10 p-6 rounded-3xl space-y-4 text-left">
-                    {/* Shift Selector Banner for Chef */}
-                    <div className="bg-[#181818] border border-orange-500/30 p-3 rounded-xl flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-black text-orange-400">👨‍🍳 የሼፍ ፈረቃ መክፈያ (Chef Shift Isolation):</span>
-                        <select
-                          value={selectedChefShiftStaff}
-                          onChange={(e) => setSelectedChefShiftStaff(e.target.value)}
-                          className="bg-black border border-orange-500 text-orange-300 text-xs px-2.5 py-1 rounded font-bold outline-none cursor-pointer"
-                        >
-                          <option key="chef-shift-my" value="my_shift">👨‍🍳 የእኔ የኩሽና ማብሰያዎች ብቻ ({currentUser?.name || 'My Shift'})</option>
-                          <option key="chef-shift-all" value="all">🌐 የሁሉም ሼፎች ማብሰያ (All Kitchen Orders)</option>
-                          {staff.filter(s => (s.role || '').toLowerCase() === 'chef' || (s.accessPrivilege || '').toLowerCase() === 'chef').map((s, idx) => (
-                            <option key={`chef-shift-${s.id || s.name || idx}`} value={s.name}>👨‍🍳 {s.name}</option>
-                          ))}
-                        </select>
-                      </div>
-                      <span className="text-[10px] text-stone-400 font-mono">
-                        {selectedChefShiftStaff === 'my_shift' ? '🔒 ለእርስዎ ኩሽና የተመደቡ ትዕዛዞች ብቻ' : '🌐 የሁሉም ሼፎች ትዕዛዞች እየታዩ ነው'}
-                      </span>
-                    </div>
+                  {/* CHEF ACTIVE ORDERS BOARD — Strictly isolated to Chef's designated tables & rooms */}
+                  {(() => {
+                    const supervisorUser = isSupervisorRole(currentUser);
+                    const myChefLocations = getStaffAssignedLocations(
+                      currentUser?.name || '',
+                      'chef',
+                      shiftAssignments,
+                      tableAssignments
+                    );
 
-                    <div className="flex justify-between items-center border-b border-white/5 pb-3">
-                      <div>
-                        <h3 className="text-sm font-black uppercase text-white tracking-wider flex items-center gap-2">
-                          <span>🥘</span>
-                          <span>{appLang === 'am' ? 'የኩሽና ትዕዛዞች መከታተያ' : 'Kitchen Active Orders Queue'}</span>
-                        </h3>
-                        <p className="text-[10px] text-stone-400 font-mono">
-                          {appLang === 'am' ? 'ማብሰል የሚገባቸውን ትዕዛዞች ያስተዳድሩ' : 'Prepare and cook active food/beverage orders'}
-                        </p>
-                      </div>
-                      <span className="text-xs font-mono bg-orange-500/10 text-orange-400 border border-orange-500/20 px-3 py-1 rounded-full font-black">
-                        {orders.filter(o => {
-                          const active = o.cookingStatus === 'Pending' || o.cookingStatus === 'Preparing';
-                          if (!active) return false;
-                          if (selectedChefShiftStaff === 'my_shift') {
-                            const myName = (currentUser?.name || '').toLowerCase();
-                            const cName = (o.chefName || '').toLowerCase();
-                            return !cName || cName === myName;
-                          } else if (selectedChefShiftStaff !== 'all') {
-                            const cName = (o.chefName || '').toLowerCase();
-                            return cName === selectedChefShiftStaff.toLowerCase();
-                          }
-                          return true;
-                        }).length} {appLang === 'am' ? 'ትዕዛዞች' : 'Orders'}
-                      </span>
-                    </div>
+                    const chefVisibleOrders = orders.filter((o) => {
+                      const stage = getEffectiveCookingStatus(o);
+                      const active = stage === 'Pending' || stage === 'Preparing';
+                      if (!active) return false;
+                      if (!supervisorUser) {
+                        return canStaffAccessOrder(currentUser, o, shiftAssignments, tableAssignments).allowed;
+                      }
+                      if (selectedChefShiftStaff === 'my_shift') {
+                        return canStaffAccessOrder(
+                          currentUser ? { ...currentUser, role: 'chef', accessPrivilege: 'chef' } : null,
+                          o,
+                          shiftAssignments,
+                          tableAssignments
+                        ).allowed;
+                      } else if (selectedChefShiftStaff !== 'all') {
+                        const syntheticChef: StaffMember = {
+                          name: selectedChefShiftStaff,
+                          role: 'chef',
+                          accessPrivilege: 'chef',
+                          pin: '',
+                          active: true,
+                        };
+                        return canStaffAccessOrder(syntheticChef, o, shiftAssignments, tableAssignments).allowed;
+                      }
+                      return true;
+                    });
 
-                    {orders.filter(o => o.cookingStatus === 'Pending' || o.cookingStatus === 'Preparing').length === 0 ? (
-                      <div className="text-center py-12 text-stone-500 font-mono text-xs uppercase">
-                        {appLang === 'am' ? 'የሚዘጋጅ አዲስ ትዕዛዝ የለም' : 'No pending orders in the kitchen queue'}
-                      </div>
-                    ) : (
-                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                        {orders.filter(o => o.cookingStatus === 'Pending' || o.cookingStatus === 'Preparing').map(ord => (
-                          <div key={ord.id} className="bg-black/40 border border-white/5 p-4 rounded-xl flex flex-col justify-between gap-3 relative overflow-hidden">
-                            <div className="flex justify-between items-start border-b border-white/5 pb-2">
-                              <div>
-                                <span className="font-mono text-xs font-black text-orange-400">#{ord.id}</span>
-                                <span className="text-[8px] text-stone-500 font-mono block">{ord.time}</span>
-                              </div>
-                              <span className="bg-orange-500/10 border border-orange-500/20 text-orange-400 text-[9px] font-mono uppercase px-2 py-0.5 rounded">
-                                {ord.cookingStatus || 'Pending'}
+                    const chefDispatchedOrders = orders
+                      .filter((o) => getEffectiveCookingStatus(o) === 'Completed' || getEffectiveCookingStatus(o) === 'Served')
+                      .slice(0, 6);
+
+                    return (
+                      <div className="bg-[#121212] border border-white/10 p-6 rounded-3xl space-y-4 text-left">
+                        {chefNewOrderToast && (
+                          <div className="bg-orange-500 text-black px-4 py-2.5 rounded-xl font-black text-xs flex items-center justify-between gap-2 shadow-lg animate-pulse">
+                            <span>🔥 {tText({ am: 'አዲስ ትዕዛዝ ወደ ኩሽና ገብቷል!', en: 'New Kitchen Order Arrived!', or: 'Ajajni Haaraan Kushiinaa Seeneera!', ti: 'ሓድሽ ትእዛዝ ናብ ክሽነ ኣትዩ!', sid: 'Haaro Hajajo Kushiinete Seeno!', fr: 'Nouvelle commande en cuisine !', de: 'Neue Küchenbestellung eingetroffen!', it: 'Nuovo ordine arrivato in cucina!', zh: '厨房收到新订单！', ar: 'وصل طلب جديد إلى المطبخ!' })} — {chefNewOrderToast}</span>
+                            <button
+                              type="button"
+                              onClick={() => setChefNewOrderToast(null)}
+                              className="px-2 py-0.5 rounded bg-black/20 hover:bg-black/30 text-[10px] cursor-pointer"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        )}
+
+                        {/* Chef Shift Assignments & Strict Isolation Banner */}
+                        <div className="bg-[#181818] border border-orange-500/30 p-3.5 rounded-xl space-y-2.5">
+                          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="text-xs font-black text-orange-400">
+                                🔒 የሼፍ ፈረቃ መዳረሻ (Chef Shift Isolation):
                               </span>
+                              {supervisorUser ? (
+                                <select
+                                  value={selectedChefShiftStaff}
+                                  onChange={(e) => setSelectedChefShiftStaff(e.target.value)}
+                                  className="bg-black border border-orange-500 text-orange-300 text-xs px-2.5 py-1 rounded font-bold outline-none cursor-pointer"
+                                >
+                                  <option key="chef-shift-my" value="my_shift">👨‍🍳 የእኔ ማብሰያዎች ብቻ ({currentUser?.name || 'My Shift'})</option>
+                                  <option key="chef-shift-all" value="all">🌐 የሁሉም ሼፎች ማብሰያ (Supervisor View)</option>
+                                  {staff.filter(s => (s.role || '').toLowerCase() === 'chef' || (s.accessPrivilege || '').toLowerCase() === 'chef').map((s, idx) => (
+                                    <option key={`chef-shift-${s.name}-${idx}`} value={s.name}>👨‍🍳 {s.name}</option>
+                                  ))}
+                                </select>
+                              ) : (
+                                <span className="text-xs font-bold text-white bg-black/60 border border-orange-500/30 px-2.5 py-1 rounded">
+                                  {currentUser?.name || 'Chef'} — የተመደቡልዎት ጠረጴዛዎችና ክፍሎች + ክፍት ትዕዛዞች
+                                </span>
+                              )}
                             </div>
+                            <span className="text-[10px] text-stone-400 font-mono">
+                              {supervisorUser && selectedChefShiftStaff !== 'my_shift'
+                                ? 'Supervisor Kitchen View'
+                                : '🍳 1. Start Cooking -> 2. Ready & Notify Waiter'}
+                            </span>
+                          </div>
 
-                            <div className="space-y-1 py-1">
-                              {ord.items.map((it, idx) => (
-                                <p key={idx} className="text-xs font-bold text-stone-200">
-                                  🍳 {it.qty} × {it.name}
-                                </p>
-                              ))}
-                            </div>
+                          <div className="flex flex-wrap items-center gap-1.5 pt-1 border-t border-white/5">
+                            <span className="text-[10px] text-stone-400 font-mono mr-1">
+                              {tText({ am: 'የተመደቡልዎት ቦታዎች:', en: 'Your Assigned Tables/Rooms:', or: 'Bakka Isiniif Ramadame:', ti: 'ዝተመደበልኩም ቦታታት:', sid: 'Ki\'nera Gaamo Baya:', fr: 'Tables/Chambres assignées :', de: 'Zugewiesene Tische/Zimmer:', it: 'Tavoli/Camere assegnati:', zh: '您负责的餐桌/客房：', ar: 'الطاولات/الغرف المخصصة لك:' })}
+                            </span>
+                            {myChefLocations.length === 0 ? (
+                              <span className="text-[11px] text-amber-300/80 font-sans">
+                                {tText({ am: 'ገና ምንም ጠረጴዛ ወይም ክፍል አልተመደበም — ክፍት የሆኑ ትዕዛዞች በቀጥታ ይታያሉ', en: 'No specific shift tables assigned — unassigned kitchen orders remain visible', or: 'Bakki addaa hin ramadamne — ajajoonni banaa ta\'an ni mul\'atu.', ti: 'ፍሉይ ጣውላ ኣይተመደበን — ክፉታት ትእዛዛት ይርኣዩ ኣለዉ።', sid: 'Baxxino baya gaaminoonniho dino — faano ajajuuri leellanno.', fr: 'Aucun poste fixe assigné — les commandes ouvertes restent visibles.', de: 'Keine festen Tische zugewiesen — offene Bestellungen sichtbar.', it: 'Nessun tavolo fisso assegnato — gli ordini aperti restano visibili.', zh: '暂未固定分桌 — 未分配区域的订单将自动显示', ar: 'لا توجد طاولات محددة — الطلبات المفتوحة ظاهرة تلقائياً.' })}
+                              </span>
+                            ) : (
+                              myChefLocations.map((loc) => (
+                                <span
+                                  key={loc.id}
+                                  className="px-2 py-0.5 rounded bg-orange-500/15 border border-orange-500/30 text-orange-300 text-[10px] font-mono font-bold"
+                                >
+                                  {loc.locationType === 'room' ? '🏨' : '🍽️'} {loc.location} · {loc.shiftPeriod}
+                                </span>
+                              ))
+                            )}
+                          </div>
+                        </div>
 
-                            {(() => {
-                              const assignedWaiterName = getAssignedWaiterForTable(ord.location);
+                        <div className="flex justify-between items-center border-b border-white/5 pb-3">
+                          <div>
+                            <h3 className="text-sm font-black uppercase text-white tracking-wider flex items-center gap-2">
+                              <span>🥘</span>
+                              <span>{tText({ am: 'የኩሽና ትዕዛዞች መከታተያ', en: 'Kitchen Active Orders Queue', or: 'Toora Ajaja Kushiinaa', ti: 'መስርዕ ትእዛዛት ክሽነ', sid: 'Kushiinete Ajaju Tarre', fr: 'File des commandes cuisine', de: 'Aktive Küchenaufträge', it: 'Coda ordini cucina', zh: '厨房待制作订单队列', ar: 'قائمة طلبات المطبخ النشطة' })}</span>
+                            </h3>
+                            <p className="text-[10px] text-stone-400 font-mono">
+                              {tText({ am: 'ትዕዛዞችን አብስለው ሲጨርሱ ለአስተናጋጅ ወዲያውኑ ያሳውቁ', en: 'Cook active orders and notify the assigned waiter immediately when finished', or: 'Ajaja qopheessitaniin booda tajaajilaa beeksisaa', ti: 'ትእዛዛት ምስ ኣዳለኹም ንኣስተናጋጅ ብቕጽበት ኣፍልጡ', sid: 'Hajaja qixxeessittoro gedensaanni soolaanchoho egensiisi', fr: 'Préparez les commandes et prévenez le serveur dès qu\'elles sont prêtes', de: 'Bestellungen zubereiten und Kellner sofort benachrichtigen', it: 'Prepara gli ordini e avvisa subito il cameriere', zh: '制作完成后立即通知指定服务员核验送餐', ar: 'حضّر الطلبات وأبلغ النادل فور الانتهاء' })}
+                            </p>
+                          </div>
+                          <span className="text-xs font-mono bg-orange-500/10 text-orange-400 border border-orange-500/20 px-3 py-1 rounded-lg font-black tabular-nums">
+                            {chefVisibleOrders.length} {tText({ am: 'ትዕዛዞች', en: 'Orders', or: 'Ajajoota', ti: 'ትእዛዛት', sid: 'Ajaja', fr: 'Commandes', de: 'Aufträge', it: 'Ordini', zh: '份订单', ar: 'طلبات' })}
+                          </span>
+                        </div>
+
+                        {chefVisibleOrders.length === 0 ? (
+                          <div className="text-center py-12 text-stone-400 font-sans text-xs space-y-1">
+                            <p className="font-bold">
+                              {tText({ am: 'ለእርስዎ ፈረቃ የተመደበ የሚዘጋጅ ትዕዛዝ የለም', en: 'No pending orders assigned to your kitchen shift', or: 'Ajajni eeggatu dabaree kushiinaa keessaniif hin jiru', ti: 'ናብ ፈረቃ ክሽነኹም ዝተመደበ ዝጽበ ትእዛዝ የለን', sid: 'Kushiinete loosikkira agadhanno ajaji dino', fr: 'Aucune commande en attente pour votre poste', de: 'Keine offenen Bestellungen für Ihre Schicht', it: 'Nessun ordine in sospeso per il tuo turno', zh: '当前厨师班次暂无待处理订单', ar: 'لا توجد طلبات معلقة لمناوبتك' })}
+                            </p>
+                            <p className="text-[11px] text-stone-500">
+                              {tText({ am: 'ሌሎች ትዕዛዞች ለሌላ ሼፍ የተመደቡ ሊሆኑ ይችላሉ።', en: 'Orders assigned specifically to other chefs are isolated.', or: 'Ajajoonni sheefota birootti adda baafamaniiru.', ti: 'ካልኦት ትእዛዛት ንኻልእ ሼፍ ዝተመደቡ ክኾኑ ይኽእሉ።', sid: 'Wole ajajuuri wole sheefootira baxxino.', fr: 'Les commandes des autres postes sont isolées.', de: 'Bestellungen anderer Bereiche sind getrennt.', it: 'Gli ordini di altri turni sono isolati.', zh: '其他厨师负责的订单已隔离。', ar: 'الطلبات الخاصة بالطهاة الآخرين معزولة.' })}
+                            </p>
+                          </div>
+                        ) : (
+                          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                            {chefVisibleOrders.map(ord => {
+                              const effectiveCook = getEffectiveCookingStatus(ord);
+                              const assignedWaiterName = (!isGenericWaiterLabel(ord.waiter) ? ord.waiter : '') || getAssignedWaiterForTable(ord.location);
+                              const assignedChefName = getAssignedChefForTable(ord.location) || ord.chefName;
                               const waiterSelectId = `chef-select-waiter-${ord.id}`;
                               return (
-                                <div className="space-y-2 w-full text-left font-sans">
-                                  <div className="flex flex-col gap-1 text-[10px]">
-                                    <div className="flex items-center gap-1.5 font-mono">
-                                      <span className="text-stone-500">{appLang === 'am' ? '👤 በእለቱ የተመደበ አስተናጋጅ: ' : '👤 Assigned Waiter: '}</span>
-                                      {assignedWaiterName ? (
-                                        <span className="text-yellow-400 font-bold bg-yellow-400/10 px-2 py-0.5 rounded border border-yellow-400/20">
-                                          {assignedWaiterName} 🏃
-                                        </span>
-                                      ) : (
-                                        <span className="text-red-400 font-bold bg-red-500/10 px-2 py-0.5 rounded border border-red-500/20">
-                                          {appLang === 'am' ? 'ያልተመደበ ⚠️' : 'Unassigned ⚠️'}
-                                        </span>
-                                      )}
+                                <div key={ord.id} className="bg-black/40 border border-white/10 p-4 rounded-xl flex flex-col justify-between gap-3 relative overflow-hidden">
+                                  <div className="flex justify-between items-start border-b border-white/5 pb-2 gap-2">
+                                    <div>
+                                      <span className="font-mono text-xs font-black text-orange-400">{ord.id}</span>
+                                      <span className="text-[9px] text-stone-400 font-mono block">{ord.time} · 🍽️ {ord.location}</span>
                                     </div>
-                                    
-                                    {/* Select Waiter Dropdown */}
-                                    {ord.cookingStatus === 'Preparing' && (
+                                    <div className="flex flex-col items-end gap-1">
+                                      <select
+                                        aria-label={`Dish status for ${ord.id}`}
+                                        value={effectiveCook === 'Preparing' ? 'Preparing' : 'Pending'}
+                                        onChange={(e) => {
+                                          const nextStage = e.target.value as 'Pending' | 'Preparing' | 'Completed';
+                                          if (nextStage === 'Completed') {
+                                            const selEl = document.getElementById(waiterSelectId) as HTMLSelectElement | null;
+                                            const finalWaiter = selEl ? selEl.value : assignedWaiterName;
+                                            handleSendReadyOrderToWaiter(ord.id, finalWaiter || '');
+                                          } else if (nextStage === 'Preparing') {
+                                            handleUpdateOrderStatus(ord.id, 'Preparing');
+                                          }
+                                        }}
+                                        className={`text-[9px] font-mono uppercase px-2 py-0.5 rounded font-bold outline-none cursor-pointer ${
+                                          effectiveCook === 'Preparing'
+                                            ? 'bg-orange-500/20 border border-orange-500/40 text-orange-300'
+                                            : 'bg-amber-500/10 border border-amber-500/25 text-amber-300'
+                                        }`}
+                                      >
+                                        <option value="Pending" className="bg-[#121212] text-amber-300">Pending</option>
+                                        <option value="Preparing" className="bg-[#121212] text-orange-300">Preparing</option>
+                                        <option value="Completed" className="bg-[#121212] text-emerald-300">Completed ✓</option>
+                                      </select>
+                                      <span className={`text-[8px] font-mono uppercase px-1.5 py-0.5 rounded font-black ${
+                                        ord.status === 'Paid'
+                                          ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                                          : 'bg-stone-800 text-stone-300 border border-white/10'
+                                      }`}>
+                                        {ord.status === 'Paid' ? '💳 PAID ✓' : `${String(ord.payment || 'cash').toUpperCase()}`}
+                                      </span>
+                                    </div>
+                                  </div>
+
+                                  <div className="space-y-1 py-1">
+                                    {ord.items.map((it, idx) => (
+                                      <p key={idx} className="text-xs font-bold text-stone-200">
+                                        🍳 {it.qty} × {it.name}
+                                      </p>
+                                    ))}
+                                  </div>
+
+                                  <div className="space-y-2 w-full text-left font-sans">
+                                    <div className="flex flex-col gap-1 text-[10px]">
+                                      <div className="flex items-center gap-1.5 font-mono">
+                                        <span className="text-stone-500">{tText({ am: '👨‍🍳 የተመደበ ሼፍ: ', en: '👨‍🍳 Assigned Chef: ', or: '👨‍🍳 Sheefii Ramadame: ', ti: '👨‍🍳 ዝተመደበ ሼፍ: ', sid: '👨‍🍳 Gaamo Sheefe: ', fr: '👨‍🍳 Chef assigné : ', de: '👨‍🍳 Zugewiesener Koch: ', it: '👨‍🍳 Chef assegnato: ', zh: '👨‍🍳 指派厨师：', ar: '👨‍🍳 الطاهي المخصص: ' })}</span>
+                                        <span className="text-orange-300 font-bold">
+                                          {assignedChefName || currentUser?.name || 'Kitchen'}
+                                        </span>
+                                      </div>
+                                      <div className="flex items-center gap-1.5 font-mono">
+                                        <span className="text-stone-500">{tText({ am: '👤 የተመደበ አስተናጋጅ: ', en: '👤 Assigned Waiter: ', or: '👤 Tajaajilaa Ramadame: ', ti: '👤 ዝተመደበ ኣስተናጋጅ: ', sid: '👤 Gaamo Soolaancho: ', fr: '👤 Serveur assigné : ', de: '👤 Zugewiesener Kellner: ', it: '👤 Cameriere assegnato: ', zh: '👤 指派服务员：', ar: '👤 النادل المخصص: ' })}</span>
+                                        {assignedWaiterName ? (
+                                          <span className="text-yellow-400 font-bold bg-yellow-400/10 px-2 py-0.5 rounded border border-yellow-400/20">
+                                            {assignedWaiterName} 🏃
+                                          </span>
+                                        ) : (
+                                          <span className="text-amber-300 font-bold bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20">
+                                            {tText({ am: 'ክፍት (ማንኛውም አስተናጋጅ)', en: 'Open / Select Waiter', or: 'Banaa / Tajaajilaa Filadhu', ti: 'ክፉት / ኣስተናጋጅ ምረጽ', sid: 'Faano / Soolaancho Doori', fr: 'Ouvert / Choisir serveur', de: 'Offen / Kellner wählen', it: 'Aperto / Scegli cameriere', zh: '待指派服务员', ar: 'مفتوح / اختر نادلاً' })}
+                                          </span>
+                                        )}
+                                      </div>
+
+                                      {/* Select Waiter Dropdown */}
                                       <div className="mt-1 space-y-1">
-                                        <label className="text-[9px] text-stone-400 font-mono block">🎯 ምግብ አድራሽ አስተናጋጅ ይምረጡ (Select Deliverer):</label>
+                                        <label className="text-[9px] text-stone-400 font-mono block">
+                                          {tText({ am: '🎯 ምግብ አድራሽ አስተናጋጅ ይምረጡ (Select Deliverer):', en: '🎯 Select Deliverer:', or: '🎯 Geessaa Filadhu:', ti: '🎯 መብጽሒ ኣስተናጋጅ ምረጽ:', sid: '🎯 Soolaancho Doori:', fr: '🎯 Choisir le serveur :', de: '🎯 Kellner wählen:', it: '🎯 Seleziona cameriere:', zh: '🎯 选择送餐服务员：', ar: '🎯 اختر النادل الموصل:' })}
+                                        </label>
                                         <select
                                           id={waiterSelectId}
                                           defaultValue={assignedWaiterName}
                                           className="w-full bg-[#121212] border border-white/10 text-white text-[10px] font-mono p-1.5 outline-none focus:border-yellow-400"
                                         >
-                                          <option key="unassigned" value="">-- አስተናጋጅ ይምረጡ --</option>
+                                          <option key="unassigned" value="">-- {tText({ am: 'አስተናጋጅ ይምረጡ / ክፍት', en: 'Any Active Waiter', or: 'Tajaajilaa Filadhu', ti: 'ኣስተናጋጅ ምረጽ', sid: 'Soolaancho Doori', fr: 'Serveur disponible', de: 'Beliebiger Kellner', it: 'Cameriere disponibile', zh: '任意在岗服务员', ar: 'أي نادل متاح' })} --</option>
                                           {staff.filter(s => (s.role || '').toLowerCase() === 'waiter' || (s.accessPrivilege || '').toLowerCase() === 'waiter').map((w, idx) => (
-                                            <option key={`deliverer-${w.id || w.name || idx}`} value={w.name}>{w.name}</option>
+                                            <option key={`deliverer-${w.name}-${idx}`} value={w.name}>{w.name}</option>
                                           ))}
                                         </select>
                                       </div>
-                                    )}
-                                  </div>
+                                    </div>
 
-                                  <div className="pt-2 border-t border-white/5 flex justify-between items-center w-full">
-                                    <span className="text-[10px] font-mono text-[#C1FF00] font-black">{ord.location}</span>
-                                    {ord.cookingStatus === 'Pending' ? (
-                                      <button
-                                        onClick={() => handleUpdateOrderStatus(ord.id, 'Preparing')}
-                                        className="px-3 py-1 bg-amber-500 hover:bg-amber-600 text-black text-[10px] font-black uppercase rounded cursor-pointer transition-colors"
-                                      >
-                                        {appLang === 'am' ? 'ጀምር' : 'Start'} ➔
-                                      </button>
-                                    ) : (
-                                      <button
-                                        onClick={() => {
-                                          const selEl = document.getElementById(waiterSelectId) as HTMLSelectElement;
-                                          const finalWaiter = selEl ? selEl.value : assignedWaiterName;
-                                          handleSendReadyOrderToWaiter(ord.id, finalWaiter);
-                                        }}
-                                        className="px-3 py-1 bg-emerald-500 hover:bg-emerald-600 text-white text-[10px] font-black uppercase rounded cursor-pointer transition-colors animate-pulse flex items-center gap-1"
-                                      >
-                                        <span>{appLang === 'am' ? 'ላክ' : 'Send'}</span>
-                                        <span>✓</span>
-                                      </button>
-                                    )}
+                                    <div className="pt-2 border-t border-white/5 flex justify-between items-center gap-2 w-full">
+                                      <span className="text-[10px] font-mono text-[#C1FF00] font-black">{ord.location}</span>
+                                      <div className="flex items-center gap-1.5">
+                                        <button
+                                          type="button"
+                                          onClick={() => handleOpenOrderAdjustment(ord)}
+                                          className="px-2 py-1 bg-sky-500/10 hover:bg-sky-500 text-sky-300 hover:text-black border border-sky-500/20 text-[9px] font-black uppercase rounded cursor-pointer transition-colors"
+                                        >
+                                          ✏️ {tText({ am: 'አስተካክል', en: 'Edit', or: 'Gulaali', ti: 'ኣስተኻኽል', sid: 'Taashshi', fr: 'Modifier', de: 'Bearbeiten', it: 'Modifica', zh: '编辑', ar: 'تعديل' })}
+                                        </button>
+                                        {effectiveCook === 'Pending' && (
+                                          <button
+                                            onClick={() => handleUpdateOrderStatus(ord.id, 'Preparing')}
+                                            className="px-2.5 py-1 bg-amber-500 hover:bg-amber-600 text-black text-[10px] font-black uppercase rounded cursor-pointer transition-colors"
+                                          >
+                                            🔥 {tText({ am: 'ጀምር', en: 'Start', or: 'Jalqabi', ti: 'ጀምር', sid: 'Hanafi', fr: 'Démarrer', de: 'Starten', it: 'Avvia', zh: '开始', ar: 'ابدأ' })}
+                                          </button>
+                                        )}
+                                        <button
+                                          onClick={() => {
+                                            const selEl = document.getElementById(waiterSelectId) as HTMLSelectElement | null;
+                                            const finalWaiter = selEl ? selEl.value : assignedWaiterName;
+                                            handleSendReadyOrderToWaiter(ord.id, finalWaiter || '');
+                                          }}
+                                          className="px-2.5 py-1 bg-emerald-500 hover:bg-emerald-600 text-white text-[10px] font-black uppercase rounded cursor-pointer transition-colors flex items-center gap-1"
+                                        >
+                                          <span>{tText({ am: 'አልቋል · ለአስተናጋጅ ላክ', en: 'Completed · Notify Waiter', or: 'Qophaa\'e · Ergi', ti: 'ተዳልዩ · ንኣስተናጋጅ ስደድ', sid: 'Qixxaawo · Soyi', fr: 'Terminé · Notifier', de: 'Fertig · Senden', it: 'Pronto · Invia', zh: '完成 · 通知服务员', ar: 'مكتمل · إرسال للنادل' })}</span>
+                                          <span>✓</span>
+                                        </button>
+                                      </div>
+                                    </div>
                                   </div>
                                 </div>
                               );
-                            })()}
+                            })}
                           </div>
-                        ))}
+                        )}
+
+                        {chefDispatchedOrders.length > 0 && (
+                          <div className="pt-4 border-t border-white/10 space-y-2.5">
+                            <h4 className="text-[11px] font-black uppercase text-emerald-400 tracking-wider">
+                              📦 {tText({
+                                am: 'ከኩሽና ተሰርተው ለአስተናጋጅ የተላኩ ትዕዛዞች (Handoff Status)',
+                                en: 'Dispatched to Waiter — Pickup & Delivery Status',
+                                or: 'Gara Tajaajilaa Ergame — Haala Geessituu',
+                                ti: 'ናብ ኣስተናጋጅ ዝተላእኩ ትእዛዛት',
+                                sid: 'Soolaanchoho Soorramino Hajaja',
+                                fr: 'Transmis au serveur — Statut de livraison',
+                                de: 'An Kellner gemeldet — Lieferstatus',
+                                it: 'Inviati al cameriere — Stato consegna',
+                                zh: '已通知服务员的出餐交接状态',
+                                ar: 'طلبات مُرسلة للنادل — حالة الاستلام والتسليم',
+                              })}
+                            </h4>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+                              {chefDispatchedOrders.map((dOrd) => {
+                                const pickupAlertId = getKitchenPickupAlertId(dOrd.id);
+                                const bareOrderId = dOrd.id.replace(/^#/, '').trim();
+                                const isPickupAlertActive = assistanceCalls.some(
+                                  (c) =>
+                                    c.active !== false &&
+                                    c.type === 'pickup' &&
+                                    (c.id === pickupAlertId ||
+                                      (c.orderId && c.orderId.replace(/^#/, '').trim() === bareOrderId))
+                                );
+                                return (
+                                  <div
+                                    key={`chef-handoff-${dOrd.id}`}
+                                    className={`p-2.5 rounded-xl border text-[10px] font-mono flex items-center justify-between gap-2 ${
+                                      dOrd.servedByWaiter
+                                        ? 'bg-emerald-950/30 border-emerald-500/30 text-emerald-300'
+                                        : isPickupAlertActive
+                                          ? 'bg-amber-950/40 border-amber-400/50 text-amber-200'
+                                          : 'bg-sky-950/30 border-sky-400/30 text-sky-200'
+                                    }`}
+                                  >
+                                    <div className="min-w-0">
+                                      <span className="font-black block truncate">{dOrd.id} · {dOrd.location}</span>
+                                      <span className="text-[9px] opacity-80 block truncate">
+                                        🏃 {dOrd.waiter || 'Waiter'} {dOrd.servedAt ? `· ${dOrd.servedAt}` : dOrd.readyAt ? `· ${dOrd.readyAt}` : ''}
+                                      </span>
+                                    </div>
+                                    <span className={`px-2 py-0.5 rounded font-black text-[9px] shrink-0 ${
+                                      dOrd.servedByWaiter
+                                        ? 'bg-emerald-500 text-black'
+                                        : isPickupAlertActive
+                                          ? 'bg-amber-400 text-black'
+                                          : 'bg-sky-400 text-black'
+                                    }`}>
+                                      {dOrd.servedByWaiter
+                                        ? '✅ DELIVERED'
+                                        : isPickupAlertActive
+                                          ? '🔔 PICKUP WAIT'
+                                          : '✔ ACKNOWLEDGED'}
+                                    </span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
                       </div>
-                    )}
-                  </div>
+                    );
+                  })()}
+
+                  {/* KITCHEN STOCK AVAILABILITY CONTROL (CHEF PORTAL -> MANAGER ALERT TRIGGER) */}
+                  {(() => {
+                    const q = chefStockSearch.trim().toLowerCase();
+                    const kitchenItems = menuItems.filter((item) => {
+                      const matchesCat = chefStockCategory === 'all' || item.cat === chefStockCategory;
+                      const matchesQuery =
+                        !q ||
+                        item.nameAm.toLowerCase().includes(q) ||
+                        (item.nameEn && item.nameEn.toLowerCase().includes(q));
+                      return matchesCat && matchesQuery;
+                    });
+                    const outCount = menuItems.filter((m) => !m.available).length;
+
+                    return (
+                      <div className="bg-[#121212] border border-white/10 p-5 md:p-6 rounded-3xl space-y-4 text-left">
+                        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 border-b border-white/10 pb-3">
+                          <div>
+                            <span className="text-[10px] text-orange-400 font-mono font-bold uppercase tracking-wider block">
+                              KITCHEN STOCK & MANAGER ALERT
+                            </span>
+                            <h3 className="text-sm md:text-base font-black text-white uppercase mt-0.5">
+                              🍳 የኩሽና የምግብ አቅርቦት መቆጣጠሪያ (Stock Availability Toggle)
+                            </h3>
+                            <p className="text-[11px] text-stone-400 font-sans mt-0.5">
+                              ምግብ ሲያልቅ ወደ «OUT OF STOCK (አልቋል)» ይቀይሩት — ወዲያውኑ ለማናጀሩ የድምፅ፣ የPush/SMS ማስጠንቀቂያ ይላካል፣ በደንበኞች ሜኑ ላይም ይዘጋል።
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-2 font-mono text-xs shrink-0 tabular-nums">
+                            <span className={`px-3 py-1.5 rounded-xl border font-black ${
+                              outCount > 0
+                                ? 'bg-red-950/70 border-red-500 text-red-300'
+                                : 'bg-emerald-950/30 border-emerald-500/30 text-emerald-300'
+                            }`}>
+                              {outCount} አልቋል / OUT OF STOCK
+                            </span>
+                          </div>
+                        </div>
+
+                        {chefStockToast && (
+                          <div className="bg-red-950/80 border border-red-500 text-red-200 px-4 py-2.5 rounded-xl text-xs font-bold flex items-center justify-between gap-2">
+                            <span>{chefStockToast}</span>
+                            <button
+                              type="button"
+                              onClick={() => setChefStockToast(null)}
+                              className="text-red-300 hover:text-white font-mono text-[10px] uppercase cursor-pointer"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        )}
+
+                        <div className="flex flex-col sm:flex-row gap-2.5">
+                          <input
+                            type="text"
+                            value={chefStockSearch}
+                            onChange={(e) => setChefStockSearch(e.target.value)}
+                            placeholder={tText({ am: 'የምግብ ስም ይፈልጉ...', en: 'Search kitchen item...', or: 'Maqaa nyaataa barbaadi...', ti: 'ሽም መግቢ ድለ...', sid: 'Sagalete su\'ma hasi...', fr: 'Rechercher un plat...', de: 'Gericht suchen...', it: 'Cerca piatto...', zh: '搜索菜品...', ar: 'ابحث عن صنف...' })}
+                            className="flex-1 bg-black/60 border border-white/15 rounded-xl px-3.5 py-2 text-xs text-white placeholder-stone-500 outline-none focus:border-orange-400"
+                          />
+                          <select
+                            value={chefStockCategory}
+                            onChange={(e) => setChefStockCategory(e.target.value)}
+                            className="bg-black/60 border border-white/15 rounded-xl px-3 py-2 text-xs font-mono text-white outline-none focus:border-orange-400 cursor-pointer"
+                          >
+                            <option value="all">{tText({ am: 'ሁሉም ምድቦች', en: 'All Categories', or: 'Ramaddii Hunda', ti: 'ኩሉ ምድባት', sid: 'Baala Bissa', fr: 'Toutes catégories', de: 'Alle Kategorien', it: 'Tutte le categorie', zh: '全部分类', ar: 'جميع الفئات' })}</option>
+                            {categories.map((cat) => (
+                              <option key={cat.id} value={cat.id}>
+                                {cat.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+                          {kitchenItems.map((m) => {
+                            const isOut = !m.available;
+                            return (
+                              <div
+                                key={m.id}
+                                className={`p-3.5 rounded-2xl flex items-center justify-between gap-3 transition-all ${
+                                  isOut
+                                    ? 'bg-red-950/75 border-2 border-red-500'
+                                    : 'bg-black/45 border border-white/10 hover:border-orange-400/40'
+                                }`}
+                              >
+                                <div className="min-w-0">
+                                  <h4 className={`text-xs font-black truncate ${isOut ? 'text-red-300' : 'text-white'}`}>
+                                    {appLang === 'am' ? m.nameAm : m.nameEn || m.nameAm}
+                                  </h4>
+                                  <span className="text-[9px] font-mono text-stone-400 uppercase block mt-0.5">
+                                    {m.cat} • {m.price} {currency}
+                                  </span>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const markingOut = m.available;
+                                    handleToggleMenuItemAvailable(m.id);
+                                    const label = appLang === 'am' ? m.nameAm : m.nameEn || m.nameAm;
+                                    setChefStockToast(
+                                      markingOut
+                                        ? tText({ am: '🔴 "{label}" አልቋል (OUT OF STOCK) ተብሏል — ለማናጀሩ ማስጠንቀቂያ ተልኳል!', en: '🔴 "{label}" marked OUT OF STOCK — Manager alert sent!', or: '🔴 "{label}" dhumeera jedhamee galmaa\'eera!', ti: '🔴 "{label}" ወዲኡ ተባሂሉ — ንማናጀር መጠንቀቕታ ተላኢኹ!', sid: '🔴 "{label}" goofino — massagaanchira sokka soyyino!', fr: '🔴 "{label}" marqué ÉPUISÉ — alerte envoyée !', de: '🔴 "{label}" als AUSVERKAUFT markiert — Warnung gesendet!', it: '🔴 "{label}" segnato ESAURITO — avviso inviato!', zh: '🔴 “{label}”已标记售罄 — 已通知经理！', ar: '🔴 تم تحديد "{label}" كنافد — تم إرسال تنبيه للمدير!' }, { label })
+                                        : tText({ am: '🟢 "{label}" እንደገና በክምችት አለ (IN STOCK) ተብሏል!', en: '🟢 "{label}" is back IN STOCK!', or: '🟢 "{label}" amma kuusaa keessa jira!', ti: '🟢 "{label}" እንደገና ኣብ መኽዘን ኣሎ!', sid: '🟢 "{label}" galagale noo!', fr: '🟢 "{label}" est de nouveau DISPONIBLE !', de: '🟢 "{label}" ist wieder VERFÜGBAR!', it: '🟢 "{label}" è di nuovo DISPONIBILE!', zh: '🟢 “{label}”已恢复有货！', ar: '🟢 عاد "{label}" للتوفر!' }, { label }),
+                                    );
+                                    setTimeout(() => setChefStockToast(null), 5000);
+                                  }}
+                                  className={`px-2.5 py-1.5 rounded-xl text-[10px] font-mono font-black uppercase shrink-0 cursor-pointer border transition-colors ${
+                                    m.available
+                                      ? 'bg-emerald-500/15 hover:bg-red-600 hover:text-white hover:border-red-400 text-emerald-300 border-emerald-500/35'
+                                      : 'bg-red-600 hover:bg-emerald-600 text-white border-red-300'
+                                  }`}
+                                >
+                                  {m.available
+                                    ? `✓ ${tText({ am: 'አለ', en: 'IN STOCK', or: 'NI JIRA', ti: 'ኣሎ', sid: 'NOO', fr: 'EN STOCK', de: 'VERFÜGBAR', it: 'DISPONIBILE', zh: '有货', ar: 'متوفر' })}`
+                                    : `🔴 ${tText({ am: 'አልቋል', en: 'OUT OF STOCK', or: 'DHUMEERA', ti: 'ወዲኡ', sid: 'GOOFINO', fr: 'ÉPUISÉ', de: 'AUSVERKAUFT', it: 'ESAURITO', zh: '售罄', ar: 'نفد' })}`}
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </motion.div>
               );
             })()}
@@ -7702,80 +10571,95 @@ export default function App() {
                 className="space-y-6 max-w-6xl mx-auto w-full pb-10"
               >
                 {/* Admin Header */}
-                <div className="bg-gradient-to-r from-[#111] via-stone-900 to-black border border-white/10 p-6 rounded-3xl flex flex-col md:flex-row justify-between items-start md:items-center gap-4 relative overflow-hidden text-left shadow-2xl">
-                  <div className="absolute top-0 right-0 w-32 h-32 bg-[#C1FF00]/5 rounded-full blur-2xl pointer-events-none"></div>
+                <div className="papyrus-menu-hero border-b-4 p-6 rounded-3xl flex flex-col md:flex-row justify-between items-start md:items-center gap-4 relative overflow-hidden text-left">
                   <div>
                     <div className="flex items-center gap-2 flex-wrap">
-                      <span className="w-2.5 h-2.5 bg-[#C1FF00] rounded-full animate-ping"></span>
-                      <span className="text-[9px] bg-[#C1FF00]/10 text-[#C1FF00] font-mono font-black uppercase px-2 py-0.5 rounded tracking-wider">
-                        SECURE ADMIN CONTROL
+                      <span className="hero-gold-badge text-[10px] font-mono font-black uppercase px-2.5 py-0.5 rounded-lg tracking-wider border">
+                        👑 SECURE ADMIN CONTROL
                       </span>
                       {syncError ? (
-                        <span className="text-[9px] bg-red-600/20 text-red-400 font-mono font-bold uppercase px-2 py-0.5 rounded tracking-wider border border-red-500/20 flex items-center gap-1 animate-pulse">
+                        <span className="hero-subglass text-[10px] font-mono font-bold uppercase px-2 py-0.5 rounded-lg tracking-wider border flex items-center gap-1">
                           ⚠️ Sync Warning: {syncError}
                         </span>
                       ) : (
-                        <span className="text-[9px] bg-emerald-500/10 text-emerald-400 font-mono uppercase px-2 py-0.5 rounded tracking-wider border border-emerald-500/10">
+                        <span className="hero-subglass text-[10px] font-mono uppercase px-2 py-0.5 rounded-lg tracking-wider border text-[#f4c22b]">
                           ✓ Sync Active
                         </span>
                       )}
                       {rlsBlockedKeys.length > 0 && !isRlsBannerDismissed && (
                         <span 
                           onClick={() => setIsRlsBannerDismissed(true)}
-                          className="text-[9px] bg-amber-600/20 text-amber-400 font-mono font-bold uppercase px-2 py-0.5 rounded tracking-wider border border-amber-500/20 animate-pulse cursor-pointer hover:bg-amber-600/30 transition-all flex items-center gap-1.5"
+                          className="hero-subglass text-[9px] font-mono font-bold uppercase px-2 py-0.5 rounded-lg border cursor-pointer transition-all flex items-center gap-1.5"
                           title="Click to dismiss"
                         >
-                          ⚠️ {rlsBlockedKeys.length} KEYS LOCALIZED <span className="text-[7px] text-amber-300/60 font-sans">(× Dismiss)</span>
+                          ⚠️ {rlsBlockedKeys.length} KEYS LOCALIZED <span className="text-[8px] opacity-80 font-sans">(× Dismiss)</span>
                         </span>
                       )}
                     </div>
-                    <h2 className="text-xl font-black text-white uppercase tracking-tight mt-1.5">
-                      {currentUser?.name || "አስኪያጅ ተቆጣጣሪ (System Administrator)"}
+                    <h2 className="text-xl sm:text-2xl font-black text-white uppercase tracking-tight mt-2">
+                      {currentUser?.name || tRole('admin')}
                     </h2>
-                    <p className="text-xs text-stone-400 font-mono mt-0.5">
-                      {appLang === 'am' ? 'የፓፒረስ ሎጅ ፋይናንስ፣ ሰራተኞች እና አጠቃላይ ሲስተም መቆጣጠሪያ ማዕከል' : 'Finance, staff roster, menu items, dynamic QR-codes, and promotions dashboard'}
+                    <p className="text-xs text-white/85 font-medium mt-0.5">
+                      {tText({ am: 'የፓፒረስ ሎጅ ፋይናንስ፣ ሰራተኞች እና አጠቃላይ ሲስተም መቆጣጠሪያ ማዕከል', en: 'Finance, staff roster, menu items, dynamic QR-codes, and promotions dashboard', or: 'Giddugala to\'annoo maallaqaa, hojjettootaa, meenuu fi sirna hoteelaa', ti: 'ማእከል ምቁጽጻር ፋይናንስ፣ ሰራሕተኛታት፣ ሜኑን ሓፈሻዊ ስርዓትን', sid: 'Woxe, loosaanootanna wo\'ma hoteelunnita massagote mereersha', fr: 'Tableau de bord finance, personnel, menu, QR codes et promotions', de: 'Dashboard für Finanzen, Personal, Menü, QR-Codes und Aktionen', it: 'Dashboard finanze, personale, menu, QR code e promozioni', zh: '财务、员工花名册、菜单、动态二维码与促销管理中心', ar: 'لوحة تحكم المالية والموظفين والقائمة ورموز QR والعروض' })}
                     </p>
                   </div>
                   <button 
                     onClick={handleLogout}
-                    className="px-5 py-2.5 bg-red-600/10 hover:bg-red-600/25 text-red-400 text-xs font-mono uppercase font-black tracking-widest border border-red-500/20 rounded-xl transition-all cursor-pointer"
+                    className="hero-logout-btn px-5 py-2.5 text-xs font-mono uppercase font-black tracking-widest border rounded-xl transition-all cursor-pointer shadow-xs"
                   >
-                    🚪 Logout | ውጣ
+                    🚪 {t('common.sign_out')}
                   </button>
                 </div>
 
                 {/* RLS Educational Guidance Banner */}
                 {rlsBlockedKeys.length > 0 && !isRlsBannerDismissed && (
-                  <div className="bg-amber-950/20 border border-amber-500/30 p-5 rounded-2xl text-left space-y-3 shadow-lg relative overflow-hidden">
-                    <div className="absolute top-0 right-0 w-24 h-24 bg-amber-500/5 rounded-full blur-2xl pointer-events-none" />
+                  <div className="bg-amber-50 border border-amber-300 p-5 rounded-2xl text-left space-y-3 shadow-sm relative overflow-hidden">
                     <div className="flex justify-between items-start gap-4">
                       <div className="flex items-start gap-2.5">
                         <span className="text-xl mt-0.5">⚠️</span>
                         <div>
-                          <h4 className="text-xs font-black uppercase text-amber-300 font-mono">
-                            {appLang === 'am' ? 'የዳታቤዝ RLS ገደብ ታይቷል (DATABASE RLS RESTRICTIONS DETECTED)' : 'DATABASE RLS RESTRICTIONS DETECTED'}
+                          <h4 className="text-xs font-black uppercase text-amber-900 font-mono">
+                            {tText({ am: 'የዳታቤዝ RLS ገደብ ታይቷል (DATABASE RLS RESTRICTIONS DETECTED)', en: 'DATABASE RLS RESTRICTIONS DETECTED', or: 'DAANGAA RLS KUUSAA DEETAA', ti: 'ናይ ዳታቤዝ RLS ደረት ተራእዩ', sid: 'DAATABEEZETE RLS GEDE\'A', fr: 'RESTRICTIONS RLS DÉTECTÉES', de: 'DATENBANK-RLS-BESCHRÄNKUNGEN', it: 'RESTRIZIONI RLS RILEVATE', zh: '检测到数据库 RLS 限制', ar: 'تم رصد قيود أمان قاعدة البيانات RLS' })}
                           </h4>
-                          <p className="text-[10px] text-stone-300 font-sans mt-0.5">
-                            {appLang === 'am' 
-                              ? `የሱፓቤዝ ሰንጠረዥ የ RLS ፖሊሲ ስላልነቃ ${rlsBlockedKeys.length} የሚሆኑ የሲስተም መረጃዎች በደመና (Cloud) ላይ መመሳሰል አልቻሉም። በአካባቢያዊ ማከማቻ (Local Storage) ግንኙነት ግን በጥሩ ሁኔታ እየሰራ ነው።` 
-                              : `Supabase Row-Level Security (RLS) policies are restricting live cloud writes for ${rlsBlockedKeys.length} keys. Local backup state is active and working perfectly.`}
+                          <p className="text-[11px] text-amber-950/80 font-sans mt-0.5">
+                            {tText({
+                              am: `የሱፓቤዝ ሰንጠረዥ የ RLS ፖሊሲ ስላልነቃ {n} የሚሆኑ የሲስተም መረጃዎች በደመና (Cloud) ላይ መመሳሰል አልቻሉም። በአካባቢያዊ ማከማቻ (Local Storage) ግንኙነት ግን በጥሩ ሁኔታ እየሰራ ነው።`,
+                              en: `Supabase Row-Level Security (RLS) policies are restricting live cloud writes for {n} keys. Local backup state is active and working perfectly.`,
+                              or: `Imaammanni RLS Supabase furtuuwwan {n} irratti barreeffama duumessaa daangesseera. Kuusaan naannoo sirriitti hojjechaa jira.`,
+                              ti: `ናይ ሱፓቤዝ RLS ፖሊሲ ን{n} መፍትሓት ኣብ ደመና ምጽሓፍ ገዲብዎ ኣሎ። ከባብያዊ መኽዘን ብጽቡቕ ይሰርሕ ኣሎ።`,
+                              sid: `Supabase RLS seeri {n} qulfeessubba aana borreessa hoolino. Quchumu suuqo keere loosanni noo.`,
+                              fr: `Les politiques RLS Supabase limitent l'écriture cloud pour {n} clés. La sauvegarde locale fonctionne normalement.`,
+                              de: `Supabase-RLS-Richtlinien beschränken Cloud-Schreibvorgänge für {n} Schlüssel. Der lokale Speicher arbeitet normal.`,
+                              it: `Le policy RLS di Supabase limitano la scrittura cloud per {n} chiavi. Il salvataggio locale funziona correttamente.`,
+                              zh: `Supabase 行级安全 (RLS) 策略限制了 {n} 个键的云端写入，本地存储备份运行正常。`,
+                              ar: `تقيّد سياسات RLS في Supabase الكتابة السحابية لـ {n} مفتاح. النسخ الاحتياطي المحلي يعمل بشكل ممتاز.`
+                            }, { n: rlsBlockedKeys.length })}
                           </p>
                         </div>
                       </div>
                       <button
                         onClick={() => setIsRlsBannerDismissed(true)}
-                        className="bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 hover:text-amber-300 text-[9px] font-mono font-black uppercase px-2.5 py-1.5 rounded border border-amber-500/20 tracking-wider cursor-pointer shrink-0 transition-colors"
+                        className="bg-white hover:bg-amber-100 text-amber-900 text-[9px] font-mono font-black uppercase px-2.5 py-1.5 rounded-lg border border-amber-300 tracking-wider cursor-pointer shrink-0 transition-colors"
                       >
-                        {appLang === 'am' ? 'ደብቅ (Dismiss)' : 'Dismiss'}
+                        {tText({ am: 'ደብቅ (Dismiss)', en: 'Dismiss', or: 'Dhoksi', ti: 'ሕባእ', sid: 'Maaxi', fr: 'Ignorer', de: 'Ausblenden', it: 'Chiudi', zh: '忽略', ar: 'إخفاء' })}
                       </button>
                     </div>
-                    <div className="bg-black/40 p-3 rounded-lg border border-white/5 space-y-2">
-                      <p className="text-[9px] text-stone-400 font-mono leading-relaxed">
-                        {appLang === 'am' 
-                          ? 'ይህንን ለማስተካከል፡ እባክዎ በ Supabase SQL Editor ውስጥ "supabase_schema.sql" የተባለውን ፋይል ኮፒ አድርገው ይሂዱ። በተለይ ይህንን ኮድ በመፈጸም RLS ፖሊሲውን መፍቀድ ይችላሉ፦'
-                          : 'To resolve this and activate full real-time cloud sync: Please open your Supabase SQL Editor and run the following security policy updates:'}
+                    <div className="bg-white p-3 rounded-lg border border-amber-200 space-y-2">
+                      <p className="text-[10px] text-stone-600 font-mono leading-relaxed">
+                        {tText({
+                          am: 'ይህንን ለማስተካከል፡ እባክዎ በ Supabase SQL Editor ውስጥ "supabase_schema.sql" የተባለውን ፋይል ኮፒ አድርገው ይሂዱ። በተለይ ይህንን ኮድ በመፈጸም RLS ፖሊሲውን መፍቀድ ይችላሉ፦',
+                          en: 'To resolve this and activate full real-time cloud sync: Please open your Supabase SQL Editor and run the following security policy updates:',
+                          or: 'Kana sirreessuuf Supabase SQL Editor keessatti qajeelfama nageenyaa armaan gadii hojiirra oolchaa:',
+                          ti: 'ነዚ ንምስትኽኻል በጃኹም ኣብ Supabase SQL Editor ነዚ ዝስዕብ ናይ RLS ፖሊሲ ፈጽሙ:',
+                          sid: 'Konni taashshate Supabase SQL Editor giddo aante noo seera harisi:',
+                          fr: 'Pour activer la synchronisation cloud complète, exécutez ces règles dans votre éditeur SQL Supabase :',
+                          de: 'Um dies zu beheben und die Live-Cloud-Synchronisierung zu aktivieren, führen Sie im Supabase-SQL-Editor Folgendes aus:',
+                          it: 'Per risolvere e attivare la sincronizzazione cloud, esegui queste policy nell\'editor SQL di Supabase:',
+                          zh: '要解决此问题并启用完整云端同步，请在 Supabase SQL 编辑器中运行以下安全策略更新：',
+                          ar: 'لحل المشكلة وتفعيل المزامنة السحابية الفورية، شغّل تحديثات الأمان التالية في محرر SQL:'
+                        })}
                       </p>
-                      <pre className="text-[9px] font-mono text-amber-200 bg-neutral-950 p-2.5 rounded overflow-x-auto select-all border border-amber-500/20 leading-tight">
+                      <pre className="text-[9px] font-mono text-stone-800 bg-stone-50 p-2.5 rounded overflow-x-auto select-all border border-stone-200 leading-tight">
 {`ALTER TABLE system_settings ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Allow public select of system settings" ON system_settings FOR SELECT USING (true);
 CREATE POLICY "Allow public insert of system settings" ON system_settings FOR INSERT WITH CHECK (true);
@@ -7785,158 +10669,417 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                   </div>
                 )}
 
-                {/* Admin Navigation Tabs */}
-                <div className="flex border-b border-white/10 gap-1 overflow-x-auto no-scrollbar py-1">
+                {/* Admin Navigation Tabs — Menu Style Pill Tabs */}
+                <div className="flex bg-white border border-stone-200 rounded-2xl p-1.5 gap-1.5 overflow-x-auto no-scrollbar shadow-sm">
                   {[
-                    { id: 'sales', label: appLang === 'am' ? '📊 ገቢ/ወጪ' : '📊 Ledger', color: 'text-emerald-400' },
-                    { id: 'staff_audit', label: appLang === 'am' ? '📑 የሰራተኞች ፈረቃ ኦዲት' : '📑 Staff Audit', color: 'text-[#C1FF00]' },
-                    { id: 'staff', label: appLang === 'am' ? '👥 ሰራተኞች' : '👥 Staff', color: 'text-sky-400' },
-                    { id: 'menu', label: appLang === 'am' ? '🍽️ ምናሌ' : '🍽️ Menu', color: 'text-amber-400' },
-                    { id: 'banks', label: appLang === 'am' ? '🏦 ባንኮች' : '🏦 Banks', color: 'text-[#C1FF00]' },
-                    { id: 'qrprint', label: appLang === 'am' ? '📱 QR ኮዶች' : '📱 QR Codes', color: 'text-purple-400' },
-                    { id: 'promo', label: appLang === 'am' ? '🎟️ ፕሮሞሽን' : '🎟️ Promos', color: 'text-pink-400' },
-                    { id: 'lodgeinfo', label: appLang === 'am' ? '🛖 መረጃ' : '🛖 Lodge Info', color: 'text-indigo-400' },
-                    { id: 'reception', label: appLang === 'am' ? '🏨 ሪሴብሽን' : '🏨 Reception', color: 'text-teal-400' },
-                    { id: 'branding', label: appLang === 'am' ? '🎨 ሎጎ' : '🎨 Branding', color: 'text-rose-400' },
-                    { id: 'gallery', label: appLang === 'am' ? '🖼️ ጋለሪ' : '🖼️ Gallery', color: 'text-[#C1FF00]' },
-                    { id: 'table_assignment', label: appLang === 'am' ? '📋 ጠረጴዛ መመደቢያ' : '📋 Assignments', color: 'text-yellow-400' }
+                    { id: 'sales', label: tText({ am: '📊 ገቢ/ወጪ', en: '📊 Ledger', or: '📊 Galii/Baasii', ti: '📊 እቶት/ወጻኢ', sid: '📊 Galo/Fulo', fr: '📊 Comptes', de: '📊 Finanzen', it: '📊 Contabilità', zh: '📊 收支账簿', ar: '📊 السجل المالي' }) },
+                    { id: 'staff_audit', label: tText({ am: '📑 የሰራተኞች ፈረቃ ኦዲት', en: '📑 Staff Audit', or: '📑 Odiitii Hojii', ti: '📑 ኦዲት ሰራሕተኛታት', sid: '📑 Loosaanote Odiite', fr: '📑 Audit Personnel', de: '📑 Mitarbeiter-Audit', it: '📑 Audit Personale', zh: '📑 员工班次审计', ar: '📑 تدقيق الموظفين' }) },
+                    { id: 'staff', label: tText({ am: '👥 ሰራተኞች', en: '👥 Staff', or: '👥 Hojjettoota', ti: '👥 ሰራሕተኛታት', sid: '👥 Loosaanoota', fr: '👥 Personnel', de: '👥 Personal', it: '👥 Staff', zh: '👥 员工', ar: '👥 الموظفون' }) },
+                    { id: 'menu', label: tText({ am: '🍽️ ምናሌ', en: '🍽️ Menu', or: '🍽️ Meenuu', ti: '🍽️ ሜኑ', sid: '🍽️ Meenuu', fr: '🍽️ Menu', de: '🍽️ Menü', it: '🍽️ Menu', zh: '🍽️ 菜单', ar: '🍽️ القائمة' }) },
+                    { id: 'banks', label: tText({ am: '🏦 ባንኮች', en: '🏦 Banks', or: '🏦 Baankota', ti: '🏦 ባንክታት', sid: '🏦 Baankete', fr: '🏦 Banques', de: '🏦 Banken', it: '🏦 Banche', zh: '🏦 银行账户', ar: '🏦 البنوك' }) },
+                    { id: 'qrprint', label: tText({ am: '📱 QR ኮዶች', en: '📱 QR Codes', or: '📱 Koodii QR', ti: '📱 ኮዳት QR', sid: '📱 QR Koode', fr: '📱 Codes QR', de: '📱 QR-Codes', it: '📱 Codici QR', zh: '📱 二维码', ar: '📱 رموز QR' }) },
+                    { id: 'promo', label: tText({ am: '🎟️ ፕሮሞሽን', en: '🎟️ Promos', or: '🎟️ Piroomooshinii', ti: '🎟️ ፕሮሞሽን', sid: '🎟️ Piromooshine', fr: '🎟️ Promos', de: '🎟️ Aktionen', it: '🎟️ Promo', zh: '🎟️ 促销', ar: '🎟️ العروض' }) },
+                    { id: 'lodgeinfo', label: tText({ am: '🛖 መረጃ', en: '🛖 Lodge Info', or: '🛖 Odeeffannoo', ti: '🛖 ሓበሬታ ሎጅ', sid: '🛖 Lojete Mashalaqqe', fr: '🛖 Infos Lodge', de: '🛖 Lodge-Infos', it: '🛖 Info Lodge', zh: '🛖 山庄信息', ar: '🛖 معلومات النزل' }) },
+                    { id: 'reception', label: tText({ am: '🏨 ሪሴብሽን', en: '🏨 Reception', or: '🏨 Reseepshinii', ti: '🏨 ሪሴፕሽን', sid: '🏨 Reseepshinee', fr: '🏨 Réception', de: '🏨 Rezeption', it: '🏨 Reception', zh: '🏨 前台接待', ar: '🏨 الاستقبال' }) },
+                    { id: 'branding', label: tText({ am: '🎨 ሎጎ', en: '🎨 Branding', or: '🎨 Asxaa', ti: '🎨 ሎጎን ሕብርን', sid: '🎨 Bireende', fr: '🎨 Image', de: '🎨 Design', it: '🎨 Brand', zh: '🎨 品牌形象', ar: '🎨 الهوية' }) },
+                    { id: 'gallery', label: tText({ am: '🖼️ ጋለሪ', en: '🖼️ Gallery', or: '🖼️ Galarii', ti: '🖼️ ጋለሪ', sid: '🖼️ Misillete Minira', fr: '🖼️ Galerie', de: '🖼️ Galerie', it: '🖼️ Galleria', zh: '🖼️ 图库', ar: '🖼️ المعرض' }) },
+                    { id: 'table_assignment', label: tText({ am: '📅 የፈረቃና ምደባ ማዕከል (Shifts)', en: '📅 Shift Management', or: '📅 Bulchiinsa Dabaree', ti: '📅 ምምሕዳር ፈረቃ', sid: '📅 Loosote Gaamo', fr: '📅 Planning & Équipes', de: '📅 Schichtplanung', it: '📅 Gestione Turni', zh: '📅 排班管理', ar: '📅 إدارة المناوبات' }) },
+                    {
+                      id: 'leadership',
+                      label: `${tText({ am: '👔 ማናጀር / ስራ አስኪያጅ / Support', en: '👔 Leadership & Support', or: '👔 Hoggansa & Deeggarsa', ti: '👔 ኣመሓዳርን ደገፍን', sid: '👔 Massagaancho & Kaa\'lo', fr: '👔 Direction & Support', de: '👔 Leitung & Support', it: '👔 Direzione & Supporto', zh: '👔 管理与支持', ar: '👔 الإدارة والدعم' })}${leadershipMessages.filter((m) => m.status === 'Pending').length > 0 ? ` (${leadershipMessages.filter((m) => m.status === 'Pending').length})` : ''}`,
+                    }
                   ].map(tab => (
                     <button
                       key={tab.id}
                       onClick={() => setActiveAdminTab(tab.id as any)}
-                      className={`px-4 py-2.5 font-sans text-xs font-bold uppercase transition-all rounded-xl shrink-0 cursor-pointer ${
+                      className={`px-3.5 py-2 font-sans text-xs font-black uppercase transition-all rounded-xl shrink-0 cursor-pointer border ${
                         activeAdminTab === tab.id
-                          ? 'bg-white/10 text-white shadow-sm font-black'
-                          : 'text-stone-400 hover:text-white hover:bg-white/5'
+                          ? 'bg-[#b21f1f] text-white border-[#8c1414] shadow-sm'
+                          : 'bg-stone-50 text-stone-700 border-stone-200 hover:bg-[#f4c22b]/30 hover:text-stone-950'
                       }`}
                     >
-                      <span className={activeAdminTab === tab.id ? tab.color : ''}>{tab.label}</span>
+                      <span>{tab.label}</span>
                     </button>
                   ))}
                 </div>
 
                 {/* TAB CONTENT: STAFF SHIFT AUDIT MATRIX */}
-                {activeAdminTab === 'staff_audit' && (
-                  <div className="bg-[#121212] border border-white/10 p-6 rounded-2xl space-y-6 text-white font-sans">
-                    <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-white/10 pb-4">
-                      <div>
-                        <span className="text-[9px] bg-[#C1FF00]/10 text-[#C1FF00] border border-[#C1FF00]/30 px-2 py-0.5 rounded font-mono font-bold uppercase tracking-wider">
-                          STAFF WORK & SHIFT AUDIT SYSTEM
-                        </span>
-                        <h3 className="text-lg font-black text-white uppercase mt-1">
-                          📑 የሰራተኞች የፈረቃ ስራዎች መቆጣጠሪያና ኦዲት ማዕከል
-                        </h3>
-                        <p className="text-xs text-stone-400 font-mono mt-0.5">
-                          በጥበቃዎች፣ በአስተናጋጆች፣ በሼፎች፣ በሪሴብሽኖች፣ በካሸሮች እና በማኔጀሮች የተከናወኑ ስራዎችን በስማቸው ለይተው ይከታተሉ።
-                        </p>
-                      </div>
+                {activeAdminTab === 'staff_audit' && (() => {
+                  const toLocalIso = (d: Date): string => {
+                    const y = d.getFullYear();
+                    const m = String(d.getMonth() + 1).padStart(2, '0');
+                    const day = String(d.getDate()).padStart(2, '0');
+                    return `${y}-${m}-${day}`;
+                  };
 
-                      {/* Filter Controls */}
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <select
-                          value={selectedManagerAuditRole}
-                          onChange={(e) => {
-                            setSelectedManagerAuditRole(e.target.value);
-                            setSelectedManagerAuditStaff('all');
-                          }}
-                          className="bg-black border border-[#C1FF00]/50 text-[#C1FF00] font-bold text-xs px-3 py-2 rounded-lg outline-none cursor-pointer font-mono"
-                        >
-                          <option value="all">-- የሁሉም የሙያ ዘርፍ (All Roles) --</option>
-                          <option value="guard">👮 ጥበቃ (Guard)</option>
-                          <option value="waiter">🍽️ አስተናጋጅ (Waiter)</option>
-                          <option value="chef">👨‍🍳 ሼፍ (Chef)</option>
-                          <option value="receptionist">🏨 ሪሴብሽን (Receptionist)</option>
-                          <option value="cashier">💵 ካሸር (Cashier)</option>
-                          <option value="manager">👔 ማኔጀር/አስኪያጅ (Manager)</option>
-                        </select>
+                  const getMondayOfWeek = (d: Date): Date => {
+                    const copy = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+                    const day = copy.getDay();
+                    const diff = day === 0 ? -6 : 1 - day;
+                    copy.setDate(copy.getDate() + diff);
+                    return copy;
+                  };
 
-                        <select
-                          value={selectedManagerAuditStaff}
-                          onChange={(e) => setSelectedManagerAuditStaff(e.target.value)}
-                          className="bg-black border border-sky-400/50 text-sky-300 font-bold text-xs px-3 py-2 rounded-lg outline-none cursor-pointer font-mono"
-                        >
-                          <option key="all-staff-audit" value="all">-- የሁሉም ሰራተኞች ስም (All Staff) --</option>
-                          {staff.map((s, idx) => (
-                            <option key={`staff-audit-${s.id || s.name || idx}`} value={s.name}>{s.name} ({s.role})</option>
-                          ))}
-                          {Array.from(new Set([
-                            ...visitorLog.map(v => v.registeredByGuard).filter(Boolean),
-                            ...visitorLog.map(v => v.verifiedByGuard).filter(Boolean),
-                            ...orders.map(o => o.waiter).filter(Boolean),
-                            ...orders.map(o => o.chefName).filter(Boolean),
-                            ...orders.map(o => o.cashierName).filter(Boolean),
-                            ...roomBookings.map(b => b.receptionistName).filter(Boolean),
-                            ...roomBookings.map(b => b.checkedOutByStaff).filter(Boolean),
-                            ...expenses.map(e => e.recordedByStaff).filter(Boolean)
-                          ]))
-                            .filter(sName => !staff.some(s => s.name === sName))
-                            .map((sName, idx) => (
-                              <option key={`extra-audit-${sName}-${idx}`} value={sName}>👤 {sName}</option>
+                  const todayDateObj = new Date();
+                  const todayIso = toLocalIso(todayDateObj);
+
+                  const applyAuditPreset = (preset: 'today' | 'this_week' | 'last_week' | 'last_7_days' | 'last_30_days' | 'all') => {
+                    setStaffAuditDatePreset(preset);
+                    const now = new Date();
+                    if (preset === 'today') {
+                      const t = toLocalIso(now);
+                      setStaffAuditStartDate(t);
+                      setStaffAuditEndDate(t);
+                    } else if (preset === 'this_week') {
+                      const mon = getMondayOfWeek(now);
+                      setStaffAuditStartDate(toLocalIso(mon));
+                      setStaffAuditEndDate(toLocalIso(now));
+                    } else if (preset === 'last_week') {
+                      const thisMon = getMondayOfWeek(now);
+                      const lastMon = new Date(thisMon);
+                      lastMon.setDate(lastMon.getDate() - 7);
+                      const lastSun = new Date(thisMon);
+                      lastSun.setDate(lastSun.getDate() - 1);
+                      setStaffAuditStartDate(toLocalIso(lastMon));
+                      setStaffAuditEndDate(toLocalIso(lastSun));
+                    } else if (preset === 'last_7_days') {
+                      const start = new Date(now);
+                      start.setDate(start.getDate() - 6);
+                      setStaffAuditStartDate(toLocalIso(start));
+                      setStaffAuditEndDate(toLocalIso(now));
+                    } else if (preset === 'last_30_days') {
+                      const start = new Date(now);
+                      start.setDate(start.getDate() - 29);
+                      setStaffAuditStartDate(toLocalIso(start));
+                      setStaffAuditEndDate(toLocalIso(now));
+                    }
+                  };
+
+                  const shiftAuditWeekBy = (deltaWeeks: number) => {
+                    const baseStr = staffAuditStartDate || todayIso;
+                    const [yy, mm, dd] = baseStr.split('-').map(Number);
+                    const baseDate = yy && mm && dd ? new Date(yy, mm - 1, dd) : new Date();
+                    const mon = getMondayOfWeek(baseDate);
+                    mon.setDate(mon.getDate() + deltaWeeks * 7);
+                    const sun = new Date(mon);
+                    sun.setDate(sun.getDate() + 6);
+                    setStaffAuditDatePreset('custom');
+                    setStaffAuditStartDate(toLocalIso(mon));
+                    setStaffAuditEndDate(toLocalIso(sun));
+                  };
+
+                  const parseAuditRecordDateKey = (rawStr?: string, fallbackTimestamp?: number): string | null => {
+                    if (rawStr && typeof rawStr === 'string') {
+                      const trimmed = rawStr.trim();
+                      const isoMatch = trimmed.match(/(\d{4})-(\d{1,2})-(\d{1,2})/);
+                      if (isoMatch) {
+                        return `${isoMatch[1]}-${isoMatch[2].padStart(2, '0')}-${isoMatch[3].padStart(2, '0')}`;
+                      }
+                      const dotMatch = trimmed.match(/(\d{1,2})\.(\d{1,2})\.(\d{4})/);
+                      if (dotMatch) {
+                        return `${dotMatch[3]}-${dotMatch[2].padStart(2, '0')}-${dotMatch[1].padStart(2, '0')}`;
+                      }
+                      const slashMatch = trimmed.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+                      if (slashMatch) {
+                        const a = Number(slashMatch[1]);
+                        const b = Number(slashMatch[2]);
+                        const yyyy = slashMatch[3];
+                        // Infer MM/DD/YYYY vs DD/MM/YYYY safely
+                        const month = a > 12 ? b : a;
+                        const day = a > 12 ? a : b;
+                        return `${yyyy}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                      }
+                    }
+                    if (typeof fallbackTimestamp === 'number' && Number.isFinite(fallbackTimestamp)) {
+                      return toLocalIso(new Date(fallbackTimestamp));
+                    }
+                    return null;
+                  };
+
+                  const [rangeStart, rangeEnd] =
+                    staffAuditStartDate && staffAuditEndDate && staffAuditStartDate > staffAuditEndDate
+                      ? [staffAuditEndDate, staffAuditStartDate]
+                      : [staffAuditStartDate, staffAuditEndDate];
+
+                  const isWithinAuditDateRange = (rawStr?: string, fallbackTimestamp?: number): boolean => {
+                    if (staffAuditDatePreset === 'all') return true;
+                    const recKey = parseAuditRecordDateKey(rawStr, fallbackTimestamp);
+                    if (!recKey) {
+                      // Un-dated clock-only seed records match Today view only
+                      return staffAuditDatePreset === 'today' || (rangeStart <= todayIso && todayIso <= rangeEnd);
+                    }
+                    if (rangeStart && recKey < rangeStart) return false;
+                    if (rangeEnd && recKey > rangeEnd) return false;
+                    return true;
+                  };
+
+                  const sel = selectedManagerAuditStaff;
+                  const roleFilter = selectedManagerAuditRole;
+                  const isSel = (val?: string) => sel === 'all' || (val && val.toLowerCase() === sel.toLowerCase());
+                  const isRoleAllowed = (rowRole: string) => roleFilter === 'all' || roleFilter === rowRole;
+
+                  const guardEntries = isRoleAllowed('guard')
+                    ? visitorLog.filter(v => isSel(v.registeredByGuard) && isWithinAuditDateRange(v.timeIn))
+                    : [];
+                  const guardExits = isRoleAllowed('guard')
+                    ? visitorLog.filter(v => isSel(v.verifiedByGuard) && isWithinAuditDateRange(v.timeOut || v.timeIn))
+                    : [];
+                  const waiterOrders = isRoleAllowed('waiter')
+                    ? orders.filter(o => isSel(o.waiter) && isWithinAuditDateRange(o.date, o.createdAt))
+                    : [];
+                  const chefCooked = isRoleAllowed('chef')
+                    ? orders.filter(o => isSel(o.chefName) && isWithinAuditDateRange(o.date, o.createdAt))
+                    : [];
+                  const cashierSales = isRoleAllowed('cashier')
+                    ? orders.filter(o => o.status === 'Paid' && isSel(o.cashierName) && isWithinAuditDateRange(o.date, o.createdAt))
+                    : [];
+                  const receptionBookings = isRoleAllowed('receptionist')
+                    ? roomBookings.filter(b => isSel(b.receptionistName) && isWithinAuditDateRange(b.checkInDate))
+                    : [];
+                  const receptionCheckouts = isRoleAllowed('receptionist')
+                    ? roomBookings.filter(b => isSel(b.checkedOutByStaff) && isWithinAuditDateRange(b.checkOutDate || b.checkInDate))
+                    : [];
+                  const managerExpenses = isRoleAllowed('manager')
+                    ? expenses.filter(e => isSel(e.recordedByStaff) && isWithinAuditDateRange(e.date))
+                    : [];
+                  const filteredShiftAttendance = attendance.filter(a => {
+                    const roleNorm = (a.role || '').toLowerCase();
+                    const roleMatch = roleFilter === 'all' || roleNorm.includes(roleFilter);
+                    return roleMatch && isSel(a.staffName) && isWithinAuditDateRange(a.date);
+                  });
+
+                  const totalCashCollected = cashierSales.reduce((sum, o) => sum + (o.total || 0), 0);
+                  const totalMatchedLogs =
+                    guardEntries.length +
+                    waiterOrders.length +
+                    chefCooked.length +
+                    cashierSales.length +
+                    receptionBookings.length +
+                    managerExpenses.length +
+                    filteredShiftAttendance.length;
+
+                  return (
+                    <div className="bg-[#121212] border border-white/10 p-6 rounded-2xl space-y-6 text-white font-sans">
+                      <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 border-b border-white/10 pb-4">
+                        <div>
+                          <span className="text-[9px] bg-[#C1FF00]/10 text-[#C1FF00] border border-[#C1FF00]/30 px-2 py-0.5 rounded font-mono font-bold uppercase tracking-wider">
+                            STAFF WORK & SHIFT AUDIT SYSTEM
+                          </span>
+                          <h3 className="text-lg font-black text-white uppercase mt-1">
+                            📑 የሰራተኞች የፈረቃ ስራዎች መቆጣጠሪያና ኦዲት ማዕከል
+                          </h3>
+                          <p className="text-xs text-stone-400 font-mono mt-0.5">
+                            በጥበቃዎች፣ በአስተናጋጆች፣ በሼፎች፣ በሪሴብሽኖች፣ በካሸሮች እና በማኔጀሮች የተከናወኑ ስራዎችን በቀን ክልል እና በሳምንት ይከታተሉ።
+                          </p>
+                        </div>
+
+                        {/* Role & Staff Filter Controls */}
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <select
+                            value={selectedManagerAuditRole}
+                            onChange={(e) => {
+                              setSelectedManagerAuditRole(e.target.value);
+                              setSelectedManagerAuditStaff('all');
+                            }}
+                            className="bg-black border border-[#C1FF00]/50 text-[#C1FF00] font-bold text-xs px-3 py-2 rounded-lg outline-none cursor-pointer font-mono"
+                          >
+                            <option value="all">-- የሁሉም የሙያ ዘርፍ (All Roles) --</option>
+                            <option value="guard">👮 ጥበቃ (Guard)</option>
+                            <option value="waiter">🍽️ አስተናጋጅ (Waiter)</option>
+                            <option value="chef">👨‍🍳 ሼፍ (Chef)</option>
+                            <option value="receptionist">🏨 ሪሴብሽን (Receptionist)</option>
+                            <option value="cashier">💵 ካሸር (Cashier)</option>
+                            <option value="manager">👔 ማኔጀር/አስኪያጅ (Manager)</option>
+                          </select>
+
+                          <select
+                            value={selectedManagerAuditStaff}
+                            onChange={(e) => setSelectedManagerAuditStaff(e.target.value)}
+                            className="bg-black border border-sky-400/50 text-sky-300 font-bold text-xs px-3 py-2 rounded-lg outline-none cursor-pointer font-mono"
+                          >
+                            <option key="all-staff-audit" value="all">-- የሁሉም ሰራተኞች ስም (All Staff) --</option>
+                            {staff.map((s, idx) => (
+                              <option key={`staff-audit-${s.id || s.name || idx}`} value={s.name}>{s.name} ({s.role})</option>
                             ))}
-                        </select>
+                            {Array.from(new Set([
+                              ...visitorLog.map(v => v.registeredByGuard).filter(Boolean),
+                              ...visitorLog.map(v => v.verifiedByGuard).filter(Boolean),
+                              ...orders.map(o => o.waiter).filter(Boolean),
+                              ...orders.map(o => o.chefName).filter(Boolean),
+                              ...orders.map(o => o.cashierName).filter(Boolean),
+                              ...roomBookings.map(b => b.receptionistName).filter(Boolean),
+                              ...roomBookings.map(b => b.checkedOutByStaff).filter(Boolean),
+                              ...expenses.map(e => e.recordedByStaff).filter(Boolean)
+                            ]))
+                              .filter(sName => !staff.some(s => s.name === sName))
+                              .map((sName, idx) => (
+                                <option key={`extra-audit-${sName}-${idx}`} value={sName}>👤 {sName}</option>
+                              ))}
+                          </select>
+                        </div>
                       </div>
-                    </div>
 
-                    {/* Summary Counters */}
-                    {(() => {
-                      const sel = selectedManagerAuditStaff;
-                      const isSel = (val?: string) => sel === 'all' || (val && val.toLowerCase() === sel.toLowerCase());
-
-                      const guardEntries = visitorLog.filter(v => isSel(v.registeredByGuard));
-                      const guardExits = visitorLog.filter(v => isSel(v.verifiedByGuard));
-                      const waiterOrders = orders.filter(o => isSel(o.waiter));
-                      const chefCooked = orders.filter(o => isSel(o.chefName));
-                      const cashierSales = orders.filter(o => o.status === 'Paid' && isSel(o.cashierName));
-                      const receptionBookings = roomBookings.filter(b => isSel(b.receptionistName));
-                      const receptionCheckouts = roomBookings.filter(b => isSel(b.checkedOutByStaff));
-                      const managerExpenses = expenses.filter(e => isSel(e.recordedByStaff));
-
-                      const totalCashCollected = cashierSales.reduce((sum, o) => sum + (o.total || 0), 0);
-
-                      return (
-                        <div className="space-y-6">
-                          {/* Stat Grid */}
-                          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 font-mono">
-                            <div className="bg-yellow-500/10 border border-yellow-500/30 p-4 rounded-xl">
-                              <span className="text-[9px] text-yellow-400 font-bold uppercase block">👮 የጥበቃ መዝገቦች</span>
-                              <span className="text-xl font-black text-white mt-1 block">
-                                {guardEntries.length} ገቡ / {guardExits.length} ወጡ
-                              </span>
-                              <span className="text-[9px] text-yellow-300/70 block mt-0.5">የፓርኪንግና የእንግዳ ጥበቃ</span>
-                            </div>
-
-                            <div className="bg-sky-500/10 border border-sky-500/30 p-4 rounded-xl">
-                              <span className="text-[9px] text-sky-400 font-bold uppercase block">🍽️ የአስተናጋጅ ትዕዛዞች</span>
-                              <span className="text-xl font-black text-white mt-1 block">
-                                {waiterOrders.length} ትዕዛዞች
-                              </span>
-                              <span className="text-[9px] text-sky-300/70 block mt-0.5">የጠረጴዛ አገልግሎት</span>
-                            </div>
-
-                            <div className="bg-orange-500/10 border border-orange-500/30 p-4 rounded-xl">
-                              <span className="text-[9px] text-orange-400 font-bold uppercase block">👨‍🍳 የሼፍ ማብሰያዎች</span>
-                              <span className="text-xl font-black text-white mt-1 block">
-                                {chefCooked.length} ምግቦች
-                              </span>
-                              <span className="text-[9px] text-orange-300/70 block mt-0.5">በኩሽና የተዘጋጁ</span>
-                            </div>
-
-                            <div className="bg-emerald-500/10 border border-emerald-500/30 p-4 rounded-xl">
-                              <span className="text-[9px] text-emerald-400 font-bold uppercase block">💵 የካሸር ስብስቦች</span>
-                              <span className="text-xl font-black text-[#C1FF00] mt-1 block">
-                                {totalCashCollected.toLocaleString()} ETB
-                              </span>
-                              <span className="text-[9px] text-emerald-300/70 block mt-0.5">{cashierSales.length} የተከፈሉ ደረሰኞች</span>
-                            </div>
+                      {/* DATE-RANGE & HISTORICAL WEEK FILTER BAR */}
+                      <div className="bg-black/50 border border-white/10 rounded-xl p-3.5 space-y-3 font-mono">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            {[
+                              { id: 'today', label: '📅 ዛሬ (Today)' },
+                              { id: 'this_week', label: '📆 ይህ ሳምንት (This Week)' },
+                              { id: 'last_week', label: '⏪ ያለፈው ሳምንት (Last Week)' },
+                              { id: 'last_7_days', label: '🗓️ 7 ቀናት (7D)' },
+                              { id: 'last_30_days', label: '🗓️ 30 ቀናት (30D)' },
+                              { id: 'all', label: '♾️ ሁሉም ጊዜ (All History)' },
+                            ].map((preset) => (
+                              <button
+                                key={preset.id}
+                                type="button"
+                                onClick={() => applyAuditPreset(preset.id as 'today' | 'this_week' | 'last_week' | 'last_7_days' | 'last_30_days' | 'all')}
+                                className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold transition-colors cursor-pointer border ${
+                                  staffAuditDatePreset === preset.id
+                                    ? 'bg-[#C1FF00] text-black border-[#C1FF00] font-black'
+                                    : 'bg-white/5 hover:bg-white/10 text-stone-300 border-white/10'
+                                }`}
+                              >
+                                {preset.label}
+                              </button>
+                            ))}
                           </div>
 
-                          {/* Activity Breakdown Table */}
-                          <div className="bg-black/60 border border-white/10 rounded-xl p-4 space-y-3">
-                            <h4 className="text-xs font-black uppercase text-[#C1FF00] font-mono flex items-center justify-between">
-                              <span>📋 የፈረቃ ስራዎች የጊዜ ተዋረድ ዝርዝር (Audit Activity Timeline)</span>
-                              <span className="text-[10px] text-white/50">መዝገብ፡ {sel === 'all' ? 'የሁሉም ሰራተኞች' : sel}</span>
-                            </h4>
+                          {/* Week-by-Week Historical Navigator */}
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => shiftAuditWeekBy(-1)}
+                              className="px-2.5 py-1.5 rounded-lg bg-white/5 hover:bg-white/15 border border-white/15 text-[11px] font-bold text-stone-200 cursor-pointer transition-colors"
+                              title={tText({ am: 'ቀዳሚ ሳምንት', en: 'Previous Week', or: 'Torban Darbe', ti: 'ዝሓለፈ ሰሙን', sid: 'Sa\'ino Lamala', fr: 'Semaine précédente', de: 'Vorherige Woche', it: 'Settimana scorsa', zh: '上一周', ar: 'الأسبوع السابق' })}
+                            >
+                              ◀ {tText({ am: 'ቀዳሚ ሳምንት', en: 'Prev Week', or: 'Torban Darbe', ti: 'ዝሓለፈ ሰሙን', sid: 'Sa\'ino Lamala', fr: 'Sem. préc.', de: 'Vorwoche', it: 'Sett. prec.', zh: '上周', ar: 'الأسبوع السابق' })}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => shiftAuditWeekBy(1)}
+                              className="px-2.5 py-1.5 rounded-lg bg-white/5 hover:bg-white/15 border border-white/15 text-[11px] font-bold text-stone-200 cursor-pointer transition-colors"
+                              title={tText({ am: 'ቀጣይ ሳምንት', en: 'Next Week', or: 'Torban Itti Aanu', ti: 'ዝመጽእ ሰሙን', sid: 'Aantino Lamala', fr: 'Semaine suivante', de: 'Nächste Woche', it: 'Settimana prossima', zh: '下一周', ar: 'الأسبوع القادم' })}
+                            >
+                              {tText({ am: 'ቀጣይ ሳምንት', en: 'Next Week', or: 'Torban Itti Aanu', ti: 'ዝመጽእ ሰሙን', sid: 'Aantino Lamala', fr: 'Sem. suiv.', de: 'Nächste W.', it: 'Sett. succ.', zh: '下周', ar: 'الأسبوع القادم' })} ▶
+                            </button>
+                          </div>
+                        </div>
 
+                        {/* Custom Start / End Date Interval Inputs + Active Range Readout */}
+                        <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-white/10 text-xs">
+                          <div className="flex flex-wrap items-center gap-2.5">
+                            <label className="flex items-center gap-1.5 text-[11px] text-stone-300">
+                              <span className="text-stone-400 font-bold">{tText({ am: 'ከ (From):', en: 'From:', or: 'Irraa:', ti: 'ካብ:', sid: 'Kuni:', fr: 'Du :', de: 'Von:', it: 'Da:', zh: '从：', ar: 'من:' })}</span>
+                              <input
+                                type="date"
+                                id="staff-audit-start-date"
+                                value={staffAuditStartDate}
+                                onChange={(e) => {
+                                  setStaffAuditStartDate(e.target.value);
+                                  setStaffAuditDatePreset('custom');
+                                }}
+                                className="bg-stone-900 border border-white/20 focus:border-[#C1FF00] text-white px-2.5 py-1 rounded-lg text-[11px] outline-none"
+                              />
+                            </label>
+                            <label className="flex items-center gap-1.5 text-[11px] text-stone-300">
+                              <span className="text-stone-400 font-bold">{tText({ am: 'እስከ (To):', en: 'To:', or: 'Hanga:', ti: 'ክሳብ:', sid: 'Geessha:', fr: 'Au :', de: 'Bis:', it: 'A:', zh: '至：', ar: 'إلى:' })}</span>
+                              <input
+                                type="date"
+                                id="staff-audit-end-date"
+                                value={staffAuditEndDate}
+                                onChange={(e) => {
+                                  setStaffAuditEndDate(e.target.value);
+                                  setStaffAuditDatePreset('custom');
+                                }}
+                                className="bg-stone-900 border border-white/20 focus:border-[#C1FF00] text-white px-2.5 py-1 rounded-lg text-[11px] outline-none"
+                              />
+                            </label>
+                          </div>
+
+                          <div className="flex items-center gap-2 text-[11px]">
+                            <span className="px-2.5 py-1 rounded-lg bg-[#C1FF00]/10 border border-[#C1FF00]/30 text-[#C1FF00] font-bold">
+                              {staffAuditDatePreset === 'all'
+                                ? `♾️ ${t('common.all')}`
+                                : `📅 ${rangeStart || todayIso} → ${rangeEnd || todayIso}`}
+                            </span>
+                            <span className="text-stone-400 font-bold tabular-nums">
+                              {totalMatchedLogs} {tText({ am: 'መዝገቦች', en: 'logs', or: 'galmeewwan', ti: 'መዝገባት', sid: 'borreessa', fr: 'journaux', de: 'Einträge', it: 'registri', zh: '条记录', ar: 'سجل' })}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Summary Counters & Filtered Audit Content */}
+                      <div className="space-y-6">
+                        {/* Stat Grid */}
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 font-mono">
+                          <div className="bg-yellow-500/10 border border-yellow-500/30 p-4 rounded-xl">
+                            <span className="text-[9px] text-yellow-400 font-bold uppercase block">👮 የጥበቃ መዝገቦች</span>
+                            <span className="text-xl font-black text-white mt-1 block">
+                              {guardEntries.length} ገቡ / {guardExits.length} ወጡ
+                            </span>
+                            <span className="text-[9px] text-yellow-300/70 block mt-0.5">የፓርኪንግና የእንግዳ ጥበቃ</span>
+                          </div>
+
+                          <div className="bg-sky-500/10 border border-sky-500/30 p-4 rounded-xl">
+                            <span className="text-[9px] text-sky-400 font-bold uppercase block">🍽️ የአስተናጋጅ ትዕዛዞች</span>
+                            <span className="text-xl font-black text-white mt-1 block">
+                              {waiterOrders.length} ትዕዛዞች
+                            </span>
+                            <span className="text-[9px] text-sky-300/70 block mt-0.5">የጠረጴዛ አገልግሎት</span>
+                          </div>
+
+                          <div className="bg-orange-500/10 border border-orange-500/30 p-4 rounded-xl">
+                            <span className="text-[9px] text-orange-400 font-bold uppercase block">👨‍🍳 የሼፍ ማብሰያዎች</span>
+                            <span className="text-xl font-black text-white mt-1 block">
+                              {chefCooked.length} ምግቦች
+                            </span>
+                            <span className="text-[9px] text-orange-300/70 block mt-0.5">በኩሽና የተዘጋጁ</span>
+                          </div>
+
+                          <div className="bg-emerald-500/10 border border-emerald-500/30 p-4 rounded-xl">
+                            <span className="text-[9px] text-emerald-400 font-bold uppercase block">💵 የካሸር ስብስቦች</span>
+                            <span className="text-xl font-black text-[#C1FF00] mt-1 block">
+                              {totalCashCollected.toLocaleString()} {currency}
+                            </span>
+                            <span className="text-[9px] text-emerald-300/70 block mt-0.5">{cashierSales.length} የተከፈሉ ደረሰኞች</span>
+                          </div>
+                        </div>
+
+                        {/* Activity Breakdown Table */}
+                        <div className="bg-black/60 border border-white/10 rounded-xl p-4 space-y-3">
+                          <h4 className="text-xs font-black uppercase text-[#C1FF00] font-mono flex flex-wrap items-center justify-between gap-2">
+                            <span>📋 የፈረቃ ስራዎች የጊዜ ተዋረድ ዝርዝር (Audit Activity Timeline)</span>
+                            <span className="text-[10px] text-white/60">
+                              መዝገብ፡ {sel === 'all' ? 'የሁሉም ሰራተኞች' : sel} · {filteredShiftAttendance.length} የፈረቃ ሰዓት መዝገቦች
+                            </span>
+                          </h4>
+
+                          {totalMatchedLogs === 0 ? (
+                            <div className="py-8 text-center space-y-2.5 bg-white/[0.02] rounded-xl border border-dashed border-white/10">
+                              <p className="text-xs font-bold text-stone-300">
+                                {tText({ am: 'በተመረጠው የቀን ክልል ውስጥ የፈረቃ ስራ መዝገብ አልተገኘም።', en: 'No staff shift logs found in this selected date range.', or: 'Guyyaa filatame keessatti galmeen dabaree hojii hin argamne.', ti: 'ኣብቲ ዝተመረጸ እዋን ናይ ፈረቃ ስራሕ መዝገብ ኣይተረኽበን።', sid: 'Dooramino barra giddo loosote borreessi dino.', fr: 'Aucun journal d\'équipe trouvé pour cette plage de dates.', de: 'Keine Schichtprotokolle für diesen Zeitraum gefunden.', it: 'Nessun registro turno trovato in questo intervallo di date.', zh: '所选日期范围内未找到员工排班记录。', ar: 'لم يتم العثور على سجلات مناوبات في هذا النطاق الزمني.' })}
+                              </p>
+                              <div className="flex flex-wrap justify-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => applyAuditPreset('last_week')}
+                                  className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-[11px] font-bold text-white cursor-pointer"
+                                >
+                                  ⏪ {tText({ am: 'ያለፈውን ሳምንት እይ', en: 'View Last Week', or: 'Torban Darbe Ilaali', ti: 'ዝሓለፈ ሰሙን ርአ', sid: 'Sa\'ino Lamala La\'i', fr: 'Voir la semaine passée', de: 'Letzte Woche ansehen', it: 'Vedi settimana scorsa', zh: '查看上周', ar: 'عرض الأسبوع الماضي' })}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => applyAuditPreset('all')}
+                                  className="px-3 py-1.5 rounded-lg bg-[#C1FF00] text-black text-[11px] font-black cursor-pointer"
+                                >
+                                  ♾️ {tText({ am: 'ሁሉንም ታሪክ አሳይ', en: 'Show All History', or: 'Seenaa Hunda Agarsiisi', ti: 'ኩሉ ታሪኽ ኣርኢ', sid: 'Baala Xagge Leellishi', fr: 'Tout l\'historique', de: 'Gesamten Verlauf zeigen', it: 'Mostra tutta la cronologia', zh: '显示全部历史', ar: 'عرض كل السجل' })}
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
                             <div className="overflow-x-auto">
                               <table className="w-full text-left font-mono text-xs">
                                 <thead>
@@ -7946,66 +11089,114 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                     <th className="py-2 px-3">የሰራተኛዉ ስም (Staff Name)</th>
                                     <th className="py-2 px-3">ሚና (Role)</th>
                                     <th className="py-2 px-3">ዝርዝር መግለጫ (Details)</th>
-                                    <th className="py-2 px-3">ሰዓት (Time)</th>
+                                    <th className="py-2 px-3">ቀን / ሰዓት (Date & Time)</th>
                                   </tr>
                                 </thead>
                                 <tbody className="divide-y divide-white/5 text-[11px]">
+                                  {/* Render Staff Attendance / Shift Check-Ins */}
+                                  {filteredShiftAttendance.slice(0, 25).map(att => (
+                                    <tr key={'att-' + att.id} className="hover:bg-white/5">
+                                      <td className="py-2 px-3 text-lime-400 font-bold">🕒 የፈረቃ መግቢያ/መውጫ</td>
+                                      <td className="py-2 px-3 font-black text-white">{att.status}</td>
+                                      <td className="py-2 px-3 font-bold text-lime-300">{att.staffName}</td>
+                                      <td className="py-2 px-3 text-stone-400">{tRole(att.role)}</td>
+                                      <td className="py-2 px-3 text-white">
+                                        {tText({ am: 'መግቢያ', en: 'In', or: 'Seensa', ti: 'መእተዊ', sid: 'Eeno', fr: 'Entrée', de: 'Ein', it: 'Entrata', zh: '上班', ar: 'دخول' })}: {att.clockInTime || '--:--'} · {tText({ am: 'መውጫ', en: 'Out', or: 'Bahiinsa', ti: 'መውጽኢ', sid: 'Fulcho', fr: 'Sortie', de: 'Aus', it: 'Uscita', zh: '下班', ar: 'خروج' })}: {att.clockOutTime || '--:--'}
+                                      </td>
+                                      <td className="py-2 px-3 text-lime-400 tabular-nums">{att.date}</td>
+                                    </tr>
+                                  ))}
+
                                   {/* Render Guard entries */}
-                                  {guardEntries.slice(0, 10).map(v => (
+                                  {guardEntries.slice(0, 25).map(v => (
                                     <tr key={v.id} className="hover:bg-white/5">
                                       <td className="py-2 px-3 text-yellow-400 font-bold">👮 የፓርኪንግ መግቢያ</td>
                                       <td className="py-2 px-3 font-black text-white">{v.ticketTagNumber}</td>
                                       <td className="py-2 px-3 font-bold text-yellow-300">{v.registeredByGuard || 'አቶ ዳዊት'}</td>
-                                      <td className="py-2 px-3 text-stone-400">Guard</td>
+                                      <td className="py-2 px-3 text-stone-400">{tRole('guard')}</td>
                                       <td className="py-2 px-3 text-white">{v.name} ({v.carPlate}) - {v.purpose}</td>
-                                      <td className="py-2 px-3 text-emerald-400">{v.timeIn}</td>
+                                      <td className="py-2 px-3 text-emerald-400 tabular-nums">{v.timeIn}</td>
                                     </tr>
                                   ))}
 
                                   {/* Render Waiter orders */}
-                                  {waiterOrders.slice(0, 10).map(o => (
+                                  {waiterOrders.slice(0, 25).map(o => (
                                     <tr key={o.id} className="hover:bg-white/5">
                                       <td className="py-2 px-3 text-sky-400 font-bold">🍽️ የጠረጴዛ ትዕዛዝ</td>
                                       <td className="py-2 px-3 font-black text-white">{o.id}</td>
                                       <td className="py-2 px-3 font-bold text-sky-300">{o.waiter || 'አስተናጋጅ'}</td>
-                                      <td className="py-2 px-3 text-stone-400">Waiter</td>
-                                      <td className="py-2 px-3 text-white">{o.location} ({o.items.length} እቃዎች) - {o.total} ETB</td>
-                                      <td className="py-2 px-3 text-sky-400">{o.time}</td>
+                                      <td className="py-2 px-3 text-stone-400">{tRole('waiter')}</td>
+                                      <td className="py-2 px-3 text-white">{o.location} ({o.items.length} {t('common.items')}) - {o.total} {currency}</td>
+                                      <td className="py-2 px-3 text-sky-400 tabular-nums">{o.date ? `${o.date} · ` : ''}{o.time}</td>
+                                    </tr>
+                                  ))}
+
+                                  {/* Render Chef cooked orders */}
+                                  {chefCooked.slice(0, 25).map(o => (
+                                    <tr key={'chef-' + o.id} className="hover:bg-white/5">
+                                      <td className="py-2 px-3 text-orange-400 font-bold">👨‍🍳 የኩሽና ዝግጅት</td>
+                                      <td className="py-2 px-3 font-black text-white">{o.id}</td>
+                                      <td className="py-2 px-3 font-bold text-orange-300">{o.chefName || 'ሼፍ'}</td>
+                                      <td className="py-2 px-3 text-stone-400">{tRole('chef')}</td>
+                                      <td className="py-2 px-3 text-white">{o.location} ({o.items.length} {t('common.items')}) - {o.cookingStatus || o.status}</td>
+                                      <td className="py-2 px-3 text-orange-400 tabular-nums">{o.date ? `${o.date} · ` : ''}{o.time}</td>
                                     </tr>
                                   ))}
 
                                   {/* Render Cashier sales */}
-                                  {cashierSales.slice(0, 10).map(o => (
+                                  {cashierSales.slice(0, 25).map(o => (
                                     <tr key={'cash-' + o.id} className="hover:bg-white/5">
                                       <td className="py-2 px-3 text-emerald-400 font-bold">💵 የገቢ ሂሳብ ስብስብ</td>
                                       <td className="py-2 px-3 font-black text-white">{o.id}</td>
                                       <td className="py-2 px-3 font-bold text-emerald-300">{o.cashierName || 'ካሸር'}</td>
-                                      <td className="py-2 px-3 text-stone-400">Cashier</td>
-                                      <td className="py-2 px-3 text-white">{o.location} - ክፍያ አረጋግጧል ({o.total} ETB)</td>
-                                      <td className="py-2 px-3 text-emerald-400">{o.time}</td>
+                                      <td className="py-2 px-3 text-stone-400">{tRole('cashier')}</td>
+                                      <td className="py-2 px-3 text-white">{o.location} - {t('common.paid')} ({o.total} {currency})</td>
+                                      <td className="py-2 px-3 text-emerald-400 tabular-nums">{o.date ? `${o.date} · ` : ''}{o.time}</td>
                                     </tr>
                                   ))}
 
-                                  {/* Render Receptionist Bookings */}
-                                  {receptionBookings.slice(0, 10).map(b => (
+                                  {/* Render Receptionist Bookings & Checkouts */}
+                                  {receptionBookings.slice(0, 25).map(b => (
                                     <tr key={b.id} className="hover:bg-white/5">
                                       <td className="py-2 px-3 text-teal-400 font-bold">🏨 የክፍል መዝገብ</td>
-                                      <td className="py-2 px-3 font-black text-white">ክፍል {b.roomNumber}</td>
+                                      <td className="py-2 px-3 font-black text-white">{b.roomNumber}</td>
                                       <td className="py-2 px-3 font-bold text-teal-300">{b.receptionistName || 'ማርታ'}</td>
-                                      <td className="py-2 px-3 text-stone-400">Receptionist</td>
+                                      <td className="py-2 px-3 text-stone-400">{tRole('receptionist')}</td>
                                       <td className="py-2 px-3 text-white">{b.guestIds?.[0]?.fullName} ({b.contactPhone})</td>
-                                      <td className="py-2 px-3 text-teal-400">{b.checkInDate}</td>
+                                      <td className="py-2 px-3 text-teal-400 tabular-nums">{b.checkInDate}</td>
+                                    </tr>
+                                  ))}
+                                  {receptionCheckouts.slice(0, 15).map(b => (
+                                    <tr key={'cout-' + b.id} className="hover:bg-white/5">
+                                      <td className="py-2 px-3 text-cyan-400 font-bold">🏨 የክፍል መውጫ (Check-out)</td>
+                                      <td className="py-2 px-3 font-black text-white">{b.roomNumber}</td>
+                                      <td className="py-2 px-3 font-bold text-cyan-300">{b.checkedOutByStaff || 'Reception'}</td>
+                                      <td className="py-2 px-3 text-stone-400">{tRole('receptionist')}</td>
+                                      <td className="py-2 px-3 text-white">{b.guestIds?.[0]?.fullName}</td>
+                                      <td className="py-2 px-3 text-cyan-400 tabular-nums">{b.checkOutDate || b.checkInDate}</td>
+                                    </tr>
+                                  ))}
+
+                                  {/* Render Manager Recorded Expenses */}
+                                  {managerExpenses.slice(0, 20).map(exp => (
+                                    <tr key={'exp-' + exp.id} className="hover:bg-white/5">
+                                      <td className="py-2 px-3 text-rose-400 font-bold">💼 የወጪ መዝገብ</td>
+                                      <td className="py-2 px-3 font-black text-white">{exp.category}</td>
+                                      <td className="py-2 px-3 font-bold text-rose-300">{exp.recordedByStaff || 'Manager'}</td>
+                                      <td className="py-2 px-3 text-stone-400">{tRole('manager')}</td>
+                                      <td className="py-2 px-3 text-white">{exp.title} - {exp.amount} {currency}</td>
+                                      <td className="py-2 px-3 text-rose-400 tabular-nums">{exp.date} · {exp.time}</td>
                                     </tr>
                                   ))}
                                 </tbody>
                               </table>
                             </div>
-                          </div>
+                          )}
                         </div>
-                      );
-                    })()}
-                  </div>
-                )}
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 {activeAdminTab === 'sales' && (
                   <AdminRevenueReports
@@ -8862,7 +12053,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                           </div>
                           <div className="grid grid-cols-2 gap-2">
                             <div>
-                              <label className="text-[9px] font-mono text-white/40 uppercase block mb-1">ዋጋ (Birr)</label>
+                              <label className="text-[9px] font-mono text-white/40 uppercase block mb-1">{tText({ am: 'ዋጋ', en: 'Price', or: 'Gatii', ti: 'ዋጋ', sid: 'Waga', fr: 'Prix', de: 'Preis', it: 'Prezzo', zh: '价格', ar: 'السعر' })} ({currency})</label>
                               <input 
                                 type="number" 
                                 value={editingMenuItem.price !== undefined ? editingMenuItem.price : 0}
@@ -8994,7 +12185,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                           </div>
                           <div className="grid grid-cols-2 gap-2">
                             <div>
-                              <label className="text-[9px] font-mono text-white/40 uppercase block mb-1">ዋጋ (Birr)</label>
+                              <label className="text-[9px] font-mono text-white/40 uppercase block mb-1">{tText({ am: 'ዋጋ', en: 'Price', or: 'Gatii', ti: 'ዋጋ', sid: 'Waga', fr: 'Prix', de: 'Preis', it: 'Prezzo', zh: '价格', ar: 'السعر' })} ({currency})</label>
                               <input 
                                 type="number" 
                                 id="add-price"
@@ -9379,7 +12570,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                           />
                           <p className="text-[8.5px] text-white/40 font-mono mt-1 leading-normal">
                             ከላይ ካለው የእንጀራ አማራጭ ጋር በቅደም ተከተል ይጣጣማል፡<br/>
-                            {modifierOptions.injeraChoices.map(c => `${c}: +${modifierOptions.injeraPrices[c] ?? 0} Birr`).join(' | ')}
+                            {modifierOptions.injeraChoices.map(c => `${c}: +${modifierOptions.injeraPrices[c] ?? 0} ${currency}`).join(' | ')}
                           </p>
                         </div>
                         <div className="grid grid-cols-2 gap-3 pt-1">
@@ -9469,7 +12660,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                               </div>
                             </div>
                             <div className="flex items-center gap-2 shrink-0">
-                              <span className="font-mono text-xs font-black text-white mr-2">{m.price} ብር</span>
+                              <span className="font-mono text-xs font-black text-white mr-2">{m.price} {currency}</span>
                               <button 
                                 onClick={() => setEditingMenuItem({ ...m })}
                                 className="px-2.5 py-1 text-[10px] font-bold uppercase text-[#C1FF00] bg-[#C1FF00]/10 hover:bg-[#C1FF00] hover:text-black transition-all rounded cursor-pointer"
@@ -9884,12 +13075,78 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
 
                       <button 
                         id="btn-print-command"
-                        onClick={() => window.print()}
-                        className="mt-6 bg-[#C1FF00] hover:bg-white text-black font-black uppercase text-xs tracking-wider px-6 py-3 font-mono flex items-center gap-1.5"
+                        onClick={handlePrintQrCard}
+                        className="mt-6 bg-[#C1FF00] hover:bg-white text-black font-black uppercase text-xs tracking-wider px-6 py-3 font-mono flex items-center gap-1.5 cursor-pointer"
                       >
                         <Printer className="w-4 h-4" />
                         <span>🖨️ ካርዱን አትም (Print Card)</span>
                       </button>
+
+                      {/* Print History Log below #btn-print-command */}
+                      <div className="w-full mt-6 pt-5 border-t border-white/10 text-left space-y-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <div>
+                            <h5 className="text-xs font-black uppercase tracking-wider text-white flex items-center gap-1.5">
+                              <span>🧾 የQR ህትመት ታሪክ (Print History)</span>
+                              <span className="px-2 py-0.5 rounded bg-white/10 text-[#C1FF00] font-mono text-[10px] tabular-nums">
+                                {qrPrintLogs.length}
+                              </span>
+                            </h5>
+                            <p className="text-[10px] text-white/50 font-mono">
+                              የታተሙ QR ኮዶች፣ ያተመው ሰራተኛ እና ሰዓት መከታተያ
+                            </p>
+                          </div>
+                          {qrPrintLogs.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => setQrPrintLogs([])}
+                              className="px-2.5 py-1 rounded border border-white/15 bg-black/40 hover:bg-red-600/20 hover:border-red-500/40 text-white/60 hover:text-red-300 font-mono text-[10px] uppercase cursor-pointer transition-colors"
+                            >
+                              Clear Log
+                            </button>
+                          )}
+                        </div>
+
+                        {qrPrintLogs.length === 0 ? (
+                          <div className="bg-black/40 border border-dashed border-white/10 rounded-xl py-6 px-4 text-center text-[11px] font-mono text-white/40">
+                            No QR cards printed yet. Click &quot;Print Card&quot; above to record print history.
+                          </div>
+                        ) : (
+                          <div className="overflow-x-auto bg-black/40 border border-white/10 rounded-xl">
+                            <table className="w-full text-left border-collapse text-[11px]">
+                              <thead>
+                                <tr className="border-b border-white/10 text-[9px] font-mono uppercase text-white/50">
+                                  <th className="py-2 px-3">QR Code / ቦታ</th>
+                                  <th className="py-2 px-3">ያተመው / Printed By</th>
+                                  <th className="py-2 px-3 text-right">ቀን እና ሰዓት / When</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-white/5">
+                                {qrPrintLogs.map((entry) => (
+                                  <tr key={entry.id} className="hover:bg-white/[0.03]">
+                                    <td className="py-2 px-3 font-mono">
+                                      <span className="font-black text-[#C1FF00] block">{entry.location}</span>
+                                      <span className="text-[9px] text-white/40 truncate block max-w-[220px]">
+                                        {entry.qrUrl}
+                                      </span>
+                                    </td>
+                                    <td className="py-2 px-3">
+                                      <span className="font-bold text-white block">{entry.printedByName}</span>
+                                      <span className="text-[9px] font-mono uppercase text-white/50">
+                                        {entry.printedByRole}
+                                      </span>
+                                    </td>
+                                    <td className="py-2 px-3 text-right font-mono tabular-nums">
+                                      <span className="font-bold text-white/90 block">{entry.time}</span>
+                                      <span className="text-[9px] text-white/50">{entry.date}</span>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </div>
                 )}
@@ -9964,32 +13221,6 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                       </p>
                                     </div>
                                   )}
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                          <div>
-                            <label className="text-[9px] font-mono text-white/40 uppercase block mb-1">የቪዲዮ አድራሻ (MP4 DIRECT VIDEO URL)</label>
-                            <div className="space-y-2">
-                              <input 
-                                type="text" 
-                                value={editingPromo.video || ''}
-                                onChange={(e) => setEditingPromo({ ...editingPromo, video: e.target.value })}
-                                placeholder="https://assets.mixkit.co/... (optional)"
-                                className="w-full bg-[#181818] border border-[#ff007f]/40 text-white text-xs p-2.5 outline-none focus:border-[#ff007f]"
-                              />
-                              <label className="block text-center bg-[#1D1216] border border-dashed border-[#ff007f]/40 text-[#ff007f] hover:border-[#ff007f] font-mono text-[10px] font-bold py-2 px-3 rounded cursor-pointer transition-colors">
-                                📂 አዲስ ቪዲዮ ለመቀየር ፋይል ይምረጡ (Select Video Backdrop)
-                                <input 
-                                  type="file" 
-                                  accept="video/*" 
-                                  className="hidden" 
-                                  onChange={(e) => readMediaFile(e, (base64) => setEditingPromo({ ...editingPromo, video: base64 }))} 
-                                />
-                              </label>
-                              {editingPromo.video && (
-                                <div className="text-[10px] text-green-400 font-mono text-center">
-                                  ✓ Video selected (Base64 / URL)
                                 </div>
                               )}
                             </div>
@@ -10098,44 +13329,6 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                               )}
                             </div>
                           </div>
-                          <div>
-                            <label className="text-[9px] font-mono text-white/40 uppercase block mb-1">የቪዲዮ አድራሻ (MP4 DIRECT VIDEO URL)</label>
-                            <div className="space-y-2">
-                              <input 
-                                type="text" 
-                                id="promo-video"
-                                value={addPromoVideo}
-                                onChange={(e) => setAddPromoVideo(e.target.value)}
-                                placeholder="https://assets.mixkit.co/... (optional)"
-                                className="w-full bg-[#181818] border border-white/10 text-white text-xs p-2.5 outline-none focus:border-[#C1FF00]"
-                              />
-                              <div className="flex gap-2 items-center">
-                                <label className="flex-1 text-center bg-[#1D1D16] border border-dashed border-[#C1FF00]/40 text-[#C1FF00] hover:border-[#C1FF00] font-mono text-[10px] font-bold py-2 px-3 rounded cursor-pointer transition-colors">
-                                  📂 ቪዲዮ ከስልክ/ኮምፒውተር ይጫኑ (Upload Video)
-                                  <input 
-                                    type="file" 
-                                    accept="video/*" 
-                                    className="hidden" 
-                                    onChange={(e) => readMediaFile(e, (base64) => setAddPromoVideo(base64))} 
-                                  />
-                                </label>
-                                {addPromoVideo && (
-                                  <button 
-                                    type="button" 
-                                    onClick={() => setAddPromoVideo('')}
-                                    className="px-3 py-2 bg-red-950 text-red-100 border border-red-900 text-[10px] rounded"
-                                  >
-                                    RESET
-                                  </button>
-                                )}
-                              </div>
-                              {addPromoVideo && (
-                                <div className="text-[10px] text-lime-400 font-mono text-center">
-                                  ✓ Video selected ({addPromoVideo.substring(0, 30)}...)
-                                </div>
-                              )}
-                            </div>
-                          </div>
                           
                           <button 
                             type="submit" 
@@ -10163,9 +13356,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                               <div className="flex items-start gap-3 flex-1 min-w-0">
                                 {/* Small Visual Thumbnail Indicator */}
                                 <div className="w-16 h-16 shrink-0 bg-slate-900 border border-white/10 rounded overflow-hidden flex items-center justify-center">
-                                  {p.video ? (
-                                    <div className="text-xs">📽️ MP4</div>
-                                  ) : p.poster ? (
+                                  {p.poster ? (
                                     <img src={p.poster} className="w-full h-full object-cover" alt="Thumb" referrerPolicy="no-referrer" />
                                   ) : (
                                     <div className="text-xs">% TEXT</div>
@@ -10973,17 +14164,17 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                             <p className="text-[10px] text-white/40">ከእንግዶች ክፍሎች በቀጥታ የሚመጡ የድጋፍ ጥሪዎች።</p>
                           </div>
                           <span className="bg-emerald-950 text-emerald-400 px-2.5 py-0.5 rounded text-[10px] font-mono animate-pulse">
-                            {assistanceCalls.filter(c => c.active).length} CALL ACTIVE
+                            {deduplicateAssistanceCalls(assistanceCalls).filter(c => c.active && c.type !== 'new_order').length} CALL ACTIVE
                           </span>
                         </div>
 
-                        {assistanceCalls.filter(c => c.active).length === 0 ? (
+                        {deduplicateAssistanceCalls(assistanceCalls).filter(c => c.active && c.type !== 'new_order').length === 0 ? (
                           <div className="text-center py-6 text-white/20 text-xs">
                             <p>🎈 ምንም ገባሪ የድጋፍ ጥሪ የለም።</p>
                           </div>
                         ) : (
                           <div className="space-y-2">
-                            {assistanceCalls.filter(c => c.active).map(call => (
+                            {deduplicateAssistanceCalls(assistanceCalls).filter(c => c.active && c.type !== 'new_order').map(call => (
                               <div key={call.id} className="bg-emerald-950/20 border border-emerald-500/20 p-3 flex justify-between items-center mr-1">
                                 <div className="flex items-center gap-3">
                                   <span className="text-lg animate-bounce">🛎️</span>
@@ -11078,8 +14269,8 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                     <span className="text-[#C1FF00] font-bold">{b.contactPhone}</span>
                                   </div>
                                   <div>
-                                    <span className="text-white/40 block text-[9px] uppercase">RATE / ዋጋ</span>
-                                    <span className="text-white font-bold">{b.pricePerNight} Birr/ቀን</span>
+                                    <span className="text-white/40 block text-[9px] uppercase">{tText({ am: 'ዋጋ', en: 'Rate', or: 'Gatii', ti: 'ዋጋ', sid: 'Waga', fr: 'Tarif', de: 'Preis', it: 'Tariffa', zh: '房价', ar: 'السعر' })}</span>
+                                    <span className="text-white font-bold">{b.pricePerNight} {currency}/{tText({ am: 'ቀን', en: 'night', or: 'halkan', ti: 'ለይቲ', sid: 'hashsha', fr: 'nuit', de: 'Nacht', it: 'notte', zh: '晚', ar: 'ليلة' })}</span>
                                   </div>
                                   <div className="mt-1">
                                     <span className="text-white/40 block text-[9px] uppercase">CHECK-IN</span>
@@ -11441,127 +14632,32 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                   </div>
                 )}
 
-                {/* TAB CONTENT: ADMIN TABLE ASSIGNMENTS */}
+                {/* TAB CONTENT: CENTRALIZED SHIFT MANAGEMENT (WAITERS & CHEFS — TABLES & ROOMS) */}
                 {activeAdminTab === 'table_assignment' && (
-                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 text-left font-sans">
-                    {/* Add Assignment Form */}
-                    <div className="lg:col-span-4 bg-[#121212] border border-white/10 p-5 rounded-xl space-y-4">
-                      <div className="border-b border-white/5 pb-2">
-                        <span className="text-[9px] text-yellow-400 font-mono font-bold tracking-wider block uppercase">ROSTER & ASSIGNMENT</span>
-                        <h3 className="text-xs font-black text-white uppercase mt-0.5">📋 አዲስ ጠረጴዛ መደብ (Assign Table to Waiter)</h3>
-                        <p className="text-[10px] text-stone-400 mt-1">
-                          ለአስተናጋጆች በእለቱ የሚያገለግሉበትን የጠረጴዛ ቁጥር እዚህ ጋር መመደብ ይችላሉ።
-                        </p>
-                      </div>
-
-                      <form onSubmit={(e) => {
-                        e.preventDefault();
-                        const waiter = (e.currentTarget.querySelector('#admin-assign-waiter-select') as HTMLSelectElement).value;
-                        const table = (e.currentTarget.querySelector('#admin-assign-table-input') as HTMLInputElement).value.trim();
-                        if (!waiter || !table) {
-                          alert('እባክዎ መጀመሪያ አስተናጋጅ እና የጠረጴዛ ቁጥር ይምረጡ/ያስገቡ!');
-                          return;
-                        }
-
-                        // Add new assignment
-                        const newAssignment: TableAssignment = {
-                          id: 'ta-' + Date.now(),
-                          waiterName: waiter,
-                          tableNumber: table,
-                          date: new Date().toLocaleDateString('en-US')
-                        };
-
-                        setTableAssignments(prev => [...prev, newAssignment]);
-                        alert(`👍 ጠረጴዛ ${table} ለአስተናጋጅ ${waiter} በተሳካ ሁኔታ ተመድቧል!`);
-                      }} className="space-y-4">
-                        <div>
-                          <label className="text-[9px] font-mono text-white/40 uppercase block mb-1">🏃 አስተናጋጅ ይምረጡ (Select Waiter)</label>
-                          <select
-                            id="admin-assign-waiter-select"
-                            className="w-full bg-[#181818] border border-white/10 text-white text-xs font-bold p-2.5 outline-none focus:border-yellow-400"
-                            required
-                          >
-                            <option key="unassigned" value="">-- አስተናጋጅ ይምረጡ --</option>
-                            {staff.filter(s => (s.role || '').toLowerCase() === 'waiter' || (s.accessPrivilege || '').toLowerCase() === 'waiter').map((w, idx) => (
-                              <option key={`admin-waiter-${w.id || w.name || idx}`} value={w.name}>{w.name} (PIN: {w.pin})</option>
-                            ))}
-                          </select>
-                        </div>
-
-                        <div>
-                          <label className="text-[9px] font-mono text-white/40 uppercase block mb-1">🍽️ የጠረጴዛ ቁጥር (Table Location)</label>
-                          <input
-                            type="text"
-                            id="admin-assign-table-input"
-                            placeholder="e.g. Table 05"
-                            defaultValue="Table 05"
-                            className="w-full bg-[#181818] border border-white/10 text-white text-xs font-bold p-2.5 outline-none focus:border-yellow-400"
-                            required
-                          />
-                          <p className="text-[9px] text-stone-500 font-mono mt-1">
-                            ማስታወሻ፡ እንደ "Table 05"፣ "Table 04" አድርገው ቢጽፉ ይመረጣል።
-                          </p>
-                        </div>
-
-                        <button 
-                          type="submit"
-                          className="w-full bg-yellow-400 hover:bg-white text-black text-xs font-black uppercase py-2.5 font-mono cursor-pointer transition-all border border-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]"
-                        >
-                          ASSIGN TABLE | መደብ 💾
-                        </button>
-                      </form>
-                    </div>
-
-                    {/* Active Assignments List */}
-                    <div className="lg:col-span-8 bg-[#121212] border border-white/10 p-5 rounded-xl space-y-4">
-                      <div className="border-b border-white/5 pb-2">
-                        <span className="text-[9px] text-yellow-400 font-mono font-bold tracking-wider block uppercase">ACTIVE ASSIGNMENTS</span>
-                        <h3 className="text-xs font-black text-white uppercase mt-0.5">📋 የዛሬው የጠረጴዛ ምደባዎች ዝርዝር</h3>
-                      </div>
-
-                      {tableAssignments.length === 0 ? (
-                        <div className="text-center py-12 text-stone-500 font-mono text-xs uppercase">
-                          ምንም የጠረጴዛ ምደባ አልተደረገም! (No tables assigned yet today)
-                        </div>
-                      ) : (
-                        <div className="overflow-x-auto">
-                          <table className="w-full text-left border-collapse text-xs">
-                            <thead>
-                              <tr className="border-b border-white/15 text-stone-400 uppercase font-mono text-[9px]">
-                                <th className="pb-2">👤 አስተናጋጅ (Waiter)</th>
-                                <th className="pb-2">🍽️ የጠረጴዛ ቁጥር (Table)</th>
-                                <th className="pb-2">📅 ቀን (Date)</th>
-                                <th className="pb-2 text-right">እርምጃ (Action)</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {tableAssignments.map((ta) => (
-                                <tr key={ta.id} className="border-b border-white/5 hover:bg-white/5">
-                                  <td className="py-3 font-bold text-white">{ta.waiterName}</td>
-                                  <td className="py-3 font-mono font-black text-yellow-400">{ta.tableNumber}</td>
-                                  <td className="py-3 font-mono text-stone-400">{ta.date}</td>
-                                  <td className="py-3 text-right">
-                                    <button
-                                      onClick={() => {
-                                        setTableAssignments(prev => prev.filter(item => item.id !== ta.id));
-                                        alert('ምደባው ተሰርዟል!');
-                                      }}
-                                      className="px-2 py-1 bg-red-600/10 hover:bg-red-600 border border-red-500/20 hover:border-red-600 text-red-400 hover:text-white rounded text-[10px] font-bold font-mono transition-colors"
-                                    >
-                                      DELETE
-                                    </button>
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      )}
-                    </div>
-                  </div>
+                  <ShiftManagementModule
+                    staff={staff}
+                    shiftAssignments={shiftAssignments}
+                    onSaveShiftAssignments={handleSaveShiftAssignments}
+                    orders={orders}
+                    roomBookings={roomBookings}
+                    currentManagerName={currentUser?.name || 'System Admin'}
+                    appLang={appLang}
+                  />
                 )}
 
-
+                {/* TAB CONTENT: LEADERSHIP & SUPPORT INBOX */}
+                {activeAdminTab === 'leadership' && (
+                  <LeadershipInboxPanel
+                    portalRole="admin"
+                    currentStaffName={currentUser?.name || leadershipContacts.gmName}
+                    messages={leadershipMessages}
+                    onReplyMessage={handleReplyLeadershipMessage}
+                    onResolveMessage={handleResolveLeadershipMessage}
+                    onDeleteMessage={handleDeleteLeadershipMessage}
+                    contacts={leadershipContacts}
+                    onSaveContacts={setLeadershipContacts}
+                  />
+                )}
 
               </motion.div>
             )}
@@ -11577,48 +14673,203 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                 className="max-w-6xl mx-auto w-full flex flex-col gap-6"
               >
                 {/* Manager Header */}
-                <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 bg-gradient-to-r from-[#1E1C10] via-black to-[#121212] border border-yellow-500/20 p-5 rounded-xl relative overflow-hidden shadow-[4px_4px_0_0_#ca8a04]">
-                  <div className="absolute top-0 right-0 w-32 h-32 bg-yellow-400/5 rounded-full blur-2xl pointer-events-none"></div>
+                <div className="papyrus-menu-hero border-b-4 p-5 rounded-3xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4 relative overflow-hidden">
                   <div className="flex items-center gap-4 relative z-10">
-                    <div className="w-14 h-14 bg-yellow-400 text-black flex items-center justify-center rounded-none font-black text-xl shadow-md border border-black">
+                    <div className="hero-gold-badge w-14 h-14 flex items-center justify-center rounded-2xl font-black text-2xl shadow-md border-2">
                       👑
                     </div>
                     <div>
                       <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-[8px] bg-yellow-400 text-black font-mono font-black uppercase px-2 py-0.5 rounded">
+                        <span className="hero-gold-badge text-[9px] font-mono font-black uppercase px-2 py-0.5 rounded-lg border">
                           SENIOR MANAGER
                         </span>
-                        <span className="text-[9px] text-white/50 font-mono">AUTHORIZED SESSION</span>
+                        <span className="text-[10px] text-white/80 font-mono">AUTHORIZED SESSION</span>
                         {syncError && (
-                          <span className="text-[8px] bg-red-600/20 text-red-400 font-mono font-bold uppercase px-2 py-0.5 rounded border border-red-500/20 animate-pulse">
+                          <span className="hero-subglass text-[9px] font-mono font-bold uppercase px-2 py-0.5 rounded-lg border">
                             ⚠️ SYNC WARNING
                           </span>
                         )}
                         {rlsBlockedKeys.length > 0 && !isRlsBannerDismissed && (
                           <span 
                             onClick={() => setIsRlsBannerDismissed(true)}
-                            className="text-[8px] bg-amber-600/20 text-amber-400 font-mono font-bold uppercase px-2 py-0.5 rounded border border-amber-500/20 animate-pulse cursor-pointer hover:bg-amber-600/30 transition-all"
+                            className="hero-subglass text-[8px] font-mono font-bold uppercase px-2 py-0.5 rounded-lg border cursor-pointer transition-all"
                             title="Click to dismiss"
                           >
-                            ⚠️ {rlsBlockedKeys.length} CLOUD KEYS LOCALIZED (RLS ACTIVE) <span className="text-[7px] text-amber-300/60 font-sans font-normal">(× Dismiss)</span>
+                            ⚠️ {rlsBlockedKeys.length} CLOUD KEYS LOCALIZED (RLS ACTIVE) <span className="text-[8px] opacity-80 font-sans font-normal">(× Dismiss)</span>
                           </span>
                         )}
                       </div>
-                      <h2 className="text-xl font-bold text-white tracking-tight uppercase mt-0.5">
+                      <h2 className="text-xl sm:text-2xl font-black text-white tracking-tight uppercase mt-1">
                         {currentUser?.name || "ኪያ ማሞ (Manager)"}
                       </h2>
-                      <p className="text-[11px] text-white/70">
+                      <p className="text-xs text-white/85">
                         የአስተናጋጆች የቦኖ ሽልማት እና የሰራተኞች አቴንዳንስ መቆጣጠሪያ ማዕከል
                       </p>
                     </div>
                   </div>
                   <button 
                     onClick={handleLogout}
-                    className="w-full md:w-auto h-10 bg-red-600 hover:bg-red-500 text-white font-mono text-xs uppercase font-black tracking-widest px-6 rounded flex items-center justify-center gap-2 transition-colors border-b-2 border-red-800 hover:border-red-600 cursor-pointer shadow-lg"
+                    className="hero-logout-btn w-full md:w-auto h-10 font-mono text-xs uppercase font-black tracking-widest px-6 rounded-xl flex items-center justify-center gap-2 transition-colors border cursor-pointer shadow-sm"
                   >
                     <LogOut className="w-4 h-4" /> LOGOUT | ውጣ 🚪
                   </button>
                 </div>
+
+                {/* REAL-TIME KITCHEN OUT-OF-STOCK MANAGER ALERT BANNER + QUICK WAITER CALL */}
+                {(() => {
+                  const depletedItems = menuItems.filter((m) => !m.available);
+                  const unackLogs = stockAlertLogs.filter((l) => !l.newAvailable && !l.acknowledged);
+                  const waiterList = staff.filter(
+                    (s) =>
+                      (s.role || '').toLowerCase() === 'waiter' ||
+                      (s.accessPrivilege || '').toLowerCase() === 'waiter',
+                  );
+                  const smsSummary = depletedItems
+                    .map((d) => `${d.nameAm} (${d.nameEn || d.nameAm})`)
+                    .join(', ');
+
+                  return (
+                    <div className="space-y-3 text-left">
+                      {(depletedItems.length > 0 || unackLogs.length > 0) && (
+                        <div className="bg-red-950/90 border-2 border-red-500 rounded-2xl p-4 md:p-5 space-y-3 shadow-[0_0_25px_rgba(239,68,68,0.28)]">
+                          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                            <div className="flex items-start gap-3">
+                              <span className="text-2xl shrink-0">🚨</span>
+                              <div>
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="bg-red-600 text-white text-[10px] font-mono font-black px-2 py-0.5 rounded uppercase">
+                                    KITCHEN STOCK ALERT • የኩሽና ማስጠንቀቂያ
+                                  </span>
+                                  {unackLogs.length > 0 && (
+                                    <span className="bg-yellow-400 text-black text-[10px] font-mono font-black px-2 py-0.5 rounded uppercase">
+                                      {unackLogs.length} አዲስ ያልታየ
+                                    </span>
+                                  )}
+                                </div>
+                                <h3 className="text-sm md:text-base font-black text-red-200 mt-1">
+                                  🔴 {depletedItems.length} የምግብ/መጠጥ ዓይነቶች «አልቋል (OUT OF STOCK)» ተብለዋል!
+                                </h3>
+                              </div>
+                            </div>
+
+                            <div className="flex flex-wrap items-center gap-2 shrink-0">
+                              <a
+                                href={`sms:${(stockAlertSettings.managerPhone || leadershipContacts.managerPhone || '').replace(/[^\d+]/g, '')}?body=${encodeURIComponent(`Papyrus Stock Alert: Out of stock items -> ${smsSummary}`)}`}
+                                className="px-3 py-1.5 rounded-xl bg-black/50 hover:bg-black text-white border border-red-400/50 text-[10px] font-mono font-bold uppercase cursor-pointer"
+                              >
+                                📱 SMS ላክ
+                              </a>
+                              {unackLogs.length > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={handleAcknowledgeAllStockAlerts}
+                                  className="px-3 py-1.5 rounded-xl bg-yellow-400 hover:bg-white text-black text-[10px] font-mono font-black uppercase cursor-pointer"
+                                >
+                                  ✓ ተመልክቻለሁ (Ack)
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => setManagerTab('menu_availability')}
+                                className="px-3 py-1.5 rounded-xl bg-red-600 hover:bg-red-500 text-white border border-red-300 text-[10px] font-mono font-black uppercase cursor-pointer"
+                              >
+                                🍽️ ዝርዝሩን ክፈት
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                            {depletedItems.map((d) => {
+                              const latestLog = stockAlertLogs.find(
+                                (l) => l.menuItemId === d.id && !l.newAvailable,
+                              );
+                              return (
+                                <div
+                                  key={d.id}
+                                  className="bg-black/55 border border-red-500/60 rounded-xl px-3 py-2 flex items-center justify-between gap-2"
+                                >
+                                  <div className="min-w-0">
+                                    <p className="text-xs font-black text-red-400 truncate">
+                                      🔴 {appLang === 'am' || appLang === 'ti' ? d.nameAm : d.nameEn || d.nameAm}
+                                    </p>
+                                    {latestLog && (
+                                      <p className="text-[10px] text-red-200/80 font-mono truncate">
+                                        {latestLog.changedByName} ({latestLog.changedByRole}) • {latestLog.time}
+                                      </p>
+                                    )}
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleToggleMenuItemAvailable(d.id)}
+                                    className="px-2 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[9px] font-mono font-black uppercase shrink-0 cursor-pointer"
+                                  >
+                                    ↺ አድስ
+                                  </button>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Direct Manager -> Waiter Audio Call Bar */}
+                      <form
+                        onSubmit={handleManagerCallWaiter}
+                        className="bg-[#121212] border border-yellow-500/25 rounded-2xl p-3.5 md:p-4 flex flex-col lg:flex-row lg:items-center gap-3"
+                      >
+                        <div className="shrink-0">
+                          <span className="text-[9px] text-yellow-400 font-mono font-black uppercase block">
+                            WAITER CALL DISPATCH
+                          </span>
+                          <h4 className="text-xs font-black text-white">
+                            🔔 አስተናጋጅ በድምፅ ጥራ (Call Waiter Audio Alert)
+                          </h4>
+                        </div>
+
+                        <div className="flex-1 grid grid-cols-1 sm:grid-cols-3 gap-2">
+                          <select
+                            value={managerWaiterCallTarget}
+                            onChange={(e) => setManagerWaiterCallTarget(e.target.value)}
+                            className="bg-black/70 border border-white/15 rounded-xl px-2.5 py-2 text-xs text-white outline-none focus:border-yellow-400"
+                          >
+                            <option value="">🎯 በጠረጴዛው የተመደበ / ሁሉም አስተናጋጅ</option>
+                            {waiterList.map((w, idx) => (
+                              <option key={`mgr-call-w-${w.name}-${idx}`} value={w.name}>
+                                🏃 {w.name}
+                              </option>
+                            ))}
+                          </select>
+                          <input
+                            type="text"
+                            value={managerWaiterCallLocation}
+                            onChange={(e) => setManagerWaiterCallLocation(e.target.value)}
+                            placeholder="Table 01 / Room 101"
+                            className="bg-black/70 border border-white/15 rounded-xl px-2.5 py-2 text-xs text-white outline-none focus:border-yellow-400"
+                          />
+                          <input
+                            type="text"
+                            value={managerWaiterCallNote}
+                            onChange={(e) => setManagerWaiterCallNote(e.target.value)}
+                            placeholder="መልዕክት / Instruction (አማራጭ)"
+                            className="bg-black/70 border border-white/15 rounded-xl px-2.5 py-2 text-xs text-white outline-none focus:border-yellow-400"
+                          />
+                        </div>
+
+                        <button
+                          type="submit"
+                          className="px-4 py-2 rounded-xl bg-yellow-400 hover:bg-white text-black font-mono text-[11px] font-black uppercase tracking-wider shrink-0 cursor-pointer transition-colors"
+                        >
+                          🔊 ጥሪ ላክ (Call)
+                        </button>
+                      </form>
+                      {managerWaiterCallFeedback && (
+                        <div className="bg-emerald-950/60 border border-emerald-500/40 text-emerald-300 text-xs font-bold px-3.5 py-2 rounded-xl">
+                          {managerWaiterCallFeedback}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
 
                 {/* Manager Quick Hub Dashboard */}
                 <div className="bg-[#121212]/80 border border-white/10 p-5 rounded-2xl space-y-4 text-left">
@@ -11671,19 +14922,19 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                       {
                         id: 'menu_availability',
                         titleAm: 'የምግብ መኖር/ማለቅ',
-                        titleEn: 'Stock Control',
-                        icon: '🍽️',
+                        titleEn: 'Stock Alert Console',
+                        icon: menuItems.some(m => !m.available) ? '🔴' : '🍽️',
                         desc: 'የተዘጋጁ/ያለቁ ምግቦች መለያ',
                         badge: `${menuItems.filter(m => !m.available).length} ያለቀባቸው`,
-                        badgeClass: menuItems.filter(m => !m.available).length > 0 ? 'bg-red-500/20 text-red-400 border border-red-500/30' : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                        badgeClass: menuItems.filter(m => !m.available).length > 0 ? 'bg-red-600 text-white border border-red-400 font-black' : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
                       },
                       {
                         id: 'table_assignment',
-                        titleAm: 'ጠረጴዛ መመደቢያ',
-                        titleEn: 'Table Assignments',
-                        icon: '📋',
-                        desc: 'ለአስተናጋጅ ጠረጴዛ መደብ',
-                        badge: `${tableAssignments.length} የተመደበ`,
+                        titleAm: 'የፈረቃ እና ምደባ ማዕከል',
+                        titleEn: 'Shift Management',
+                        icon: '📅',
+                        desc: 'ለአስተናጋጅና ሼፍ ጠረጴዛ/ክፍል መደብ',
+                        badge: `${shiftAssignments.filter(a => a.active).length} የተመደበ`,
                         badgeClass: 'bg-purple-400/10 text-purple-400 border border-purple-500/20'
                       },
                       {
@@ -11694,6 +14945,17 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                         desc: 'ስፓምና የቆዩ ሎጎችን ማጽጃ',
                         badge: 'ጽዳት ረዳት',
                         badgeClass: 'bg-red-500/10 text-red-400 border border-red-500/20'
+                      },
+                      {
+                        id: 'leadership',
+                        titleAm: 'ማናጀር / ስራ አስኪያጅ / Support',
+                        titleEn: 'Leadership & Support',
+                        icon: '👔',
+                        desc: 'የእንግዶች ቀጥታ መልዕክትና መገናኛ',
+                        badge: `${leadershipMessages.filter((m) => m.status === 'Pending' && (m.target === 'manager' || m.target === 'support' || m.target === 'both')).length} አዲስ`,
+                        badgeClass: leadershipMessages.some((m) => m.status === 'Pending' && (m.target === 'manager' || m.target === 'support' || m.target === 'both'))
+                          ? 'bg-red-500/20 text-red-300 border border-red-500/40 animate-pulse'
+                          : 'bg-amber-400/10 text-amber-300 border border-amber-500/20'
                       },
                       {
                         id: 'cache',
@@ -11788,13 +15050,20 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                   </button>
                   <button 
                     onClick={() => setManagerTab('menu_availability')}
-                    className={`px-5 py-3 font-mono text-[11px] uppercase font-black tracking-widest border-b-2 transition-all shrink-0 cursor-pointer ${
+                    className={`px-5 py-3 font-mono text-[11px] uppercase font-black tracking-widest border-b-2 transition-all shrink-0 cursor-pointer flex items-center gap-2 ${
                       managerTab === 'menu_availability' 
-                        ? 'border-yellow-400 text-yellow-400 bg-yellow-400/5' 
-                        : 'border-transparent text-white/60 hover:text-white hover:bg-white/5'
+                        ? 'border-red-500 text-red-300 bg-red-500/10' 
+                        : menuItems.some((m) => !m.available)
+                          ? 'border-red-500/50 text-red-400 bg-red-950/40 hover:bg-red-950/60'
+                          : 'border-transparent text-white/60 hover:text-white hover:bg-white/5'
                     }`}
                   >
-                    🍽️ የምግብ መኖር/ማለቅ (STOCK CONTROL)
+                    <span>{menuItems.some((m) => !m.available) ? '🔴' : '🍽️'} የምግብ መኖር/ማለቅ (STOCK CONTROL)</span>
+                    {menuItems.some((m) => !m.available) && (
+                      <span className="bg-red-600 text-white text-[9px] px-1.5 py-0.5 rounded font-black tabular-nums">
+                        {menuItems.filter((m) => !m.available).length}
+                      </span>
+                    )}
                   </button>
                   <button 
                     onClick={() => setManagerTab('table_assignment')}
@@ -11804,7 +15073,17 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                         : 'border-transparent text-white/60 hover:text-white hover:bg-white/5'
                     }`}
                   >
-                    📋 ለአስተናጋጆች ጠረጴዛ መመደቢያ (TABLE ASSIGNMENTS)
+                    📅 የፈረቃና ምደባ ማዕከል (SHIFT MANAGEMENT)
+                  </button>
+                  <button 
+                    onClick={() => setManagerTab('leadership')}
+                    className={`px-5 py-3 font-mono text-[11px] uppercase font-black tracking-widest border-b-2 transition-all shrink-0 cursor-pointer ${
+                      managerTab === 'leadership' 
+                        ? 'border-yellow-400 text-yellow-400 bg-yellow-400/5' 
+                        : 'border-transparent text-white/60 hover:text-white hover:bg-white/5'
+                    }`}
+                  >
+                    👔 ማናጀር / ስራ አስኪያጅ / Support መገናኛ
                   </button>
                 </div>
 
@@ -11837,15 +15116,15 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                         </div>
 
                         <div>
-                          <label className="text-[9px] font-mono text-white/40 uppercase block mb-1">የቦኖ መጠን (BONUS AMOUNT - ETB)</label>
+                          <label className="text-[9px] font-mono text-white/40 uppercase block mb-1">{tText({ am: 'የቦኖ መጠን', en: 'Bonus Amount', or: 'Hanga Boono', ti: 'መጠን ቦኖ', sid: 'Boono Kiiro', fr: 'Montant du bonus', de: 'Bonusbetrag', it: 'Importo bonus', zh: '奖金金额', ar: 'مبلغ المكافأة' })} ({currency})</label>
                           <div className="relative">
-                            <span className="absolute left-3 top-2.5 font-mono text-xs text-white/40">ETB</span>
+                            <span className="absolute left-3 top-2.5 font-mono text-xs text-white/40">{currency}</span>
                             <input 
                               type="number" 
                               required
                               value={bonusAmount}
                               onChange={(e) => setBonusAmount(e.target.value)}
-                              className="w-full bg-[#181818] border border-white/10 text-white font-mono text-sm p-2.5 pl-12 outline-none focus:border-yellow-400"
+                              className="w-full bg-[#181818] border border-white/10 text-white font-mono text-sm p-2.5 pl-14 outline-none focus:border-yellow-400"
                               placeholder="500"
                             />
                           </div>
@@ -11858,7 +15137,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                 onClick={() => setBonusAmount(preset)}
                                 className="px-2.5 py-1 bg-white/5 border border-white/10 hover:border-yellow-400 hover:text-yellow-400 text-[10px] font-mono transition-colors rounded cursor-pointer shrink-0"
                               >
-                                {preset} Br
+                                {preset} {currency}
                               </button>
                             ))}
                           </div>
@@ -11938,7 +15217,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                     <p className="text-[10px] text-white/50 truncate italic">“{b.reason}”</p>
                                   </div>
                                   <div className="text-right shrink-0">
-                                    <span className="font-mono text-sm font-black text-yellow-400">+{b.amount} Br</span>
+                                    <span className="font-mono text-sm font-black text-yellow-400">+{b.amount} {currency}</span>
                                     <span className="text-[8px] text-white/30 block font-mono">{b.date}</span>
                                   </div>
                                 </div>
@@ -11990,8 +15269,8 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
 
                               <div className="my-2 bg-neutral-100 p-2 border border-neutral-200">
                                 <div className="text-[9px] text-neutral-500 uppercase">AMOUNT REWARDED</div>
-                                <div className="text-2xl font-black text-neutral-900 mt-0.5">{activeBonusReceipt.amount}.00 ETB</div>
-                                <div className="text-[8px] text-neutral-600 uppercase mt-1">የቦኖ መጠን (ብር)</div>
+                                <div className="text-2xl font-black text-neutral-900 mt-0.5">{activeBonusReceipt.amount}.00 {currency}</div>
+                                <div className="text-[8px] text-neutral-600 uppercase mt-1">{tText({ am: 'የቦኖ መጠን', en: 'Bonus Amount', or: 'Hanga Boono', ti: 'መጠን ቦኖ', sid: 'Boono Kiiro', fr: 'Montant du bonus', de: 'Bonusbetrag', it: 'Importo bonus', zh: '奖金金额', ar: 'مبلغ المكافأة' })} ({currency})</div>
                               </div>
 
                               <div className="text-left text-[9px] italic leading-tight border-b border-neutral-200 pb-2">
@@ -12290,7 +15569,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                             onChange={(e) => setAttFilterStaff(e.target.value)}
                             className="w-full bg-[#181818] border border-white/10 rounded-lg p-2 text-xs text-white outline-none focus:border-[#C1FF00] font-medium"
                           >
-                            <option key="all" value="all">{appLang === 'am' ? 'ሁሉም ሰራተኞች' : 'All Staff Members'}</option>
+                            <option key="all" value="all">{tText({ am: 'ሁሉም ሰራተኞች', en: 'All Staff Members', or: 'Hojjettoota Hunda', ti: 'ኩሎም ሰራሕተኛታት', sid: 'Loosaasine Baala', fr: 'Tout le personnel', de: 'Alle Mitarbeiter', it: 'Tutto lo staff', zh: '所有员工', ar: 'جميع الموظفين' })}</option>
                             {staff.map((s, sIdx) => (
                               <option key={`att-staff-${s.id || s.name || sIdx}`} value={s.name}>{s.name}</option>
                             ))}
@@ -12299,13 +15578,13 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
 
                         {/* Year Filter */}
                         <div className="space-y-1">
-                          <label className="text-[9px] text-stone-400 font-mono block uppercase">በዓመት (BY YEAR)</label>
+                          <label className="text-[9px] text-stone-400 font-mono block uppercase">{tText({ am: 'በዓመት', en: 'By Year', or: 'Baraan', ti: 'ብዓመት', sid: 'Dirunni', fr: 'Par année', de: 'Nach Jahr', it: 'Per anno', zh: '按年份', ar: 'حسب السنة' })}</label>
                           <select
                             value={attFilterYear}
                             onChange={(e) => setAttFilterYear(e.target.value)}
                             className="w-full bg-[#181818] border border-white/10 rounded-lg p-2 text-xs text-white outline-none focus:border-[#C1FF00] font-medium"
                           >
-                            <option value="all">{appLang === 'am' ? 'ሁሉም ዓመታት' : 'All Years'}</option>
+                            <option value="all">{tText({ am: 'ሁሉም ዓመታት', en: 'All Years', or: 'Waggaa Hunda', ti: 'ኩሎም ዓመታት', sid: 'Diro Baala', fr: 'Toutes les années', de: 'Alle Jahre', it: 'Tutti gli anni', zh: '所有年份', ar: 'كل السنوات' })}</option>
                             <option value="2025">2025</option>
                             <option value="2026">2026</option>
                             <option value="2027">2027</option>
@@ -12315,37 +15594,37 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
 
                         {/* Month Filter */}
                         <div className="space-y-1">
-                          <label className="text-[9px] text-stone-400 font-mono block uppercase">በወር (BY MONTH)</label>
+                          <label className="text-[9px] text-stone-400 font-mono block uppercase">{tText({ am: 'በወር', en: 'By Month', or: 'Ji’aan', ti: 'ብወርሒ', sid: 'Aganunni', fr: 'Par mois', de: 'Nach Monat', it: 'Per mese', zh: '按月份', ar: 'حسب الشهر' })}</label>
                           <select
                             value={attFilterMonth}
                             onChange={(e) => setAttFilterMonth(e.target.value)}
                             className="w-full bg-[#181818] border border-white/10 rounded-lg p-2 text-xs text-white outline-none focus:border-[#C1FF00] font-medium"
                           >
-                            <option value="all">{appLang === 'am' ? 'ሁሉም ወራት' : 'All Months'}</option>
-                            <option value="01">01 - ጃንዋሪ (January)</option>
-                            <option value="02">02 - ፌብሩዋሪ (February)</option>
-                            <option value="03">03 - ማርች (March)</option>
-                            <option value="04">04 - ኤፕሪል (April)</option>
-                            <option value="05">05 - ሜይ (May)</option>
-                            <option value="06">06 - ጁን (June)</option>
-                            <option value="07">07 - ጁላይ (July)</option>
-                            <option value="08">08 - ኦገስት (August)</option>
-                            <option value="09">09 - ሴፕቴምበር (September)</option>
-                            <option value="10">10 - ኦክቶበር (October)</option>
-                            <option value="11">11 - ኖቬምበር (November)</option>
-                            <option value="12">12 - ዲሴምበር (December)</option>
+                            <option value="all">{tText({ am: 'ሁሉም ወራት', en: 'All Months', or: 'Ji’oota Hunda', ti: 'ኩሎም ኣዋርሕ', sid: 'Agana Baala', fr: 'Tous les mois', de: 'Alle Monate', it: 'Tutti i mesi', zh: '所有月份', ar: 'كل الأشهر' })}</option>
+                            <option value="01">01 - January</option>
+                            <option value="02">02 - February</option>
+                            <option value="03">03 - March</option>
+                            <option value="04">04 - April</option>
+                            <option value="05">05 - May</option>
+                            <option value="06">06 - June</option>
+                            <option value="07">07 - July</option>
+                            <option value="08">08 - August</option>
+                            <option value="09">09 - September</option>
+                            <option value="10">10 - October</option>
+                            <option value="11">11 - November</option>
+                            <option value="12">12 - December</option>
                           </select>
                         </div>
 
                         {/* Day Filter */}
                         <div className="space-y-1">
-                          <label className="text-[9px] text-stone-400 font-mono block uppercase">በቀን (BY DAY)</label>
+                          <label className="text-[9px] text-stone-400 font-mono block uppercase">{tText({ am: 'በቀን', en: 'By Day', or: 'Guyyaan', ti: 'ብመዓልቲ', sid: 'Barrunni', fr: 'Par jour', de: 'Nach Tag', it: 'Per giorno', zh: '按日期', ar: 'حسب اليوم' })}</label>
                           <select
                             value={attFilterDay}
                             onChange={(e) => setAttFilterDay(e.target.value)}
                             className="w-full bg-[#181818] border border-white/10 rounded-lg p-2 text-xs text-white outline-none focus:border-[#C1FF00] font-medium"
                           >
-                            <option value="all">{appLang === 'am' ? 'ሁሉም ቀናት' : 'All Days'}</option>
+                            <option value="all">{tText({ am: 'ሁሉም ቀናት', en: 'All Days', or: 'Guyyoota Hunda', ti: 'ኩሎም መዓልታት', sid: 'Barruwa Baala', fr: 'Tous les jours', de: 'Alle Tage', it: 'Tutti i giorni', zh: '所有日期', ar: 'كل الأيام' })}</option>
                             {Array.from({ length: 31 }, (_, i) => {
                               const val = String(i + 1).padStart(2, '0');
                               return (
@@ -12520,16 +15799,16 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                             <div className="space-y-4">
                               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                                 <div className="bg-black/30 border border-white/5 p-4 rounded-lg">
-                                  <span className="text-[9px] text-white/40 block">TODAY'S TOTAL</span>
-                                  <span className="text-xl font-mono font-bold text-white">{totalSales} ብር</span>
+                                  <span className="text-[9px] text-white/40 block uppercase">{tText({ am: 'የዛሬ ጠቅላላ', en: "Today's Total", or: 'Ida’ama Har’aa', ti: 'ናይ ሎሚ ድምር', sid: 'Techo Xaphooma', fr: "Total du jour", de: 'Tagessumme', it: 'Totale odierno', zh: '今日总额', ar: 'إجمالي اليوم' })}</span>
+                                  <span className="text-xl font-mono font-bold text-white">{totalSales} {currency}</span>
                                 </div>
                                 <div className="bg-emerald-950/20 border border-emerald-900/30 p-4 rounded-lg">
-                                  <span className="text-[9px] text-emerald-400/60 block">CASH SALES</span>
-                                  <span className="text-xl font-mono font-bold text-emerald-400">{cashSales} ብር</span>
+                                  <span className="text-[9px] text-emerald-400/60 block uppercase">{tText({ am: 'በጥሬ ገንዘብ ሽያጭ', en: 'Cash Sales', or: 'Gurgurtaa Kaashii', ti: 'ብጥረ ገንዘብ', sid: 'Kaashete Hirro', fr: 'Ventes espèces', de: 'Barverkäufe', it: 'Vendite contanti', zh: '现金销售', ar: 'المبيعات النقدية' })}</span>
+                                  <span className="text-xl font-mono font-bold text-emerald-400">{cashSales} {currency}</span>
                                 </div>
                                 <div className="bg-sky-950/20 border border-sky-900/30 p-4 rounded-lg">
-                                  <span className="text-[9px] text-sky-400/60 block">BANK TRANSFERS</span>
-                                  <span className="text-xl font-mono font-bold text-sky-400">{bankSales} ብር</span>
+                                  <span className="text-[9px] text-sky-400/60 block uppercase">{tText({ am: 'በባንክ ዝውውር', en: 'Bank Transfers', or: 'Jijjiirraa Baankii', ti: 'ብባንኪ', sid: 'Baankete Soorro', fr: 'Virements bancaires', de: 'Banküberweisungen', it: 'Bonifici bancari', zh: '银行转账', ar: 'التحويلات البنكية' })}</span>
+                                  <span className="text-xl font-mono font-bold text-sky-400">{bankSales} {currency}</span>
                                 </div>
                               </div>
 
@@ -12574,7 +15853,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                                   </div>
                                                 )}
                                               </td>
-                                              <td className="py-3 text-right font-mono font-black text-white">{ord.total} ብር</td>
+                                              <td className="py-3 text-right font-mono font-black text-white">{ord.total} {currency}</td>
                                               <td className="py-3 text-center">
                                                 {ord.payment === 'cash' ? (
                                                   <span className="text-white/30 text-[9px] font-mono block">-</span>
@@ -12640,11 +15919,11 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
 
                                 return (
                                   <div key={mKey} className="bg-black/50 p-4 border border-white/5 rounded-xl space-y-3">
-                                    <h4 className="text-xs font-black text-white uppercase border-b border-white/5 pb-1">🌙 ወርሃዊ ድምር (Month {mKey})</h4>
+                                    <h4 className="text-xs font-black text-white uppercase border-b border-white/5 pb-1">🌙 {tText({ am: 'ወርሃዊ ድምር', en: 'Monthly Total', or: 'Ida’ama Ji’aa', ti: 'ወርሓዊ ድምር', sid: 'Aganu Xaphooma', fr: 'Total mensuel', de: 'Monatssumme', it: 'Totale mensile', zh: '月度总计', ar: 'الإجمالي الشهري' })} ({mKey})</h4>
                                     <div className="space-y-1.5 text-xs font-mono">
-                                      <div className="flex justify-between text-white/50"><span>Cash:</span> <span className="font-bold text-white">{mCash} ብር</span></div>
-                                      <div className="flex justify-between text-white/50"><span>Bank:</span> <span className="font-bold text-white">{mBank} ብር</span></div>
-                                      <div className="flex justify-between text-[#C1FF00] font-black border-t border-white/5 pt-1.5"><span>ጠቅላላ (Total):</span> <span>{mTotal} ብር</span></div>
+                                      <div className="flex justify-between text-white/50"><span>{tText({ am: 'ጥሬ ገንዘብ', en: 'Cash', or: 'Kaashii', ti: 'ጥረ ገንዘብ', sid: 'Kaashe', fr: 'Espèces', de: 'Bar', it: 'Contanti', zh: '现金', ar: 'نقدي' })}:</span> <span className="font-bold text-white">{mCash} {currency}</span></div>
+                                      <div className="flex justify-between text-white/50"><span>{tText({ am: 'ባንክ', en: 'Bank', or: 'Baankii', ti: 'ባንኪ', sid: 'Baanke', fr: 'Banque', de: 'Bank', it: 'Banca', zh: '银行', ar: 'بنك' })}:</span> <span className="font-bold text-white">{mBank} {currency}</span></div>
+                                      <div className="flex justify-between text-[#C1FF00] font-black border-t border-white/5 pt-1.5"><span>{tText({ am: 'ጠቅላላ', en: 'Total', or: 'Ida’ama', ti: 'ጠቕላላ', sid: 'Xaphooma', fr: 'Total', de: 'Gesamt', it: 'Totale', zh: '总计', ar: 'الإجمالي' })}:</span> <span>{mTotal} {currency}</span></div>
                                     </div>
                                   </div>
                                 );
@@ -12670,8 +15949,8 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                 const yTotal = yearOrders.reduce((s,o)=>s+o.total,0);
                                 return (
                                   <div key={yKey} className="bg-black/50 p-4 border border-white/5 rounded-xl flex justify-between items-center">
-                                    <span className="text-xs font-black text-white">🎄 የ {yKey} አመት ጠቅላላ ድምር:</span>
-                                    <span className="font-mono font-black text-[#C1FF00] text-sm">{yTotal} ብር</span>
+                                    <span className="text-xs font-black text-white">🎄 {yKey} · {tText({ am: 'ዓመታዊ ጠቅላላ ድምር', en: 'Annual Total', or: 'Ida’ama Waggaa', ti: 'ዓመታዊ ድምር', sid: 'Diru Xaphooma', fr: 'Total annuel', de: 'Jahressumme', it: 'Totale annuale', zh: '年度总计', ar: 'الإجمالي السنوي' })}:</span>
+                                    <span className="font-mono font-black text-[#C1FF00] text-sm">{yTotal} {currency}</span>
                                   </div>
                                 );
                               });
@@ -12685,400 +15964,50 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                  {managerTab === 'vault' && (
                   <div className="bg-[#121212] border border-white/10 p-5 rounded-xl space-y-4 text-left">
                     <div className="border-b border-white/5 pb-2">
-                      <span className="text-[9px] text-[#00f5ff] font-mono font-bold tracking-wider block uppercase">CLOUD VAULT & MEDIA INTEGRATION</span>
+                      <span className="text-[9px] text-[#00f5ff] font-mono font-bold tracking-wider block uppercase">CLOUD VAULT & DOCUMENT STORAGE</span>
                       <h3 className="text-xs font-black text-white uppercase mt-0.5">📁 የክላውድ ፋይል ማከማቻ እና ሰነዶች መቆጣጠሪያ (Cloud File Storage & Team Vault)</h3>
-                      <p className="text-[11px] text-stone-400 mt-1">የሰራተኞችን የተያያዙ ሰነዶች እንዲሁም የሎጁን መግቢያ ቪዲዮ (Welcome YouTube TV) እዚህ ማስተዳደር ይችላሉ።</p>
+                      <p className="text-[11px] text-stone-400 mt-1">የሰራተኞችን የተያያዙ ሰነዶች እና ፋይሎች እዚህ ማስተዳደር ይችላሉ።</p>
                     </div>
 
-                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-                      {/* Left Column: Welcome Video Player Card & Media Controller */}
-                      <div className="lg:col-span-12 xl:col-span-4 space-y-4">
-
-                    <div className="bg-black/50 border border-white/10 rounded-xl p-5 space-y-4 relative overflow-hidden text-stone-200">
-                      <div className="absolute top-4 right-4 bg-[#C1FF00]/10 text-[#C1FF00] border border-[#C1FF00]/30 font-mono text-[8.5px] px-2 py-0.5 rounded tracking-widest uppercase">
-                        MEDIA ENGINE
-                      </div>
-                      
-                      <div>
-                        <span className="text-[9px] text-[#C1FF00] font-mono font-bold tracking-wider block uppercase">📺 ACTIVE VIDEO ENGINE</span>
-                        <h4 className="text-sm font-black text-white uppercase mt-0.5">የንቁ ቪዲዮ እይታ</h4>
-                        <p className="text-[10px] text-stone-400 mt-1 leading-relaxed">
-                          በጀርባው የሚንቀሳቀሰውን ቪዲዮ እዚህ ሆነው በድምጽ መቼት ማሻሻል እንዲሁም በቀላሉ መቀየር ይችላሉ።
-                        </p>
-                      </div>
-
-                      {/* Active Video Toggle Button */}
-                      <div className="flex items-center justify-between bg-black/40 p-3 rounded-lg border border-white/5 max-w-2xl mx-auto">
-                        <span className="text-xs font-black text-white">
-                          {appLang === 'am' ? '📹 የጀርባ ቪዲዮ እይታ ማብሪያ/ማጥፊያ :' : '📹 Background Video ON/OFF :'}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setIsBgVideoEnabled(prev => !prev);
-                          }}
-                          className={`px-4 py-2 text-xs font-black uppercase rounded border transition-all cursor-pointer ${
-                            isBgVideoEnabled
-                              ? 'bg-[#C1FF00] text-black border-[#C1FF00] hover:bg-white'
-                              : 'bg-red-500/10 text-red-400 border-red-500/30 hover:bg-red-500/20'
-                          }`}
-                        >
-                          {isBgVideoEnabled ? (appLang === 'am' ? 'በርቷል (ON)' : 'ON') : (appLang === 'am' ? 'ጠፍቷል (OFF)' : 'OFF')}
-                        </button>
-                      </div>
-
-                      {/* Interactive Live Preview Box */}
-                      <div className="rounded-lg overflow-hidden border border-white/10 bg-black aspect-video relative max-w-2xl mx-auto">
-                        {bgVideoType === 'youtube' ? (
-                          <div className="absolute inset-0 w-full h-full overflow-hidden scale-[1.32]">
-                            <iframe
-                              className="w-full h-full pointer-events-none object-cover scale-[1.12]"
-                              src={getYouTubeEmbedUrl(bgVideoUrl, mediaPreviewMuted, !mediaPreviewPaused)}
-                              title="Welcome Papyrus Background Video"
-                              allow="autoplay; encrypted-media"
-                              frameBorder="0"
-                            ></iframe>
-                            <div className="absolute inset-0 bg-transparent z-10 pointer-events-none"></div>
-                          </div>
-                        ) : (
-                          <video
-                            className="w-full h-full object-cover"
-                            key={bgVideoUrl}
-                            src={bgVideoUrl}
-                            controls
-                            muted={mediaPreviewMuted}
-                            autoPlay={!mediaPreviewPaused}
-                            loop
-                            playsInline
-                          />
-                        )}
-                      </div>
-
-                      {/* Custom Media Player Controllers */}
-                      <div className="flex gap-2 items-center justify-between bg-black/40 p-2 rounded-lg border border-white/5 text-[10px] sm:text-[11px] font-mono max-w-2xl mx-auto">
-                        <div className="flex items-center gap-1.5 min-w-0">
-                          <span className={`inline-block w-2 h-2 rounded-full shrink-0 ${!mediaPreviewPaused ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`}></span>
-                          <span className="text-stone-400 font-bold truncate">
-                            {!mediaPreviewPaused ? '🟢 በመስራት ላይ (PLAYING)' : '⏸️ ቆሟል (PAUSED)'}
-                          </span>
-                        </div>
-                        <div className="flex gap-2 shrink-0">
-                          <button
-                            type="button"
-                            onClick={() => setMediaPreviewPaused(!mediaPreviewPaused)}
-                            className="px-2 py-1 bg-white/5 hover:bg-white/15 text-[#C1FF00] font-black uppercase text-[9px] rounded border border-white/10 hover:border-[#C1FF00]/30 transition-colors"
-                          >
-                            {mediaPreviewPaused ? '▶️ ቀጥል (PLAY)' : '⏸️ አቁም (PAUSE)'}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setMediaPreviewMuted(!mediaPreviewMuted)}
-                            className="px-2 py-1 bg-white/5 hover:bg-white/15 text-white font-black uppercase text-[9px] rounded border border-white/10 transition-colors"
-                          >
-                            {mediaPreviewMuted ? '🔊 ድምፅ ክፈት' : '🔇 አጥፋ (MUTE)'}
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Quick Preset Selector Buttons */}
-                      <div className="space-y-2 border-t border-white/5 pt-3">
-                        <span className="text-[9px] text-stone-400 font-mono font-bold tracking-wider block uppercase">✨ ፈጣን የጀርባ ቪዲዮ አማራጮች (PRESETS)</span>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
-                          <button
-                            onClick={() => {
-                              setBgVideoType('gourmet-paradise');
-                            }}
-                            className={`text-[10px] font-medium p-2 rounded border text-left transition-colors flex items-center justify-between ${
-                              bgVideoType === 'gourmet-paradise' || bgVideoType === 'mango-paradise' ? 'bg-[#C1FF00]/10 border-[#C1FF00] text-white' : 'bg-white/5 border-white/5 text-stone-300 hover:bg-white/10'
-                            }`}
-                          >
-                            <span>🥩 ምርጥ የሬስቶራንት ምግቦች ገነት</span>
-                            <span className="font-mono text-[8px] opacity-75">GOURMET PARADISE</span>
-                          </button>
-
-                          <button
-                            onClick={() => {
-                              setBgVideoUrl('https://youtu.be/AHuU7i--EUc');
-                              setBgVideoType('youtube');
-                            }}
-                            className={`text-[10px] font-medium p-2 rounded border text-left transition-colors flex items-center justify-between ${
-                              bgVideoType === 'youtube' && bgVideoUrl.includes('AHuU7i--EUc') ? 'bg-[#C1FF00]/10 border-[#C1FF00] text-white' : 'bg-white/5 border-white/5 text-stone-300 hover:bg-white/10'
-                            }`}
-                          >
-                            <span>🏨 ዋናው የፓፒረስ መግቢያ</span>
-                            <span className="font-mono text-[8px] opacity-75">YOUTUBE DEFAULT</span>
-                          </button>
-
-                          <button
-                            onClick={() => {
-                              setBgVideoUrl('https://www.youtube.com/watch?v=EvwYOmxaxdA');
-                              setBgVideoType('youtube');
-                            }}
-                            className={`text-[10px] font-medium p-2 rounded border text-left transition-colors flex items-center justify-between ${
-                              bgVideoType === 'youtube' && bgVideoUrl.includes('EvwYOmxaxdA') ? 'bg-[#C1FF00]/10 border-[#C1FF00] text-white' : 'bg-white/5 border-white/5 text-stone-300 hover:bg-white/10'
-                            }`}
-                          >
-                            <span>🍲 የሼፍ ኩኪንግ ሉፕ</span>
-                            <span className="font-mono text-[8px] opacity-75">CHEF WORK LOOP</span>
-                          </button>
-
-                          <button
-                            onClick={() => {
-                              setBgVideoUrl('https://www.youtube.com/watch?v=RIsV69W7Qj0');
-                              setBgVideoType('youtube');
-                            }}
-                            className={`text-[10px] font-medium p-2 rounded border text-left transition-colors flex items-center justify-between ${
-                              bgVideoType === 'youtube' && bgVideoUrl.includes('RIsV69W7Qj0') ? 'bg-[#C1FF00]/10 border-[#C1FF00] text-white' : 'bg-white/5 border-white/5 text-stone-300 hover:bg-white/10'
-                            }`}
-                          >
-                            <span>🌿 የሐዋሳ ሐይቅ ተፈጥሮ</span>
-                            <span className="font-mono text-[8px] opacity-75">SCENIC NATURE</span>
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* URL input and local files grid */}
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-t border-white/5 pt-3">
-                        {/* Local File Upload Section */}
-                        <div className="bg-white/5 p-3 rounded-lg border border-white/10 space-y-2">
-                          <span className="text-[9px] text-stone-400 font-mono font-bold tracking-wider block uppercase">📤 የራስዎን ቪዲዮ ይጫኑ (LOCAL VIDEO UPLOAD)</span>
-                          <p className="text-[10px] text-stone-500 leading-normal">
-                            ኮምፒውተርዎ ወይም ስልክዎ ላይ ያለን የቪዲዮ ፋይል (.mp4, .webm) በቀጥታ በመጫን የጀርባ ቪዲዮ ማድረግ ይችላሉ።
-                          </p>
-                          <label className="flex flex-col items-center justify-center border-2 border-dashed border-white/10 rounded-lg p-3 hover:border-[#C1FF00]/50 transition-colors cursor-pointer group bg-black/40">
-                            <span className="text-xl group-hover:scale-110 transition-transform">📁</span>
-                            <span className="text-[10px] font-black text-[#C1FF00] mt-1">ቪዲዮ ፋይል ይምረጡ / SELECT VIDEO</span>
-                            <input
-                              type="file"
-                              accept="video/mp4,video/webm,video/quicktime"
-                              className="hidden"
-                              onChange={(e) => {
-                                const file = e.target.files?.[0];
-                                if (file) {
-                                  if (file.size > 5 * 1024 * 1024) {
-                                    alert('⚠️ የጫኑት ቪዲዮ መጠን ከ 5MB በላይ ነው! Warning: Selected video is too large (> 5MB).');
-                                  }
-                                  readMediaFile(e, (base64) => {
-                                    setBgVideoUrl(base64);
-                                    setBgVideoType('local');
-                                    alert('📤 የጀርባ ቪዲዮው በተሳካ ሁኔታ ተጭኗል!');
-                                  });
-                                }
-                              }}
-                            />
-                          </label>
-                        </div>
-
-                        {/* Custom Web URL Input */}
-                        <form 
-                          onSubmit={(e) => {
-                            e.preventDefault();
-                            const inputUrl = (e.currentTarget.querySelector('#custom-video-input') as HTMLInputElement).value;
-                            const engineType = (e.currentTarget.querySelector('#engine-select') as HTMLSelectElement).value as 'youtube' | 'direct';
-                            if (inputUrl.trim()) {
-                              setBgVideoUrl(inputUrl.trim());
-                              setBgVideoType(engineType);
-                              alert('💾 የቪዲዮ አድራሻው በተሳካ ሁኔታ ተቀይሯል!');
-                            }
-                          }}
-                          className="space-y-2 bg-white/5 p-3 rounded-lg border border-white/10 flex flex-col justify-between"
-                        >
-                          <div>
-                            <span className="text-[9px] text-stone-400 font-mono font-bold tracking-wider block uppercase">🔗 ማስተካከያ በሊንክ ማስገቢያ (CUSTOM LINK INPUT)</span>
-                            <div className="grid grid-cols-3 gap-2 mt-2">
-                              <select 
-                                id="engine-select" 
-                                className="col-span-1 bg-black text-xs text-white border border-white/10 rounded p-1.5 focus:border-[#C1FF00]"
-                                defaultValue={bgVideoType === 'local' ? 'youtube' : bgVideoType}
-                              >
-                                <option value="youtube">YouTube</option>
-                                <option value="direct">Direct Mp4</option>
-                              </select>
-                              <input
-                                id="custom-video-input"
-                                type="text"
-                                placeholder="http://... or youtube ID"
-                                className="col-span-2 bg-black text-xs text-white border border-white/10 rounded p-1.5 focus:border-[#C1FF00] font-mono shrink truncate"
-                                defaultValue={bgVideoType === 'local' ? '' : bgVideoUrl}
-                              />
-                            </div>
-                          </div>
-                          <button
-                            type="submit"
-                            className="w-full bg-[#C1FF00] text-black font-sans font-black text-[10px] uppercase py-2 rounded text-center cursor-pointer hover:bg-white hover:text-black transition-colors md:mt-0 mt-3"
-                          >
-                            💾 ማስተካከያውን አስቀምጥ (SAVE LINK)
-                          </button>
-                        </form>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Right Column: Original CloudVault File Manager */}
-                    <div className="lg:col-span-12 xl:col-span-8 rounded-xl overflow-hidden self-start">
-                        <CloudVault onBack={() => setManagerTab('bono')} appLang={appLang} />
-                      </div>
+                    <div className="rounded-xl overflow-hidden">
+                      <CloudVault onBack={() => setManagerTab('bono')} appLang={appLang} />
                     </div>
                   </div>
                 )}
 
-                {/* TAB CONTENT: STOCK CONTROL / MENU AVAILABILITY */}
+                {/* TAB CONTENT: STOCK CONTROL / MENU AVAILABILITY & AUDIT LOG */}
                 {managerTab === 'menu_availability' && (
-                  <div className="bg-[#121212] border border-white/10 p-6 rounded-3xl space-y-6 text-left">
-                    <div className="border-b border-white/5 pb-3">
-                      <span className="text-[10px] text-yellow-400 font-mono font-bold tracking-wider block uppercase">MENU STOCK MANAGEMENT</span>
-                      <h3 className="text-md font-black text-white uppercase mt-0.5">🍽️ የምግብ ማለቅና መኖር መቆጣጠሪያ (Menu Item Stock & Availability)</h3>
-                      <p className="text-[11px] text-stone-400 font-sans mt-1">
-                        በእለቱ ያለቁ ወይም የተዘጋጁ ምግቦችን እዚህ ጋር በማብራት እና በማጥፋት ከደንበኞች እና ከአስተናጋጆች ሜኑ ላይ በቅጽበት መደበቅ ወይም ማሳየት ይችላሉ።
-                      </p>
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                      {menuItems.map((m) => (
-                        <div key={m.id} className="bg-black/40 border border-white/5 p-4 rounded-xl flex items-center justify-between gap-3 hover:border-yellow-500/20 transition-all">
-                          <div className="space-y-1">
-                            <span className="text-[9px] bg-white/5 font-mono text-stone-400 px-1.5 py-0.5 rounded uppercase block w-fit">{m.cat}</span>
-                            <h4 className="text-xs font-black text-white uppercase">{appLang === 'am' ? m.nameAm : (m.nameEn || m.nameAm)}</h4>
-                            <p className="text-[10px] text-stone-500 font-mono">{m.price} ETB</p>
-                          </div>
-                          
-                          <button
-                            onClick={() => {
-                              handleToggleMenuItemAvailable(m.id);
-                              playVoiceAlert(`${m.nameEn || m.nameAm} availability updated.`);
-                            }}
-                            className={`px-3 py-1.5 rounded text-[10px] font-bold font-mono uppercase tracking-wider cursor-pointer border transition-all ${
-                              m.available 
-                                ? 'bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border-emerald-500/30' 
-                                : 'bg-red-500/10 hover:bg-red-500/20 text-red-400 border-red-500/30'
-                            }`}
-                          >
-                            {m.available ? '● IN STOCK (በክምችት አለ)' : '○ OUT OF STOCK (አልቋል)'}
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
+                  <ManagerStockAlertPanel
+                    menuItems={menuItems}
+                    stockAlertLogs={stockAlertLogs}
+                    stockAlertSettings={stockAlertSettings}
+                    onUpdateSettings={setStockAlertSettings}
+                    onToggleStock={handleToggleMenuItemAvailable}
+                    onAcknowledgeAlert={handleAcknowledgeStockAlert}
+                    onAcknowledgeAll={handleAcknowledgeAllStockAlerts}
+                    onClearLogs={handleClearStockAlertLogs}
+                    onTestSound={() =>
+                      playStockOutAlertSound(
+                        menuItems[0]?.nameEn || menuItems[0]?.nameAm || 'Sample Dish',
+                        currentUser?.name || 'Kitchen Test',
+                      )
+                    }
+                    currentManagerName={currentUser?.name || leadershipContacts.managerName}
+                    appLang={appLang}
+                  />
                 )}
 
-                {/* TAB CONTENT: TABLE ASSIGNMENTS */}
+                {/* TAB CONTENT: CENTRALIZED SHIFT MANAGEMENT (WAITERS & CHEFS — TABLES & ROOMS) */}
                 {managerTab === 'table_assignment' && (
-                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 text-left">
-                    {/* Add Assignment Form */}
-                    <div className="lg:col-span-4 bg-[#121212] border border-white/10 p-5 rounded-xl space-y-4">
-                      <div className="border-b border-white/5 pb-2">
-                        <span className="text-[9px] text-yellow-400 font-mono font-bold tracking-wider block uppercase">ROSTER & ASSIGNMENT</span>
-                        <h3 className="text-xs font-black text-white uppercase mt-0.5">📋 አዲስ ጠረጴዛ መደብ (Assign Table to Waiter)</h3>
-                        <p className="text-[10px] text-stone-400 mt-1">
-                          ለአስተናጋጆች በእለቱ የሚያገለግሉበትን የጠረጴዛ ቁጥር እዚህ ጋር መመደብ ይችላሉ።
-                        </p>
-                      </div>
-
-                      <form onSubmit={(e) => {
-                        e.preventDefault();
-                        const waiter = (e.currentTarget.querySelector('#assign-waiter-select') as HTMLSelectElement).value;
-                        const table = (e.currentTarget.querySelector('#assign-table-input') as HTMLInputElement).value.trim();
-                        if (!waiter || !table) {
-                          alert('እባክዎ መጀመሪያ አስተናጋጅ እና የጠረጴዛ ቁጥር ይምረጡ/ያስገቡ!');
-                          return;
-                        }
-
-                        // Add new assignment
-                        const newAssignment: TableAssignment = {
-                          id: 'ta-' + Date.now(),
-                          waiterName: waiter,
-                          tableNumber: table,
-                          date: new Date().toLocaleDateString('en-US')
-                        };
-
-                        setTableAssignments(prev => [...prev, newAssignment]);
-                        alert(`👍 ጠረጴዛ ${table} ለአስተናጋጅ ${waiter} በተሳካ ሁኔታ ተመድቧል!`);
-                      }} className="space-y-4">
-                        <div>
-                          <label className="text-[9px] font-mono text-white/40 uppercase block mb-1">🏃 አስተናጋጅ ይምረጡ (Select Waiter)</label>
-                          <select
-                            id="assign-waiter-select"
-                            className="w-full bg-[#181818] border border-white/10 text-white text-xs font-bold p-2.5 outline-none focus:border-yellow-400"
-                            required
-                          >
-                            <option key="unassigned" value="">-- አስተናጋጅ ይምረጡ --</option>
-                            {staff.filter(s => (s.role || '').toLowerCase() === 'waiter' || (s.accessPrivilege || '').toLowerCase() === 'waiter').map((w, idx) => (
-                              <option key={`assign-waiter-${w.id || w.name || idx}`} value={w.name}>{w.name} (PIN: {w.pin})</option>
-                            ))}
-                          </select>
-                        </div>
-
-                        <div>
-                          <label className="text-[9px] font-mono text-white/40 uppercase block mb-1">🍽️ የጠረጴዛ ቁጥር (Table Location)</label>
-                          <input
-                            type="text"
-                            id="assign-table-input"
-                            placeholder="e.g. Table 05"
-                            defaultValue="Table 05"
-                            className="w-full bg-[#181818] border border-white/10 text-white text-xs font-bold p-2.5 outline-none focus:border-yellow-400"
-                            required
-                          />
-                          <p className="text-[9px] text-stone-500 font-mono mt-1">
-                            ማስታወሻ፡ እንደ "Table 05"፣ "Table 04" አድርገው ቢጽፉ ይመረጣል።
-                          </p>
-                        </div>
-
-                        <button 
-                          type="submit"
-                          className="w-full bg-yellow-400 hover:bg-white text-black text-xs font-black uppercase py-2.5 font-mono cursor-pointer transition-all border border-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]"
-                        >
-                          ASSIGN TABLE | መደብ 💾
-                        </button>
-                      </form>
-                    </div>
-
-                    {/* Active Assignments List */}
-                    <div className="lg:col-span-8 bg-[#121212] border border-white/10 p-5 rounded-xl space-y-4">
-                      <div className="border-b border-white/5 pb-2">
-                        <span className="text-[9px] text-yellow-400 font-mono font-bold tracking-wider block uppercase">ACTIVE ASSIGNMENTS</span>
-                        <h3 className="text-xs font-black text-white uppercase mt-0.5">📋 የዛሬው የጠረጴዛ ምደባዎች ዝርዝር</h3>
-                      </div>
-
-                      {tableAssignments.length === 0 ? (
-                        <div className="text-center py-12 text-stone-500 font-mono text-xs uppercase">
-                          ምንም የጠረጴዛ ምደባ አልተደረገም! (No tables assigned yet today)
-                        </div>
-                      ) : (
-                        <div className="overflow-x-auto">
-                          <table className="w-full text-left border-collapse text-xs">
-                            <thead>
-                              <tr className="border-b border-white/15 text-stone-400 uppercase font-mono text-[9px]">
-                                <th className="pb-2">👤 አስተናጋጅ (Waiter)</th>
-                                <th className="pb-2">🍽️ የጠረጴዛ ቁጥር (Table)</th>
-                                <th className="pb-2">📅 ቀን (Date)</th>
-                                <th className="pb-2 text-right">እርምጃ (Action)</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {tableAssignments.map((ta) => (
-                                <tr key={ta.id} className="border-b border-white/5 hover:bg-white/5">
-                                  <td className="py-3 font-bold text-white">{ta.waiterName}</td>
-                                  <td className="py-3 font-mono font-black text-yellow-400">{ta.tableNumber}</td>
-                                  <td className="py-3 font-mono text-stone-400">{ta.date}</td>
-                                  <td className="py-3 text-right">
-                                    <button
-                                      onClick={() => {
-                                        setTableAssignments(prev => prev.filter(item => item.id !== ta.id));
-                                        alert('ምደባው ተሰርዟል!');
-                                      }}
-                                      className="px-2 py-1 bg-red-600/10 hover:bg-red-600 border border-red-500/20 hover:border-red-600 text-red-400 hover:text-white rounded text-[10px] font-bold font-mono transition-colors"
-                                    >
-                                      DELETE
-                                    </button>
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      )}
-                    </div>
-                  </div>
+                  <ShiftManagementModule
+                    staff={staff}
+                    shiftAssignments={shiftAssignments}
+                    onSaveShiftAssignments={handleSaveShiftAssignments}
+                    orders={orders}
+                    roomBookings={roomBookings}
+                    currentManagerName={currentUser?.name || leadershipContacts.managerName}
+                    appLang={appLang}
+                  />
                 )}
 
                 {/* TAB CONTENT: SPAM & LOG CLEANER */}
@@ -13239,24 +16168,23 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                               <span className="text-[9px] font-mono text-stone-400 uppercase">TABLE ROSTERS</span>
                               <h5 className="text-xs font-bold text-white mt-1">የዛሬው የጠረጴዛ ምደባዎች</h5>
                               <p className="text-[10px] text-stone-500 mt-1">
-                                በአሁኑ ሰዓት በአጠቃላይ <span className="text-yellow-400 font-mono font-bold">{tableAssignments.length}</span> ጠረጴዛዎች ለአስተናጋጆች ተመድበዋል። የስራ ሰዓት ሲያበቃ ይህንን ማጽዳት ይቻላል።
+                                በአሁኑ ሰዓት በአጠቃላይ <span className="text-yellow-400 font-mono font-bold tabular-nums">{shiftAssignments.length}</span> የፈረቃ ምደባዎች (አስተናጋጆችና ሼፎች) አሉ። የስራ ሰዓት ሲያበቃ ይህንን ማጽዳት ይቻላል።
                               </p>
                             </div>
                             <button
-                              disabled={tableAssignments.length === 0}
+                              disabled={shiftAssignments.length === 0 && tableAssignments.length === 0}
                               onClick={() => {
-                                if (confirm('ሁሉንም የጠረጴዛ ምደባዎች ለማጥፋት እርግጠኛ ነዎት? (Reset all waiter table assignments?)')) {
-                                  setTableAssignments([]);
-                                  alert('✓ ሁሉም የጠረጴዛ ምደባዎች ተሰርዘዋል!');
-                                }
+                                askConfirmAndRun('ሁሉንም የፈረቃ እና የጠረጴዛ/ክፍል ምደባዎች ለማጥፋት እርግጠኛ ነዎት? (Reset all waiter & chef shift assignments?)', () => {
+                                  handleSaveShiftAssignments([]);
+                                });
                               }}
                               className={`w-full py-2 font-mono text-[9px] uppercase font-black tracking-wider transition-colors border ${
-                                tableAssignments.length > 0
+                                shiftAssignments.length > 0 || tableAssignments.length > 0
                                   ? 'bg-red-600/10 hover:bg-red-600 text-red-400 hover:text-white border-red-500/20 hover:border-red-600 cursor-pointer'
                                   : 'bg-stone-900 text-stone-600 border-stone-800 cursor-not-allowed'
                               }`}
                             >
-                              CLEAR ALL ASSIGNMENTS | ምደባዎችን ሰርዝ 📋
+                              CLEAR ALL SHIFT ASSIGNMENTS | ምደባዎችን ሰርዝ 📋
                             </button>
                           </div>
 
@@ -13402,6 +16330,19 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                   </div>
                 )}
 
+                {/* TAB CONTENT: MANAGER & SUPPORT LEADERSHIP INBOX */}
+                {managerTab === 'leadership' && (
+                  <LeadershipInboxPanel
+                    portalRole="manager"
+                    currentStaffName={currentUser?.name || leadershipContacts.managerName}
+                    messages={leadershipMessages}
+                    onReplyMessage={handleReplyLeadershipMessage}
+                    onResolveMessage={handleResolveLeadershipMessage}
+                    onDeleteMessage={handleDeleteLeadershipMessage}
+                    contacts={leadershipContacts}
+                    onSaveContacts={setLeadershipContacts}
+                  />
+                )}
 
               </motion.div>
             )}
@@ -13417,33 +16358,33 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                 className="max-w-6xl mx-auto w-full space-y-6 pb-20 relative text-white"
               >
                 {/* Header Profile Dashboard */}
-                <div className="bg-[#121212] border-b border-[#10B981]/25 p-6 rounded-none flex flex-col md:flex-row justify-between items-start md:items-center gap-4 shadow-md">
+                <div className="papyrus-menu-hero border-b-4 p-6 rounded-3xl flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                   <div>
                     <div className="flex items-center gap-2">
-                      <span className="p-1 px-2.5 bg-emerald-500/10 border border-emerald-500/35 text-emerald-400 font-mono text-[9px] uppercase font-black tracking-widest rounded-full">LIVE PORTAL</span>
-                      <span className="text-white/40 text-xs">🛎️ STAFF OFFICE</span>
+                      <span className="hero-gold-badge p-1 px-2.5 border font-mono text-[10px] uppercase font-black tracking-widest rounded-full">LIVE PORTAL</span>
+                      <span className="text-white/85 text-xs font-bold">🛎️ STAFF OFFICE</span>
                     </div>
-                    <h2 className="text-3xl font-black uppercase text-white tracking-tight mt-1">
-                      ሪሴብሽን ጠረጴዛ <span className="text-emerald-400 font-mono font-black italic">RECEPTIONIST PANEL</span>
+                    <h2 className="text-2xl sm:text-3xl font-black uppercase text-white tracking-tight mt-1.5">
+                      ሪሴብሽን ጠረጴዛ <span className="text-[#f4c22b] font-mono font-black">RECEPTIONIST PANEL</span>
                     </h2>
-                    <p className="text-xs text-white/60 font-bold mt-1">
+                    <p className="text-xs text-white/85 font-bold mt-1">
                       ስርዓት ሰራተኛ ረዳት፡ {currentUser?.name || 'Reception Staff'}
                     </p>
                   </div>
 
                   <div className="flex items-center gap-3 flex-wrap">
-                    <div className="bg-red-950/80 border border-yellow-400/50 px-3 py-1.5 rounded flex items-center gap-2 text-xs font-mono">
-                      <span className="text-[10px] text-yellow-400 font-bold uppercase flex items-center gap-1">🔒 በስራ ላይ ያለ ሪሴብሽን:</span>
-                      <span className="text-xs font-black text-white bg-black/60 px-2 py-0.5 rounded border border-red-500/50">
+                    <div className="hero-subglass border px-3 py-1.5 rounded-xl flex items-center gap-2 text-xs font-mono">
+                      <span className="text-[10px] text-[#f4c22b] font-bold uppercase flex items-center gap-1">🔒 በስራ ላይ ያለ ሪሴብሽን:</span>
+                      <span className="hero-gold-badge text-xs font-black px-2 py-0.5 rounded-lg border">
                         🏨 {currentUser?.name || 'Reception Staff'}
                       </span>
                     </div>
 
                     <button 
                       onClick={handleLogout}
-                      className="bg-red-950/80 hover:bg-red-900 font-sans border-2 border-red-500/20 text-red-100 px-4 py-2 font-black text-xs uppercase flex items-center gap-1.5 transition-all text-[10px] tracking-wider cursor-pointer"
+                      className="hero-logout-btn font-sans border px-4 py-2 rounded-xl font-black text-[10px] uppercase flex items-center gap-1.5 transition-all tracking-wider cursor-pointer shadow-xs"
                     >
-                      <LogOut className="w-4 h-4 text-red-400" />
+                      <LogOut className="w-4 h-4" />
                       <span>ለቀቅ / CLOSE WORK 🚪</span>
                     </button>
                   </div>
@@ -13804,8 +16745,8 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
 
                                   <div className="flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-white/50 pt-1.5 font-sans border-t border-white/5">
                                     <p>📞 ስልክ: <span className="font-mono text-[#C1FF00]">{b.contactPhone}</span></p>
-                                    <p>💰 ክፍያ: <span className="font-mono text-white font-bold">{b.pricePerNight} ብር / Night</span></p>
-                                    <p>📅 የገባው: <span className="font-mono text-[#00f5ff]">{b.checkInDate}</span></p>
+                                    <p>💰 {tText({ am: 'ክፍያ', en: 'Rate', or: 'Kaffaltii', ti: 'ክፍሊት', sid: 'Baato', fr: 'Tarif', de: 'Preis', it: 'Tariffa', zh: '房费', ar: 'التعرفة' })}: <span className="font-mono text-white font-bold">{b.pricePerNight} {currency} / {tText({ am: 'ቀን', en: 'Night', or: 'Halkan', ti: 'ለይቲ', sid: 'Hashsha', fr: 'Nuit', de: 'Nacht', it: 'Notte', zh: '晚', ar: 'ليلة' })}</span></p>
+                                    <p>📅 {tText({ am: 'የገባው', en: 'Check-In', or: 'Seensa', ti: 'ዝኣተወሉ', sid: 'Ea', fr: 'Arrivée', de: 'Check-in', it: 'Check-in', zh: '入住', ar: 'تسجيل الوصول' })}: <span className="font-mono text-[#00f5ff]">{b.checkInDate}</span></p>
                                   </div>
 
                                   {b.notes && (
@@ -13820,14 +16761,40 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                 <div className="flex flex-col justify-end">
                                   <button 
                                     onClick={() => {
-                                      askConfirmAndRun('እንግዳው ክፍሉን መልቀቁን እርግጠኛ ነዎት? (Confirm guest check-out?)', () => {
-                                        setRoomBookings(prev => prev.map(item => item.id === b.id ? { ...item, status: 'Checked Out' } : item));
-                                        alert('🔑 እንግዳው በተሳካ ሁኔታ ቼክ-አውት ሆኗል! / Checked out successfully.');
-                                      });
+                                      askConfirmAndRun(
+                                        tText({
+                                          am: 'እንግዳው ክፍሉን መልቀቁን እርግጠኛ ነዎት?',
+                                          en: 'Confirm guest check-out?',
+                                          or: 'Keessummaan kutaa gadhiisuu mirkaneessitaa?',
+                                          ti: 'ጋሻ ክፍሊ ምልቃቑ እርግጸኛ ዲኹም?',
+                                          sid: 'Wosinchu mine fula buuxxootto?',
+                                          fr: 'Confirmer le départ du client ?',
+                                          de: 'Check-out des Gastes bestätigen?',
+                                          it: 'Confermare il check-out dell’ospite?',
+                                          zh: '确认客人退房吗？',
+                                          ar: 'هل تؤكد تسجيل مغادرة الضيف؟'
+                                        }),
+                                        () => {
+                                          setRoomBookings(prev => prev.map(item => item.id === b.id ? { ...item, status: 'Checked Out' } : item));
+                                          setAccessibleToast(tText({
+                                            am: '🔑 እንግዳው በተሳካ ሁኔታ ቼክ-አውት ሆኗል!',
+                                            en: '🔑 Guest checked out successfully!',
+                                            or: '🔑 Keessummaan milkaa’inaan ba’eera!',
+                                            ti: '🔑 ጋሻ ብዓወት ቼክ-ኣውት ኮይኑ!',
+                                            sid: '🔑 Wosinchu keere fulino!',
+                                            fr: '🔑 Départ enregistré avec succès !',
+                                            de: '🔑 Check-out erfolgreich abgeschlossen!',
+                                            it: '🔑 Check-out completato con successo!',
+                                            zh: '🔑 客人已成功办理退房！',
+                                            ar: '🔑 تم تسجيل مغادرة الضيف بنجاح!'
+                                          }));
+                                          setTimeout(() => setAccessibleToast(''), 4000);
+                                        }
+                                      );
                                     }}
                                     className="bg-amber-950/20 hover:bg-amber-500 hover:text-black text-amber-400 border border-amber-500/30 px-3 py-2 font-mono text-[9px] uppercase font-black tracking-widest cursor-pointer transition-colors"
                                   >
-                                    CHECK OUT / ልቀቅ 🔑
+                                    {tText({ am: 'ልቀቅ (Check Out)', en: 'Check Out', or: 'Gadhiisi', ti: 'ልቐቕ', sid: 'Fushi', fr: 'Départ', de: 'Check-out', it: 'Check-out', zh: '退房', ar: 'مغادرة' })} 🔑
                                   </button>
                                 </div>
                               )}
@@ -13845,17 +16812,17 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                           <p className="text-[10px] text-white/40">ከእንግዶች ክፍሎች በቀጥታ የሚመጡ የድጋፍ ጥሪዎች።</p>
                         </div>
                         <span className="bg-emerald-950 text-emerald-400 px-2 py-0.5 rounded text-[10px] font-mono animate-pulse">
-                          {assistanceCalls.filter(c => c.active).length} CALL ACTIVE
+                          {deduplicateAssistanceCalls(assistanceCalls).filter(c => c.active && c.type !== 'new_order').length} CALL ACTIVE
                         </span>
                       </div>
 
-                      {assistanceCalls.filter(c => c.active).length === 0 ? (
+                      {deduplicateAssistanceCalls(assistanceCalls).filter(c => c.active && c.type !== 'new_order').length === 0 ? (
                         <div className="text-center py-6 text-white/20 text-xs">
                           <p>🎈 ምንም ገባሪ የድጋፍ ጥሪ የለም።</p>
                         </div>
                       ) : (
                         <div className="space-y-2">
-                          {assistanceCalls.filter(c => c.active).map(call => (
+                          {deduplicateAssistanceCalls(assistanceCalls).filter(c => c.active && c.type !== 'new_order').map(call => (
                             <div key={call.id} className="bg-emerald-950/20 border border-emerald-500/20 p-3 flex justify-between items-center mr-1">
                               <div className="flex items-center gap-3">
                                 <span className="text-lg animate-bounce">🛎️</span>
@@ -13893,38 +16860,37 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                 className="w-full max-w-7xl mx-auto space-y-6 pb-20 relative z-10"
               >
                 {/* Header widget */}
-                <div className="bg-[#0b1216] border border-cyan-500/30 p-6 rounded-2xl space-y-4 shadow-lg pr-8">
+                <div className="papyrus-menu-hero border-b-4 p-6 rounded-3xl space-y-4">
                   <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                     <div className="space-y-1">
                       <div className="flex items-center gap-2">
-                        <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse"></span>
-                        <span className="text-[10px] font-mono font-black text-cyan-400 uppercase tracking-widest">CASH DESK STATION TERMINAL</span>
+                        <span className="hero-gold-badge text-[10px] font-mono font-black px-2.5 py-0.5 rounded-lg uppercase tracking-widest border">CASH DESK STATION TERMINAL</span>
                       </div>
-                      <h2 className="text-xl font-black text-white uppercase">የካሸር የክፍያ እና የሽያጭ መቆጣጠሪያ ዋና ክፍል</h2>
-                      <p className="text-xs text-white/50">
-                        የእንግዶችን ሂሳብ መቀበል፣ የእለት ገቢ ማረጋገጥ እና ደረሰኞችን ማተሚያ ክፍል (Signed in as: <strong className="text-cyan-400">{currentUser?.name || 'Cashier Portal'}</strong>)
+                      <h2 className="text-xl sm:text-2xl font-black text-white uppercase">የካሸር የክፍያ እና የሽያጭ መቆጣጠሪያ ዋና ክፍል</h2>
+                      <p className="text-xs text-white/85">
+                        የእንግዶችን ሂሳብ መቀበል፣ የእለት ገቢ ማረጋገጥ እና ደረሰኞችን ማተሚያ ክፍል (Signed in as: <strong className="text-[#f4c22b]">{currentUser?.name || 'Cashier Portal'}</strong>)
                       </p>
                     </div>
                     
                     <button 
                       onClick={handleLogout}
-                      className="bg-[#121212] hover:bg-red-500/10 border border-white/10 hover:border-red-500/40 text-white/80 hover:text-red-400 px-4 py-2 text-xs font-mono font-black uppercase rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer shrink-0"
+                      className="hero-logout-btn border px-4 py-2 text-xs font-mono font-black uppercase rounded-xl transition-colors flex items-center gap-1.5 cursor-pointer shrink-0 shadow-xs"
                     >
                       🚪 Logout Staff (መውጫ)
                     </button>
                   </div>
 
                   {/* ACTIVE CASHIER SHIFT LOCKED DISPLAY */}
-                  <div className="bg-red-950/80 border border-yellow-400/50 p-3 rounded-xl flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 text-xs font-mono">
+                  <div className="hero-subglass border p-3 rounded-2xl flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 text-xs font-mono">
                     <div className="flex items-center gap-2">
                       <span className="text-xl">💵</span>
                       <div>
-                        <span className="text-[9px] text-yellow-400 font-bold uppercase block">🔒 በስራ ላይ ያለ ካሸር (ACTIVE CASHIER):</span>
+                        <span className="text-[9px] text-[#f4c22b] font-bold uppercase block">🔒 በስራ ላይ ያለ ካሸር (ACTIVE CASHIER):</span>
                         <span className="text-sm font-black text-white">{currentUser?.name || 'ሀይሌ (ካሸር)'}</span>
                       </div>
                     </div>
 
-                    <div className="bg-black/60 px-3 py-1.5 rounded border border-red-500/50 text-xs font-bold text-yellow-300 font-mono flex items-center gap-1.5">
+                    <div className="hero-gold-badge px-3 py-1.5 rounded-xl border text-xs font-black font-mono flex items-center gap-1.5">
                       <span>🔒 በሲስተሙ የተመዘገበ የካሸር ፈረቃ</span>
                     </div>
                   </div>
@@ -13941,9 +16907,9 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                       <div className="bg-[#091518]/60 border border-cyan-500/20 p-4 rounded-xl flex justify-between items-center shadow-md">
                         <div>
-                          <span className="text-[9px] text-white/40 uppercase font-mono block">Active Unpaid Bills</span>
+                          <span className="text-[9px] text-white/40 uppercase font-mono block">{tText({ am: 'ያልተከፈሉ ሂሳቦች', en: 'Active Unpaid Bills', or: 'Kaffaltii Hin Kaffalamin', ti: 'ዘይተኸፈሉ ሕሳባት', sid: 'Baatantinni Biiro', fr: 'Factures impayées', de: 'Offene Rechnungen', it: 'Conti non pagati', zh: '未结账单', ar: 'الفواتير غير المدفوعة' })}</span>
                           <span className="text-2xl font-black font-mono text-cyan-400">
-                            {orders.filter(o => o.status !== 'Paid').length} orders
+                            {orders.filter(o => o.status !== 'Paid').length} {tText({ am: 'ትዕዛዞች', en: 'orders', or: 'ajaja', ti: 'ትእዛዛት', sid: 'hajajubba', fr: 'commandes', de: 'Bestellungen', it: 'ordini', zh: '笔订单', ar: 'طلبات' })}
                           </span>
                         </div>
                         <span className="text-2xl">📝</span>
@@ -13951,12 +16917,12 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                       
                       <div className="bg-emerald-950/20 border border-emerald-500/20 p-4 rounded-xl flex justify-between items-center shadow-md">
                         <div>
-                          <span className="text-[9px] text-white/40 uppercase font-mono block">Selled Shift Cash</span>
+                          <span className="text-[9px] text-white/40 uppercase font-mono block">{tText({ am: 'የፈረቃ ጥሬ ገንዘብ ሽያጭ', en: 'Shift Cash Sales', or: 'Gurgurtaa Kaashii', ti: 'ናይ እብረት ጥረ ገንዘብ', sid: 'Kaashete Hirro', fr: 'Ventes espèces (poste)', de: 'Schicht-Barumsatz', it: 'Incasso turno', zh: '本班现金销售', ar: 'مبيعات الوردية النقدية' })}</span>
                           <span className="text-2xl font-black font-mono text-emerald-400">
                             {orders.filter(o => o.status === 'Paid' || o.id.startsWith('manual-cash')).reduce((sum, o) => {
                               const orderTotal = o.items ? o.items.reduce((s, it) => s + (it.qty * (it.price || 0)), 0) : 0;
                               return sum + orderTotal;
-                            }, 0) + 1200} ETB
+                            }, 0) + 1200} {currency}
                           </span>
                         </div>
                         <span className="text-2xl text-emerald-400">💰</span>
@@ -13964,9 +16930,9 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
 
                       <div className="bg-[#1A1813] border border-yellow-500/20 p-4 rounded-xl flex justify-between items-center shadow-md">
                         <div>
-                          <span className="text-[9px] text-white/40 uppercase font-mono block">Cash Float (ካፒታል)</span>
+                          <span className="text-[9px] text-white/40 uppercase font-mono block">{tText({ am: 'ካፒታል (መነሻ ገንዘብ)', en: 'Cash Float', or: 'Kaappitaala Kaashii', ti: 'መበገሲ ገንዘብ', sid: 'Umi Kaashe', fr: 'Fond de caisse', de: 'Kassenbestand', it: 'Fondo cassa', zh: '备用金', ar: 'رأس المال النقدي' })}</span>
                           <span className="text-2xl font-black font-mono text-yellow-500">
-                            5,000.00 ETB
+                            5,000.00 {currency}
                           </span>
                         </div>
                         <span className="text-2xl">🔒</span>
@@ -14028,8 +16994,8 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                     {item.nameAm} <span className="text-[10px] text-white/50 block font-normal">{item.nameEn}</span>
                                   </div>
                                   <div className="flex justify-between items-end w-full">
-                                    <span className="font-mono text-[10.5px] font-black text-emerald-400">{item.price} Birr</span>
-                                    <span className="text-[9px] bg-[#00f5ff]/10 text-[#00f5ff] font-bold px-1.5 py-0.5 rounded uppercase">➕ ADD</span>
+                                    <span className="font-mono text-[10.5px] font-black text-emerald-400">{item.price} {currency}</span>
+                                    <span className="text-[9px] bg-[#00f5ff]/10 text-[#00f5ff] font-bold px-1.5 py-0.5 rounded uppercase">➕ {tText({ am: 'ጨምር', en: 'Add', or: 'Dabali', ti: 'ወስኽ', sid: 'Ledi', fr: 'Ajouter', de: 'Hinzufügen', it: 'Aggiungi', zh: '添加', ar: 'إضافة' })}</span>
                                   </div>
                                 </button>
                               ))}
@@ -14052,7 +17018,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                   <div key={c.id} className="flex justify-between items-center text-xs text-white pb-1.5 border-b border-white/5">
                                     <div className="flex-1 truncate pr-2 font-bold">
                                       <span>{c.name}</span>
-                                      <span className="text-[10px] text-emerald-400 font-mono block">{c.price} Birr × {c.qty}</span>
+                                      <span className="text-[10px] text-emerald-400 font-mono block">{c.price} {currency} × {c.qty}</span>
                                     </div>
                                     <div className="flex items-center gap-1 shrink-0">
                                       <button
@@ -14118,9 +17084,9 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                             </div>
 
                             <div className="flex justify-between items-center text-xs border-b border-dashed border-white/10 pb-2 font-mono font-bold">
-                              <span className="text-white/60 uppercase">TOTAL CALC:</span>
+                              <span className="text-white/60 uppercase">{tText({ am: 'ጠቅላላ ድምር', en: 'Total Calc', or: 'Ida’ama', ti: 'ጠቕላላ ሕሳብ', sid: 'Xaphooma', fr: 'Total', de: 'Gesamtbetrag', it: 'Totale', zh: '总计', ar: 'الإجمالي' })}:</span>
                               <span className="text-base text-emerald-400 font-black">
-                                {cashierCart.reduce((sum, item) => sum + (item.qty * item.price), 0)} ETB
+                                {cashierCart.reduce((sum, item) => sum + (item.qty * item.price), 0)} {currency}
                               </span>
                             </div>
 
@@ -14128,39 +17094,77 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                               type="button"
                               disabled={cashierCart.length === 0}
                               onClick={() => {
+                                const nowMs = Date.now();
                                 const totalAmount = cashierCart.reduce((sum, item) => sum + (item.qty * item.price), 0);
-                                const timeNow = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
-                                const dateTodayStr = new Date().toISOString().split('T')[0];
-                                const orderId = 'manual-cash-' + Math.floor(1000 + Math.random() * 9000);
+                                const timeNow = new Date(nowMs).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
+                                const dateTodayStr = new Date(nowMs).toISOString().split('T')[0];
+                                const orderId = '#POS-' + Math.floor(1000 + Math.random() * 9000);
+
+                                const resolvedLocation = cashierLocation.trim() || 'Walk-In';
+                                const assignedWaiterForLoc = getAssignedWaiterForTable(resolvedLocation);
+                                const assignedChefForLoc = getAssignedChefForTable(resolvedLocation);
 
                                 const newOrder: Order = {
                                   id: orderId,
-                                  location: cashierLocation.trim() || 'Walk-In',
+                                  location: resolvedLocation,
                                   items: cashierCart.map(i => ({
                                     id: i.id,
+                                    baseId: i.id,
                                     qty: i.qty,
                                     name: i.name,
                                     price: i.price,
-                                    category: 'food'
                                   })),
                                   total: totalAmount,
                                   serviceCharge: 0,
                                   vat: 0,
                                   tip: 0,
-                                  status: 'Pending',
+                                  status: 'Paid',
+                                  paymentVerified: true,
+                                  cashierName: currentUser?.name || 'Cashier',
                                   cookingStatus: 'Pending',
                                   servedByWaiter: false,
+                                  checkedByWaiter: false,
                                   payment: 'cash',
                                   confirmed: true,
+                                  waiter: assignedWaiterForLoc || undefined,
+                                  chefName: assignedChefForLoc || undefined,
+                                  createdByRole: 'cashier',
                                   orderType: cashierOrderType,
                                   time: timeNow,
                                   date: dateTodayStr,
-                                  createdAt: Date.now()
+                                  createdAt: nowMs,
+                                  updatedAt: nowMs,
                                 };
 
                                 setOrders(prev => [newOrder, ...prev]);
-                                playVoiceAlert(`Direct cash order generated for ${newOrder.location} value ${totalAmount} birr sent to Kitchen.`);
-                                alert(`💰 በጥሬ ገንዘብ ክፍያ በተሳካ ሁኔታ ተፈጽሟል!\n\nትዕዛዝ ቁጥር፡ ${orderId}\nጠቅላላ ሂሳብ፡ ${totalAmount} ብር\n\nትዕዛዙ ቀጥታ ወደ ኩሽና (ሼፍ) ተልኳል እንዲበስል ተደርጓል!`);
+                                addAssistanceCall({
+                                  id: 'neword-' + orderId.replace('#', '') + '-' + nowMs,
+                                  orderId,
+                                  location: resolvedLocation,
+                                  time: timeNow,
+                                  active: true,
+                                  type: 'new_order',
+                                  targetRole: 'chef',
+                                  targetWaiter: assignedWaiterForLoc || undefined,
+                                  createdAt: nowMs,
+                                  message: `🛎️ የካሸር ትዕዛዝ ${orderId} (${resolvedLocation}) ተከፍሎ ወደ ኩሽና ተልኳል! (Paid -> Kitchen)`,
+                                });
+                                playVoiceAlert(`Direct cash order generated for ${newOrder.location} value ${totalAmount} ${currency} sent to Kitchen.`);
+                                setAccessibleToast(
+                                  `${tText({
+                                    am: '💰 በጥሬ ገንዘብ ክፍያ ተፈጽሟል! ትዕዛዙ ወደ ኩሽና ተልኳል።',
+                                    en: '💰 Cash payment recorded! Order sent to kitchen.',
+                                    or: '💰 Kaffaltiin kaashii galmaa’eera! Ajajni gara kushiinaatti ergameera.',
+                                    ti: '💰 ብጥረ ገንዘብ ክፍሊት ተፈጺሙ! ትእዛዝ ናብ ክሽነ ተላኢኹ።',
+                                    sid: '💰 Kaashete baato borreesamino! Hajajo kushinaho soorramino.',
+                                    fr: '💰 Paiement en espèces enregistré ! Commande envoyée en cuisine.',
+                                    de: '💰 Barzahlung erfasst! Bestellung an die Küche gesendet.',
+                                    it: '💰 Pagamento in contanti registrato! Ordine inviato in cucina.',
+                                    zh: '💰 现金收款已完成！订单已发送至厨房。',
+                                    ar: '💰 تم تسجيل الدفع النقدي وإرسال الطلب للمطبخ.'
+                                  })} (${orderId} · ${totalAmount} ${currency})`
+                                );
+                                setTimeout(() => setAccessibleToast(''), 4500);
                                 setCashierCart([]);
                                 setCashierLocation('Walk-In');
                               }}
@@ -14210,16 +17214,18 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                         </span>
                       </div>
 
-                      {orders.filter(o => o.status !== 'Paid').length === 0 ? (
+                      {orders.filter(o => o.status !== 'Paid' && o.status !== 'Cancelled').length === 0 ? (
                         <div className="text-center py-10 border border-dashed border-white/5 rounded-xl text-white/30 text-xs space-y-1">
                           <p className="text-xl">🎉</p>
                           <p>ያልተከፈለ ምንም ንቁ ትዕዛዝ የለም / All orders have been settled smoothly.</p>
                         </div>
                       ) : (
                         <div className="space-y-3">
-                          {orders.filter(o => o.status !== 'Paid').map((ord) => {
+                          {orders.filter(o => o.status !== 'Paid' && o.status !== 'Cancelled').map((ord) => {
                             const subtotal = ord.items.reduce((s, item) => s + (item.qty * (item.price || 0)), 0);
+                            const billTotal = ord.total > 0 ? ord.total : subtotal;
                             const tableWaiter = getAssignedWaiterForTable(ord.location) || ord.waiter;
+                            const cookStage = getEffectiveCookingStatus(ord);
                             return (
                               <div key={ord.id} className="bg-black/50 border border-white/5 hover:border-cyan-500/30 p-4 rounded-xl flex flex-col md:flex-row justify-between items-start md:items-center gap-4 transition-all">
                                 <div className="space-y-1.5 flex-1">
@@ -14229,16 +17235,20 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                       🍽️ {ord.location || "WALK-IN"} {tableWaiter ? `(👤 ${tableWaiter})` : ''}
                                     </span>
                                     <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold uppercase ${
-                                      ord.status === 'Completed' ? 'bg-emerald-950 text-emerald-400 border border-emerald-500/20' : 'bg-yellow-950 text-yellow-400'
+                                      cookStage === 'Served'
+                                        ? 'bg-emerald-950 text-emerald-300 border border-emerald-500/30'
+                                        : cookStage === 'Completed'
+                                          ? 'bg-emerald-950 text-emerald-400 border border-emerald-500/20'
+                                          : 'bg-yellow-950 text-yellow-400'
                                     }`}>
-                                      {ord.status}
+                                      {cookStage === 'Served' ? 'DELIVERED BY WAITER ✓' : cookStage}
                                     </span>
                                   </div>
 
                                   <div className="space-y-1 pl-3 border-l-2 border-white/10">
                                     {ord.items.map((it, idx) => (
                                       <p key={idx} className="text-xs text-white/80 font-bold">
-                                        {it.qty} × {it.name} <span className="text-white/40 font-mono text-[10px]">({it.price} Birr)</span>
+                                        {it.qty} × {it.name} <span className="text-white/40 font-mono text-[10px]">({it.price} {currency})</span>
                                       </p>
                                     ))}
                                   </div>
@@ -14246,12 +17256,12 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
 
                                 <div className="flex flex-col items-start md:items-end gap-2 shrink-0 w-full md:w-auto">
                                   <div className="text-left md:text-right">
-                                    <span className="text-[9px] text-white/40 block font-mono">TOTAL BILL ACCORDING TO SYSTEM:</span>
-                                    <span className="text-base font-black text-emerald-400 font-mono">{subtotal}.00 ETB</span>
+                                    <span className="text-[9px] text-white/40 block font-mono uppercase">{tText({ am: 'ጠቅላላ ሂሳብ', en: 'Total Bill', or: 'Ida’ama Biilii', ti: 'ጠቕላላ ሕሳብ', sid: 'Xaphooma Baato', fr: 'Total facture', de: 'Gesamtrechnung', it: 'Totale conto', zh: '账单总额', ar: 'إجمالي الفاتورة' })}:</span>
+                                    <span className="text-base font-black text-emerald-400 font-mono">{billTotal}.00 {currency}</span>
                                   </div>
 
                                     <div className="flex flex-wrap gap-2 w-full sm:w-auto mt-1">
-                                      {(ord.status === 'Completed' || ord.cookingStatus === 'Completed') && (
+                                      {(ord.status === 'Paid' || ord.status === 'Completed' || ord.cookingStatus === 'Completed' || Boolean(ord.servedByWaiter)) && (
                                         <button
                                           type="button"
                                           onClick={() => {
@@ -14280,9 +17290,26 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                       <button
                                         onClick={() => {
                                           askConfirmAndRun(
-                                            `የጠረጴዛ/ክፍል ${ord.location} ሂሳብ መጠን ${subtotal} ብር ለመቀበል ይፈልጋሉ? Order status will be updated to "Paid".`,
+                                            `${ord.location} · ${billTotal} ${currency} — ${tText({
+                                              am: 'ይህን ሂሳብ እንደተከፈለ ለመዝጋት ይፈልጋሉ?',
+                                              en: 'Mark this bill as Paid?',
+                                              or: 'Kaffaltii kana akka kaffalametti cufuu?',
+                                              ti: 'እዚ ሕሳብ ከም ዝተኸፈለ ክዕጾ?',
+                                              sid: 'Kuni baato baataminota gede cufa?',
+                                              fr: 'Marquer cette facture comme payée ?',
+                                              de: 'Diese Rechnung als bezahlt markieren?',
+                                              it: 'Segnare questo conto come pagato?',
+                                              zh: '确认将该账单标记为已付款吗？',
+                                              ar: 'هل تريد إغلاق هذه الفاتورة كمدفوعة؟'
+                                            })}`,
                                             () => {
-                                              setOrders(prev => prev.map(o => o.id === ord.id ? { ...o, status: 'Paid', cashierName: currentUser?.name || o.cashierName || 'Cashier' } : o));
+                                              setOrders(prev => prev.map(o => o.id === ord.id ? {
+                                                ...o,
+                                                status: 'Paid',
+                                                paymentVerified: true,
+                                                updatedAt: Date.now(),
+                                                cashierName: currentUser?.name || o.cashierName || 'Cashier',
+                                              } : o));
                                               playVoiceAlert(`Bill for Table ${ord.location || 'Walk-In'} processed successfully. Settle approval granted.`);
                                             }
                                           );
@@ -14373,7 +17400,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                           <p key={idx} className="text-xs text-white/80 font-semibold">
                                             {it.qty} × {it.name}{' '}
                                             <span className="text-white/40 font-mono text-[10px]">
-                                              ({it.price} Birr)
+                                              ({it.price} {currency})
                                             </span>
                                           </p>
                                         ))}
@@ -14383,10 +17410,10 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                     <div className="flex flex-col items-start md:items-end gap-2 shrink-0 w-full md:w-auto">
                                       <div className="text-left md:text-right">
                                         <span className="text-[9px] text-white/40 block font-mono uppercase">
-                                          RECEIPT TOTAL
+                                          {tText({ am: 'የደረሰኝ ጠቅላላ', en: 'Receipt Total', or: 'Ida’ama Nagahee', ti: 'ድምር ደረሰኝ', sid: 'Risiiti Xaphooma', fr: 'Total reçu', de: 'Belegsumme', it: 'Totale ricevuta', zh: '收据总额', ar: 'إجمالي الإيصال' })}
                                         </span>
                                         <span className="text-base font-black text-emerald-400 font-mono tabular-nums">
-                                          {displayTotal.toFixed(2)} ETB
+                                          {displayTotal.toFixed(2)} {currency}
                                         </span>
                                       </div>
 
@@ -14437,18 +17464,18 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
 
                       <div className="space-y-3.5 text-xs">
                         <div className="bg-black/40 border border-white/5 p-3 rounded space-y-2">
-                          <p className="font-mono text-[9px] text-white/40 uppercase">REGISTER CURRENT BALANCE CHECKS</p>
+                          <p className="font-mono text-[9px] text-white/40 uppercase">{tText({ am: 'የካዝና ወቅታዊ ሒሳብ', en: 'Register Balance Checks', or: 'Madaallii Kaaznaa', ti: 'ናይ ካዝና ሕሳብ', sid: 'Kaazina Kiiro', fr: 'État de la caisse', de: 'Kassenabschluss', it: 'Saldo di cassa', zh: '收银机余额检查', ar: 'فحص رصيد الصندوق' })}</p>
                           <div className="flex justify-between border-b border-white/5 pb-1 font-bold">
-                            <span className="text-white/60">Starting Float (ካፒታል):</span>
-                            <span className="text-white font-mono">5,000.00 Birr</span>
+                            <span className="text-white/60">{tText({ am: 'መነሻ ካፒታል', en: 'Starting Float', or: 'Kaappitaala Jalqabaa', ti: 'መበገሲ ካፒታል', sid: 'Umi Kaappitaale', fr: 'Fond initial', de: 'Anfangsbestand', it: 'Fondo iniziale', zh: '起始备用金', ar: 'الرصيد الافتتاحي' })}:</span>
+                            <span className="text-white font-mono">5,000.00 {currency}</span>
                           </div>
                           <div className="flex justify-between border-b border-white/5 pb-1 font-bold">
-                            <span className="text-white/60">Shift Card Payments:</span>
-                            <span className="text-emerald-400 font-mono">1,200.00 Birr</span>
+                            <span className="text-white/60">{tText({ am: 'የፈረቃ ካርድ ክፍያዎች', en: 'Shift Card Payments', or: 'Kaffaltii Kaardii', ti: 'ናይ ካርድ ክፍሊታት', sid: 'Kaardete Baato', fr: 'Paiements carte', de: 'Kartenzahlungen', it: 'Pagamenti carta', zh: '刷卡收款', ar: 'مدفوعات البطاقة' })}:</span>
+                            <span className="text-emerald-400 font-mono">1,200.00 {currency}</span>
                           </div>
                           <div className="flex justify-between font-bold">
-                            <span className="text-white/60">Cash in register drawer:</span>
-                            <span className="text-cyan-400 font-mono">6,200.00 Birr</span>
+                            <span className="text-white/60">{tText({ am: 'በካዝና ውስጥ ያለ ጥሬ ገንዘብ', en: 'Cash in Register Drawer', or: 'Kaashii Kaaznaa Keessaa', ti: 'ኣብ ካዝና ዘሎ ገንዘብ', sid: 'Kaazinate Kaashe', fr: 'Espèces en caisse', de: 'Bargeld in der Kasse', it: 'Contanti in cassa', zh: '钱箱现金', ar: 'النقد في الدرج' })}:</span>
+                            <span className="text-cyan-400 font-mono">6,200.00 {currency}</span>
                           </div>
                         </div>
 
@@ -14457,11 +17484,25 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                           <button
                             onClick={() => {
                               playVoiceAlert(`Receipt register system is checking out shift drawer. Settle successfully closed.`);
-                              alert(`🖨️ የዕለት ገቢ ሪፖርት ማጠቃለያ በተሳካ ሁኔታ ተዘጋጅቷል!\nድምር ሽያጭ፡ 6,200.00 ብር (ካፒታልን ጨምሮ)\nሺፍቱ በተሳካ ሁኔታ ወደ ማናጀር ሲስተም ተልኳል።`);
+                              setAccessibleToast(
+                                `${tText({
+                                  am: '🖨️ የዕለት ገቢ ሪፖርት ማጠቃለያ ተዘጋጅቶ ወደ ማናጀር ተልኳል!',
+                                  en: '🖨️ Daily shift summary generated and sent to manager!',
+                                  or: '🖨️ Gabaasni galii guyyaa qophaa’ee gara maanaajaraatti ergameera!',
+                                  ti: '🖨️ ጸብጻብ ዕለታዊ እቶት ተዳልዩ ናብ ማናጀር ተላኢኹ!',
+                                  sid: '🖨️ Barru eote rippoorti qixxaabbe maanaajeraho soorramino!',
+                                  fr: '🖨️ Résumé journalier généré et envoyé au gérant !',
+                                  de: '🖨️ Tagesbericht erstellt und an den Manager gesendet!',
+                                  it: '🖨️ Riepilogo giornaliero generato e inviato al manager!',
+                                  zh: '🖨️ 每日班次汇总已生成并发送至经理！',
+                                  ar: '🖨️ تم إعداد ملخص الوردية اليومي وإرساله للمدير!'
+                                })} (6,200.00 ${currency})`
+                              );
+                              setTimeout(() => setAccessibleToast(''), 4500);
                             }}
                             className="w-full bg-[#121212] hover:bg-white/10 text-white border border-white/10 font-bold uppercase py-2.5 rounded text-[10px] font-mono cursor-pointer transition-all"
                           >
-                            📊 Daily Shift Summary (ዕለታዊ ሪፖርት ማተሚያ)
+                            📊 {tText({ am: 'ዕለታዊ ሪፖርት አዘጋጅ', en: 'Daily Shift Summary', or: 'Gabaasa Guyyaa', ti: 'ዕለታዊ ጸብጻብ', sid: 'Barru Rippoorte', fr: 'Résumé de poste', de: 'Schichtbericht', it: 'Riepilogo turno', zh: '每日班次汇总', ar: 'ملخص الوردية اليومي' })}
                           </button>
                         </div>
                       </div>
@@ -14478,11 +17519,11 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                         </span>
                       </div>
 
-                      {assistanceCalls.filter(c => c.active).length === 0 ? (
+                      {deduplicateAssistanceCalls(assistanceCalls).filter(c => c.active && c.type !== 'new_order').length === 0 ? (
                         <p className="text-center py-6 text-white/30 text-xs">ምንም ገባሪ ጥሪ የለም። / No active calls.</p>
                       ) : (
                         <div className="space-y-2">
-                          {assistanceCalls.filter(c => c.active).map(call => (
+                          {deduplicateAssistanceCalls(assistanceCalls).filter(c => c.active && c.type !== 'new_order').map(call => (
                             <div key={call.id} className="bg-black/50 border border-white/5 p-3 flex justify-between items-center rounded-lg">
                               <div>
                                 <p className="font-black text-xs text-white font-mono uppercase">{call.location}</p>
@@ -14511,22 +17552,22 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                 className="max-w-6xl mx-auto w-full space-y-6 pb-20 relative text-white"
               >
                 {/* Header Profile Dashboard */}
-                <div className="bg-[#121212] border-b border-yellow-500/30 p-6 rounded-xl space-y-4 shadow-md">
+                <div className="papyrus-menu-hero border-b-4 p-6 rounded-3xl space-y-4">
                   <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                     <div className="flex items-center gap-3">
-                      <div className="w-12 h-12 rounded-full bg-yellow-400/10 border border-yellow-400/30 flex items-center justify-center text-yellow-400">
+                      <div className="hero-gold-badge w-12 h-12 rounded-2xl border-2 flex items-center justify-center shadow-sm">
                         <Shield className="w-6 h-6" />
                       </div>
                       <div>
                         <div className="flex items-center gap-2">
-                          <span className="text-[9px] bg-yellow-400/20 text-yellow-400 border border-yellow-400/30 px-2 py-0.5 uppercase font-bold tracking-widest font-mono">
+                          <span className="hero-gold-badge border px-2.5 py-0.5 rounded-lg text-[9px] uppercase font-black tracking-widest font-mono">
                             GATE CONTROL SYSTEM
                           </span>
-                          <span className="text-[9px] bg-white/5 text-white/70 border border-white/10 px-2 py-0.5 uppercase font-normal font-mono">
+                          <span className="hero-subglass border px-2 py-0.5 rounded-lg text-[9px] uppercase font-bold font-mono">
                             V2.1 - ACTIVE
                           </span>
                         </div>
-                        <h2 className="text-lg font-black tracking-wider text-white uppercase mt-0.5">
+                        <h2 className="text-lg sm:text-xl font-black tracking-wider text-white uppercase mt-1">
                           👮 የጥበቃ ማዕከላዊ በር (Guard Central Gateway)
                         </h2>
                       </div>
@@ -14537,7 +17578,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                         setActiveRole('customer');
                         sessionStorage.removeItem('papyrus_active_staff_session');
                       }}
-                      className="flex items-center gap-2 bg-red-950/40 border border-red-500/25 hover:bg-red-600 hover:text-white text-red-400 px-4 py-2 font-black text-[10px] uppercase tracking-widest transition-all cursor-pointer font-sans"
+                      className="hero-logout-btn flex items-center gap-2 border px-4 py-2 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all cursor-pointer font-sans shadow-xs"
                     >
                       <LogOut className="w-3.5 h-3.5" />
                       ከሲስተም ውጣ (LOG OUT)
@@ -14545,26 +17586,26 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                   </div>
 
                   {/* ACTIVE GUARD SHIFT SWITCHER (የጥበቃ ፈረቃ መቀየሪያ) */}
-                  <div className="bg-[#181818] border-2 border-yellow-400/60 p-3.5 rounded-xl flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 text-xs font-mono">
+                  <div className="hero-subglass border p-3.5 rounded-2xl flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 text-xs font-mono">
                     <div className="flex items-center gap-2.5">
                       <span className="text-xl">👮</span>
                       <div>
-                        <span className="text-[9px] text-yellow-400 font-bold uppercase block tracking-wider">
+                        <span className="text-[9px] text-[#f4c22b] font-bold uppercase block tracking-wider">
                           አሁን በፈረቃ ላይ ያለ ጥበቃ (ACTIVE GUARD ON DUTY):
                         </span>
                         <span className="text-sm font-black text-white uppercase flex items-center gap-2">
                           {currentUser?.name || 'አቶ ዳዊት (ጥበቃ)'}
-                          <span className="text-[9px] bg-emerald-500/20 text-emerald-300 border border-emerald-400 px-2 py-0.5 rounded font-mono font-bold animate-pulse">
-                            🟢 በስራ ላይ
+                          <span className="hero-gold-badge text-[9px] border px-2 py-0.5 rounded-lg font-mono font-black">
+                            ● በስራ ላይ
                           </span>
                         </span>
                       </div>
                     </div>
 
                     <div className="flex items-center gap-2 w-full sm:w-auto">
-                      <div className="bg-red-950/80 border border-yellow-400/50 px-3 py-1.5 rounded-lg flex items-center gap-2 font-mono">
-                        <span className="text-[10px] text-yellow-400 uppercase font-bold whitespace-nowrap flex items-center gap-1">🔒 በስራ ላይ ያለ ጥበቃ:</span>
-                        <span className="text-xs font-black text-white bg-black/60 px-2 py-0.5 rounded border border-red-500/50">
+                      <div className="hero-subglass border px-3 py-1.5 rounded-xl flex items-center gap-2 font-mono">
+                        <span className="text-[10px] text-[#f4c22b] uppercase font-bold whitespace-nowrap flex items-center gap-1">🔒 በስራ ላይ ያለ ጥበቃ:</span>
+                        <span className="hero-gold-badge text-xs font-black px-2 py-0.5 rounded-lg border">
                           👮 {currentUser?.name || 'አቶ ዳዊት'}
                         </span>
                       </div>
@@ -15229,25 +18270,25 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 bg-black/90 backdrop-blur-md z-[60] flex items-center justify-center p-4 select-none"
+            className="fixed inset-0 bg-[#5C0A0A]/85 backdrop-blur-md z-[60] flex items-center justify-center p-4 select-none"
           >
             <motion.div 
               initial={{ scale: 0.95 }}
               animate={{ scale: 1 }}
               exit={{ scale: 0.95 }}
-              className="bg-[#121212] border-2 border-red-500/30 max-w-sm w-full p-6 text-center space-y-4 shadow-[0_10px_30px_rgba(239,68,68,0.1)] rounded-none"
+              className="bg-[#991B1B] border-2 border-[#F4C22B] max-w-sm w-full p-6 text-center space-y-4 shadow-2xl rounded-2xl"
             >
-              <div className="w-14 h-14 bg-red-950/40 border border-red-500/20 text-red-500 mx-auto flex items-center justify-center rounded-full animate-bounce">
+              <div className="w-14 h-14 bg-[#7A1212] border-2 border-[#F4C22B] text-[#F4C22B] mx-auto flex items-center justify-center rounded-full animate-bounce">
                 <Trash2 className="w-6 h-6" />
               </div>
-              <h3 className="text-sm font-black uppercase text-red-400 tracking-wider">የማረጋገጫ መልእክት</h3>
-              <p className="text-xs text-white/80 font-bold leading-normal">
+              <h3 className="text-sm font-black uppercase text-[#F4C22B] tracking-wider">የማረጋገጫ መልእክት</h3>
+              <p className="text-xs text-white font-bold leading-normal">
                 {deleteConfWindow.msg}
               </p>
               <div className="flex gap-2 pt-2">
                 <button 
                   onClick={() => setDeleteConfWindow(null)}
-                  className="flex-1 py-2.5 bg-[#1F1F1F] border border-white/10 hover:bg-white/10 hover:text-white text-white/70 text-[10px] uppercase font-mono font-black tracking-widest transition-colors cursor-pointer"
+                  className="flex-1 py-2.5 bg-[#7A1212] border border-[#F4C22B]/40 hover:bg-[#8C1414] text-white text-[10px] uppercase font-mono font-black tracking-widest transition-colors cursor-pointer rounded-xl"
                 >
                   CANCEL (ተመለስ)
                 </button>
@@ -15256,7 +18297,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                     deleteConfWindow.onGo();
                     setDeleteConfWindow(null);
                   }}
-                  className="flex-1 py-2.5 bg-red-600 hover:bg-red-500 text-white text-[10px] uppercase font-mono font-black tracking-widest transition-colors cursor-pointer shadow-[2px_2px_0px_#000]"
+                  className="flex-1 py-2.5 bg-[#F4C22B] hover:bg-white text-[#1C1917] text-[10px] uppercase font-mono font-black tracking-widest transition-colors cursor-pointer rounded-xl border border-[#CF9D12]"
                 >
                   YES, DELETE (አጥፋ)
                 </button>
@@ -15292,6 +18333,8 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
         chapaMode={chapaMode}
         appLang={appLang}
         orders={orders}
+        isVoiceOverEnabled={isVoiceOverEnabled}
+        voiceSpeed={voiceSpeed}
         onOpenLiveTracker={() => {
           setIsCartOpen(false);
           setIsLiveTrackerOpen(true);
@@ -15321,9 +18364,25 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
         }}
         onCancelOrder={(orderId) => {
           askConfirmAndRun(
-            'ይህንን ትዕዛዝ ሙሉ በሙሉ መሰረዝ ይፈልጋሉ? (Are you sure you want to cancel this order?)',
+            tText({
+              am: 'ይህንን ትዕዛዝ ሙሉ በሙሉ መሰረዝ ይፈልጋሉ?',
+              en: 'Are you sure you want to cancel this order?',
+              or: 'Ajaja kana guutummaatti haquu barbaadduu?',
+              ti: 'ነዚ ትእዛዝ ብሙሉኡ ክትስርዞ ትደሊ ዲኻ?',
+              sid: 'Konne ajaja wo\'manka huna hasiratto?',
+              fr: 'Voulez-vous vraiment annuler cette commande ?',
+              de: 'Möchten Sie diese Bestellung wirklich stornieren?',
+              it: 'Sei sicuro di voler annullare questo ordine?',
+              zh: '确定要取消此订单吗？',
+              ar: 'هل أنت متأكد من أنك تريد إلغاء هذا الطلب؟',
+            }),
             () => {
-              setOrders((prev) => prev.filter((o) => o.id !== orderId));
+              setOrders((prev) =>
+                prev.map((o) =>
+                  o.id === orderId ? { ...o, status: 'Cancelled' as OrderStatus, updatedAt: Date.now() } : o
+                )
+              );
+              resolveOrderAssistanceCalls(orderId, 'customer');
               setTrackedOrderIds((prev) => prev.filter((id) => id !== orderId));
               if (lastPlacedOrderId === orderId) setLastPlacedOrderId(null);
             }
@@ -15331,77 +18390,6 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
         }}
         onRefresh={handleRefreshLiveOrders}
       />
-
-      {/* VIDEO BACKWARD COMPATIBLE RESILIENT FALLBACK PLAYER MODAL */}
-      <AnimatePresence>
-        {isVideoModalOpen && (
-          <motion.div 
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[100] flex items-center justify-center bg-black/95 p-4 md:p-6 backdrop-blur-md"
-          >
-            <motion.div
-              initial={{ scale: 0.95, y: 15 }}
-              animate={{ scale: 1, y: 0 }}
-              exit={{ scale: 0.95, y: 15 }}
-              className="w-full max-w-4xl bg-[#0a0a0a] border-2 border-[#C1FF00]/40 rounded-2xl overflow-hidden shadow-[0_8px_32px_rgba(193,255,0,0.3)]"
-            >
-              {/* Modal Header */}
-              <div className="flex justify-between items-center bg-[#121212] px-6 py-4 border-b border-white/5">
-                <div className="flex items-center gap-3">
-                  <span className="text-xl animate-bounce">📺</span>
-                  <div>
-                    <h3 className="text-sm font-black text-white tracking-wide uppercase">Hawassa Papyrus Welcome TV</h3>
-                    <p className="text-[10px] text-[#00f5ff] font-mono uppercase tracking-wider mt-0.5">የፓፒረስ ሎጅ መግቢያ ቪዲዮ</p>
-                  </div>
-                </div>
-                <button 
-                  onClick={() => setIsVideoModalOpen(false)}
-                  className="bg-white/5 hover:bg-white/10 hover:text-[#C1FF00] text-white px-3 py-1.5 rounded text-xs font-mono font-black border border-white/10 transition-colors cursor-pointer"
-                >
-                  CLOSE (ዝጋ) ✕
-                </button>
-              </div>
-
-              {/* Video Embedding Body */}
-              <div className="aspect-video relative bg-black overflow-hidden">
-                {bgVideoType === 'youtube' ? (
-                  <div className="absolute inset-0 w-full h-full overflow-hidden scale-[1.25]">
-                    <iframe
-                      className="absolute top-1/2 left-1/2 w-[120vw] h-[67.5vw] min-h-[120vh] min-w-[213.33vh] -translate-x-1/2 -translate-y-1/2 opacity-100 select-none scale-[1.2] object-cover pointer-events-none"
-                      src={getYouTubeEmbedUrl(bgVideoUrl, false, true)}
-                      title="Welcome Papyrus Background Video player"
-                      allow="autoplay; encrypted-media"
-                      frameBorder="0"
-                    ></iframe>
-                    <div className="absolute inset-0 bg-transparent z-10 pointer-events-none"></div>
-                  </div>
-                ) : (
-                  <video
-                    className="w-full h-full object-cover"
-                    src={bgVideoUrl}
-                    controls
-                    autoPlay
-                    playsInline
-                  />
-                )}
-              </div>
-
-              {/* Additional Options */}
-              <div className="bg-[#0f0f0f] p-4 border-t border-white/5 flex flex-col sm:flex-row justify-between items-center gap-3">
-                <p className="text-[11px] text-stone-400 text-center sm:text-left">
-                  በአሳሽዎ ህግጋት ምክንያት ቪዲዮው ከጀርባ በራሱ ካልሰራ እዚህ ጋር በተሟላ ድምፅና ጥራት ቀጥታ መመልከት ይችላሉ።
-                </p>
-                <div className="bg-[#C1FF00]/10 text-[#C1FF00] border border-[#C1FF00]/30 font-mono font-black text-[10px] uppercase py-2 px-4 rounded tracking-wider flex items-center gap-1.5 shrink-0 select-none">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                  <span>📺 ፓፒረስ ሆቴል ቴሌቪዥን (PAPYRUS HOTEL LIVE TV)</span>
-                </div>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
 
       {/* PRINTABLE STAFF CERTIFICATE OVERLAY */}
       {printingStaffMember && (
@@ -15431,28 +18419,28 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.3 }}
-            className="fixed inset-0 z-[9999] flex flex-col items-center justify-between bg-black/95 select-none overflow-hidden"
+            className="fixed inset-0 z-[9999] flex flex-col items-center justify-between bg-[#5C0A0A]/95 select-none overflow-hidden"
           >
             {/* Blurry ambient background of the active image */}
             <div 
-              className="absolute inset-0 bg-cover bg-center filter blur-[40px] scale-110 opacity-40 transition-all duration-500 pointer-events-none" 
+              className="absolute inset-0 bg-cover bg-center filter blur-[40px] scale-110 opacity-35 transition-all duration-500 pointer-events-none" 
               style={{ backgroundImage: `url(${galleryItems[selectedGalleryIdx].image_url})` }}
             />
 
             {/* Top Bar with title & close button */}
-            <div className="relative z-10 w-full flex items-center justify-between p-4 bg-gradient-to-b from-black/80 to-transparent">
+            <div className="relative z-10 w-full flex items-center justify-between p-4 bg-gradient-to-b from-[#7A1010]/90 to-transparent">
               <div className="flex flex-col">
-                <span className="text-[10px] text-[#C1FF00] font-mono font-black uppercase tracking-widest">
+                <span className="text-[10px] text-[#F4C22B] font-mono font-black uppercase tracking-widest">
                   {galleryItems[selectedGalleryIdx].category || 'Papyrus Gallery'}
                 </span>
                 <h4 className="text-sm font-bold text-white tracking-wide">
-                  {appLang === 'am' ? galleryItems[selectedGalleryIdx].title_am : galleryItems[selectedGalleryIdx].title_en}
+                  {appLang === 'am' || appLang === 'ti' ? galleryItems[selectedGalleryIdx].title_am : (galleryItems[selectedGalleryIdx].title_en || galleryItems[selectedGalleryIdx].title_am)}
                 </h4>
               </div>
               
               <button 
                 onClick={() => setSelectedGalleryIdx(null)}
-                className="bg-white/10 hover:bg-[#C1FF00] hover:text-black text-white p-2.5 rounded-full transition-all duration-200 border border-white/10 flex items-center justify-center cursor-pointer"
+                className="bg-[#991B1B] hover:bg-[#F4C22B] hover:text-[#1C1917] text-white p-2.5 rounded-full transition-all duration-200 border border-[#F4C22B]/50 flex items-center justify-center cursor-pointer"
               >
                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
               </button>
@@ -15466,7 +18454,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                   e.stopPropagation();
                   setSelectedGalleryIdx(prev => prev !== null ? (prev - 1 + galleryItems.length) % galleryItems.length : null);
                 }}
-                className="bg-black/60 hover:bg-[#C1FF00] hover:text-black text-white p-3 rounded-full transition-all duration-200 border border-white/10 flex items-center justify-center shrink-0 cursor-pointer shadow-lg"
+                className="bg-[#991B1B]/90 hover:bg-[#F4C22B] hover:text-[#1C1917] text-white p-3 rounded-full transition-all duration-200 border border-[#F4C22B]/50 flex items-center justify-center shrink-0 cursor-pointer shadow-lg"
               >
                 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6"/></svg>
               </button>
@@ -15482,7 +18470,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                   src={galleryItems[selectedGalleryIdx].image_url}
                   alt="Gallery Item"
                   referrerPolicy="no-referrer"
-                  className="max-w-full max-h-[70vh] object-contain rounded-xl border border-white/20 shadow-2xl shadow-[#C1FF00]/10"
+                  className="max-w-full max-h-[70vh] object-contain rounded-xl border-2 border-[#F4C22B]/60 shadow-2xl"
                 />
               </div>
 
@@ -15492,17 +18480,17 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                   e.stopPropagation();
                   setSelectedGalleryIdx(prev => prev !== null ? (prev + 1) % galleryItems.length : null);
                 }}
-                className="bg-black/60 hover:bg-[#C1FF00] hover:text-[#000] text-white p-3 rounded-full transition-all duration-200 border border-white/10 flex items-center justify-center shrink-0 cursor-pointer shadow-lg"
+                className="bg-[#991B1B]/90 hover:bg-[#F4C22B] hover:text-[#1C1917] text-white p-3 rounded-full transition-all duration-200 border border-[#F4C22B]/50 flex items-center justify-center shrink-0 cursor-pointer shadow-lg"
               >
                 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m9 18 6-6-6-6"/></svg>
               </button>
             </div>
 
             {/* Bottom Bar: Thumbnails and descriptive metadata */}
-            <div className="relative z-10 w-full bg-gradient-to-t from-black/90 to-transparent p-6 flex flex-col items-center gap-4 border-t border-white/5">
+            <div className="relative z-10 w-full bg-gradient-to-t from-[#5C0A0A] to-transparent p-6 flex flex-col items-center gap-4 border-t border-[#F4C22B]/25">
               {/* Image position text */}
-              <div className="text-[11px] font-mono text-white/50 bg-white/5 px-3 py-1 rounded-full border border-white/10">
-                IMAGE <span className="text-[#C1FF00] font-black">{selectedGalleryIdx + 1}</span> OF <span className="font-bold">{galleryItems.length}</span>
+              <div className="text-[11px] font-mono text-[#FEF3C7] bg-[#8C1414] px-3 py-1 rounded-full border border-[#F4C22B]/40">
+                IMAGE <span className="text-[#F4C22B] font-black">{selectedGalleryIdx + 1}</span> OF <span className="font-bold">{galleryItems.length}</span>
               </div>
 
               {/* Horizontal Scrollable Thumbnails */}
@@ -15512,7 +18500,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                     key={item.id || idx}
                     onClick={() => setSelectedGalleryIdx(idx)}
                     className={`relative shrink-0 w-12 h-12 rounded-lg overflow-hidden border-2 transition-all duration-200 cursor-pointer ${
-                      selectedGalleryIdx === idx ? 'border-[#C1FF00] scale-105 shadow-md shadow-[#C1FF00]/20' : 'border-white/20 hover:border-white/50 opacity-60 hover:opacity-100'
+                      selectedGalleryIdx === idx ? 'border-[#F4C22B] scale-105 shadow-md' : 'border-white/30 hover:border-[#F4C22B] opacity-70 hover:opacity-100'
                     }`}
                   >
                     <img
@@ -15529,210 +18517,6 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
         )}
       </AnimatePresence>
 
-      {/* QUICK BACKGROUND VIDEO MODAL */}
-      <AnimatePresence>
-        {showQuickVideoModal && (
-          <motion.div 
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            onClick={() => setShowQuickVideoModal(false)}
-            className="fixed inset-0 bg-black/80 backdrop-blur-md z-[999] flex items-center justify-center p-4"
-          >
-            <motion.div 
-              initial={{ scale: 0.9, y: 20 }}
-              animate={{ scale: 1, y: 0 }}
-              exit={{ scale: 0.9, y: 20 }}
-              onClick={(e) => e.stopPropagation()}
-              className="bg-[#121212] border-2 border-amber-500/50 rounded-2xl max-w-xl w-full p-5 shadow-2xl text-white space-y-4 relative overflow-hidden"
-            >
-              {/* Glow Accent */}
-              <div className="absolute -top-10 -right-10 w-40 h-40 bg-amber-500/10 rounded-full blur-2xl pointer-events-none" />
-
-              {/* Header */}
-              <div className="flex items-center justify-between border-b border-white/10 pb-3">
-                <div className="flex items-center gap-2">
-                  <span className="text-2xl">🎬</span>
-                  <div>
-                    <h3 className="text-base font-black text-white uppercase tracking-wider">
-                      {appLang === 'am' ? 'የጀርባ ቪዲዮ ማስተካከያ' : 'Background Video Control'}
-                    </h3>
-                    <p className="text-[10px] text-stone-400 font-mono">
-                      {appLang === 'am' ? 'የሬስቶራንቱን የጀርባ ቪዲዮ ይምረጡ ወይም የራስዎን ይጫኑ' : 'Choose a background video loop or upload your own'}
-                    </p>
-                  </div>
-                </div>
-                <button 
-                  onClick={() => setShowQuickVideoModal(false)}
-                  className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white font-bold flex items-center justify-center cursor-pointer transition-colors"
-                >
-                  ✕
-                </button>
-              </div>
-
-              {/* Toggle Video On/Off */}
-              <div className="flex items-center justify-between bg-black/50 p-3 rounded-xl border border-white/10">
-                <span className="text-xs font-extrabold uppercase text-amber-200">
-                  {appLang === 'am' ? 'የጀርባ ቪዲዮ ማብሪያ/ማጥፊያ' : 'Background Video Status'}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const newState = !isBgVideoEnabled;
-                    setIsBgVideoEnabled(newState);
-                  }}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-black uppercase tracking-wider transition-colors cursor-pointer border ${
-                    isBgVideoEnabled 
-                      ? 'bg-[#C1FF00] text-black border-[#C1FF00]' 
-                      : 'bg-stone-800 text-stone-400 border-stone-700'
-                  }`}
-                >
-                  {isBgVideoEnabled ? (appLang === 'am' ? 'BERTWAL (ON)' : 'ON') : (appLang === 'am' ? 'TEFTWAL (OFF)' : 'OFF')}
-                </button>
-              </div>
-
-              {/* Preset Video Grid */}
-              <div className="space-y-2">
-                <span className="text-[10px] font-mono font-bold text-amber-300 uppercase block tracking-wider">
-                  ✨ {appLang === 'am' ? 'የተዘጋጁ ምርጥ የቪዲዮ አማራጮች (PRESET LOOPS)' : 'PRESET VIDEO LOOPS'}
-                </span>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setBgVideoUrl('https://www.youtube.com/watch?v=EvwYOmxaxdA');
-                      setBgVideoType('youtube');
-                      setIsBgVideoEnabled(true);
-                      alert(appLang === 'am' ? '👨‍🍳 የሼፍ ኩኪንግ እሳት ቪዲዮ ተመረጠ!' : 'Chef Cooking Fire loop selected!');
-                    }}
-                    className={`p-3 rounded-xl border text-left transition-all flex items-center gap-3 cursor-pointer ${
-                      bgVideoType === 'youtube' && bgVideoUrl.includes('EvwYOmxaxdA')
-                        ? 'bg-amber-500/20 border-amber-400 text-white shadow-lg shadow-amber-500/10'
-                        : 'bg-white/5 border-white/10 text-stone-300 hover:bg-white/10'
-                    }`}
-                  >
-                    <span className="text-2xl">👨‍🍳</span>
-                    <div>
-                      <div className="text-xs font-extrabold text-amber-100">
-                        {appLang === 'am' ? 'የሼፍ ኩኪንግ እሳትና ምግብ' : 'Chef Cooking & Fire Sizzle'}
-                      </div>
-                      <div className="text-[9px] font-mono text-amber-300/80">Black Spaghetti & Pan Fire</div>
-                    </div>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setBgVideoUrl('https://www.youtube.com/watch?v=1GrEP_j9A4c');
-                      setBgVideoType('youtube');
-                      setIsBgVideoEnabled(true);
-                      alert(appLang === 'am' ? '🥩 የምግብና ጃዝ አምቢያንስ ተመረጠ!' : 'Gourmet Jazz Ambience selected!');
-                    }}
-                    className={`p-3 rounded-xl border text-left transition-all flex items-center gap-3 cursor-pointer ${
-                      bgVideoType === 'youtube' && bgVideoUrl.includes('1GrEP_j9A4c')
-                        ? 'bg-amber-500/20 border-amber-400 text-white shadow-lg shadow-amber-500/10'
-                        : 'bg-white/5 border-white/10 text-stone-300 hover:bg-white/10'
-                    }`}
-                  >
-                    <span className="text-2xl">🥩</span>
-                    <div>
-                      <div className="text-xs font-extrabold text-amber-100">
-                        {appLang === 'am' ? 'የምግብና ጃዝ ሬስቶራንት' : 'Gourmet Jazz & Dining'}
-                      </div>
-                      <div className="text-[9px] font-mono text-amber-300/80">Luxury Dining Ambience</div>
-                    </div>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setBgVideoUrl('https://www.youtube.com/watch?v=AHuU7i--EUc');
-                      setBgVideoType('youtube');
-                      setIsBgVideoEnabled(true);
-                      alert(appLang === 'am' ? '🏨 የፓፒረስ ሎጅ መግቢያ ተመረጠ!' : 'Papyrus Lodge Entrance selected!');
-                    }}
-                    className={`p-3 rounded-xl border text-left transition-all flex items-center gap-3 cursor-pointer ${
-                      bgVideoType === 'youtube' && bgVideoUrl.includes('AHuU7i--EUc')
-                        ? 'bg-amber-500/20 border-amber-400 text-white shadow-lg shadow-amber-500/10'
-                        : 'bg-white/5 border-white/10 text-stone-300 hover:bg-white/10'
-                    }`}
-                  >
-                    <span className="text-2xl">🏨</span>
-                    <div>
-                      <div className="text-xs font-extrabold text-amber-100">
-                        {appLang === 'am' ? 'የፓፒረስ ሎጅ መግቢያ' : 'Papyrus Lodge Resort'}
-                      </div>
-                      <div className="text-[9px] font-mono text-amber-300/80">Resort & Entrance View</div>
-                    </div>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setBgVideoUrl('https://www.youtube.com/watch?v=RIsV69W7Qj0');
-                      setBgVideoType('youtube');
-                      setIsBgVideoEnabled(true);
-                      alert(appLang === 'am' ? '🌿 የሐዋሳ ሐይቅ ተፈጥሮ ተመረጠ!' : 'Lake Hawassa View selected!');
-                    }}
-                    className={`p-3 rounded-xl border text-left transition-all flex items-center gap-3 cursor-pointer ${
-                      bgVideoType === 'youtube' && bgVideoUrl.includes('RIsV69W7Qj0')
-                        ? 'bg-amber-500/20 border-amber-400 text-white shadow-lg shadow-amber-500/10'
-                        : 'bg-white/5 border-white/10 text-stone-300 hover:bg-white/10'
-                    }`}
-                  >
-                    <span className="text-2xl">🌿</span>
-                    <div>
-                      <div className="text-xs font-extrabold text-amber-100">
-                        {appLang === 'am' ? 'የሐዋሳ ሐይቅ ተፈጥሮ' : 'Lake Hawassa Scenic'}
-                      </div>
-                      <div className="text-[9px] font-mono text-amber-300/80">Nature & Water Waves</div>
-                    </div>
-                  </button>
-                </div>
-              </div>
-
-              {/* Upload Local Video File Option */}
-              <div className="bg-gradient-to-r from-amber-950/40 via-stone-900 to-black p-3.5 rounded-xl border border-amber-500/30 space-y-2">
-                <span className="text-[10px] font-mono font-bold text-amber-300 uppercase block tracking-wider">
-                  📤 {appLang === 'am' ? 'የራስዎን ቪዲዮ ይጫኑ (UPLOAD YOUR OWN VIDEO)' : 'UPLOAD YOUR OWN VIDEO'}
-                </span>
-                <label className="flex items-center justify-center gap-2 border-2 border-dashed border-amber-400/40 hover:border-amber-400 bg-amber-500/10 p-3 rounded-xl cursor-pointer transition-colors group">
-                  <span className="text-xl group-hover:scale-110 transition-transform">📁</span>
-                  <span className="text-xs font-black text-[#C1FF00] uppercase">
-                    {appLang === 'am' ? 'ከስልክዎ ወይም ከኮምፒውተርዎ ቪዲዮ ይምረጡ' : 'Select Video File (.mp4, .webm, .mov)'}
-                  </span>
-                  <input
-                    type="file"
-                    accept="video/mp4,video/webm,video/quicktime"
-                    className="hidden"
-                    onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      if (file) {
-                        const blobUrl = URL.createObjectURL(file);
-                        setBgVideoUrl(blobUrl);
-                        setBgVideoType('local');
-                        setIsBgVideoEnabled(true);
-                        alert(appLang === 'am' ? '📤 የጫኑት ቪዲዮ በጀርባ ላይ መስራት ጀምሯል!' : 'Your uploaded video is now playing in the background!');
-                      }
-                    }}
-                  />
-                </label>
-              </div>
-
-              {/* Footer Done Button */}
-              <div className="pt-2 flex justify-end">
-                <button
-                  onClick={() => setShowQuickVideoModal(false)}
-                  className="bg-[#C1FF00] hover:bg-white text-black font-extrabold text-xs uppercase px-5 py-2.5 rounded-xl transition-colors cursor-pointer shadow-lg"
-                >
-                  {appLang === 'am' ? 'ተጨርሷል (DONE)' : 'DONE'}
-                </button>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
       {/* PRINTABLE DUAL PARKING PASS CARD MODAL */}
       <AnimatePresence>
         {selectedTicketPassVisitor && (
@@ -15740,23 +18524,23 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 bg-black/85 backdrop-blur-md z-[100] flex items-center justify-center p-4 overflow-y-auto"
+            className="fixed inset-0 bg-[#5C0A0A]/85 backdrop-blur-md z-[100] flex items-center justify-center p-4 overflow-y-auto"
           >
             <motion.div 
               initial={{ scale: 0.95, opacity: 0, y: 10 }}
               animate={{ scale: 1, opacity: 1, y: 0 }}
               exit={{ scale: 0.95, opacity: 0, y: 10 }}
-              className="bg-stone-900 border-2 border-yellow-400 text-stone-900 rounded-3xl max-w-2xl w-full p-6 space-y-6 shadow-2xl relative overflow-hidden my-8"
+              className="bg-[#991B1B] border-2 border-[#F4C22B] text-stone-900 rounded-3xl max-w-2xl w-full p-6 space-y-6 shadow-2xl relative overflow-hidden my-8"
             >
               {/* Header Action Bar (Screen Only) */}
-              <div className="flex justify-between items-center border-b border-white/10 pb-3 text-white print:hidden">
+              <div className="flex justify-between items-center border-b border-[#F4C22B]/35 pb-3 text-white print:hidden">
                 <div className="flex items-center gap-2">
                   <span className="text-xl">🅿️</span>
                   <div>
-                    <h3 className="font-black text-sm uppercase text-yellow-400 tracking-wider">
+                    <h3 className="font-black text-sm uppercase text-[#F4C22B] tracking-wider">
                       የሀዋሳ ፓፒረስ ሎጅ - የፓርኪንግ ካርድ (PARKING PASS TICKET)
                     </h3>
-                    <p className="text-[10px] text-stone-400 font-mono">
+                    <p className="text-[10px] text-[#FEF3C7] font-mono">
                       ድርጅቱ የሚጠቀምባቸው ሁለት ተመሳስይ የፓርኪንግ ቁጥር መለያ ካርዶች
                     </p>
                   </div>
@@ -15765,13 +18549,13 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                 <div className="flex items-center gap-2">
                   <button
                     onClick={() => window.print()}
-                    className="bg-yellow-400 hover:bg-white text-black px-3.5 py-1.5 rounded-xl font-mono text-xs font-black uppercase tracking-wider transition-all cursor-pointer shadow-md flex items-center gap-1.5"
+                    className="bg-[#F4C22B] hover:bg-white text-[#1C1917] px-3.5 py-1.5 rounded-xl font-mono text-xs font-black uppercase tracking-wider transition-all cursor-pointer shadow-md flex items-center gap-1.5"
                   >
                     🖨️ አትም (PRINT)
                   </button>
                   <button
                     onClick={() => setSelectedTicketPassVisitor(null)}
-                    className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center font-bold cursor-pointer"
+                    className="w-8 h-8 rounded-full bg-[#7A1212] hover:bg-white text-white hover:text-[#1C1917] flex items-center justify-center font-bold cursor-pointer border border-[#F4C22B]/40"
                   >
                     ✕
                   </button>
@@ -15922,85 +18706,85 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 bg-black/90 backdrop-blur-md z-[110] flex items-center justify-center p-4 overflow-y-auto"
+            className="fixed inset-0 bg-[#5C0A0A]/85 backdrop-blur-md z-[110] flex items-center justify-center p-4 overflow-y-auto"
           >
             <motion.div 
               initial={{ scale: 0.9, opacity: 0, y: 15 }}
               animate={{ scale: 1, opacity: 1, y: 0 }}
               exit={{ scale: 0.9, opacity: 0, y: 15 }}
-              className="bg-[#181818] border-2 border-yellow-400 text-white rounded-2xl max-w-lg w-full p-6 space-y-5 shadow-2xl relative overflow-hidden"
+              className="bg-[#991B1B] border-2 border-[#F4C22B] text-white rounded-2xl max-w-lg w-full p-6 space-y-5 shadow-2xl relative overflow-hidden"
             >
               {/* Top Banner */}
-              <div className="flex items-center justify-between border-b border-white/10 pb-3">
+              <div className="flex items-center justify-between border-b border-[#F4C22B]/35 pb-3">
                 <div className="flex items-center gap-2.5">
                   <span className="text-2xl">🚪</span>
                   <div>
-                    <h3 className="font-extrabold text-sm uppercase text-yellow-400 tracking-wider">
+                    <h3 className="font-extrabold text-sm uppercase text-[#F4C22B] tracking-wider">
                       የመውጫ ማረጋገጫና የተረከበበት ቅፅ (EXIT VERIFICATION)
                     </h3>
-                    <p className="text-[10px] text-white/50 font-mono">
+                    <p className="text-[10px] text-[#FEF3C7] font-mono">
                       የሁለቱን ተመሳስይ የፓርኪንግ ካርዶች ትክክለኛነት ያረጋግጡ
                     </p>
                   </div>
                 </div>
                 <button
                   onClick={() => setCheckoutConfirmVisitor(null)}
-                  className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center font-bold cursor-pointer"
+                  className="w-8 h-8 rounded-full bg-[#7A1212] hover:bg-white text-white hover:text-[#1C1917] flex items-center justify-center font-bold cursor-pointer border border-[#F4C22B]/40"
                 >
                   ✕
                 </button>
               </div>
 
               {/* Vehicle & Tag Details Card */}
-              <div className="bg-[#121212] border border-yellow-500/30 p-4 rounded-xl space-y-3">
-                <div className="flex justify-between items-center border-b border-white/10 pb-2">
-                  <span className="text-[10px] font-mono text-white/50 uppercase">የፓርኪንግ ካርድ ቁጥር (TICKET TAG)</span>
-                  <span className="text-base font-black font-mono text-black bg-yellow-400 px-3 py-1 rounded tracking-widest">
+              <div className="bg-[#7A1212] border border-[#F4C22B]/50 p-4 rounded-xl space-y-3">
+                <div className="flex justify-between items-center border-b border-[#F4C22B]/30 pb-2">
+                  <span className="text-[10px] font-mono text-[#FDE68A] font-bold uppercase">የፓርኪንግ ካርድ ቁጥር (TICKET TAG)</span>
+                  <span className="text-base font-black font-mono text-[#1C1917] bg-[#F4C22B] px-3 py-1 rounded tracking-widest">
                     🎫 {checkoutConfirmVisitor.ticketTagNumber || 'TAG-#101'}
                   </span>
                 </div>
 
                 <div className="grid grid-cols-2 gap-3 text-xs font-mono">
                   <div>
-                    <span className="text-white/40 block text-[9px]">የእንግዳ/ባለቤት ስም:</span>
+                    <span className="text-[#FDE68A] block text-[9px] font-bold">የእንግዳ/ባለቤት ስም:</span>
                     <span className="font-bold text-white uppercase text-sm">{checkoutConfirmVisitor.name}</span>
                   </div>
                   <div>
-                    <span className="text-white/40 block text-[9px]">የተሽከርካሪ አይነት:</span>
-                    <span className="font-extrabold text-amber-300">
+                    <span className="text-[#FDE68A] block text-[9px] font-bold">የተሽከርካሪ አይነት:</span>
+                    <span className="font-extrabold text-[#F4C22B]">
                       {checkoutConfirmVisitor.vehicleType === 'motorcycle' ? '🏍️ ሞተር / ባጃጅ' : checkoutConfirmVisitor.vehicleType === 'walk' ? '🚶 እግርኛ' : '🚗 መኪና'}
                     </span>
                   </div>
                   <div>
-                    <span className="text-white/40 block text-[9px]">የሰሌዳ ቁጥር (PLATE):</span>
-                    <span className="font-black text-yellow-300 tracking-wider uppercase">{checkoutConfirmVisitor.carPlate}</span>
+                    <span className="text-[#FDE68A] block text-[9px] font-bold">የሰሌዳ ቁጥር (PLATE):</span>
+                    <span className="font-black text-[#F4C22B] tracking-wider uppercase">{checkoutConfirmVisitor.carPlate}</span>
                   </div>
                   <div>
-                    <span className="text-white/40 block text-[9px]">ስልክ ቁጥር:</span>
+                    <span className="text-[#FDE68A] block text-[9px] font-bold">ስልክ ቁጥር:</span>
                     <span className="font-bold text-white">{checkoutConfirmVisitor.phone}</span>
                   </div>
                   <div className="col-span-2">
-                    <span className="text-white/40 block text-[9px]">የገባበት ሰዓት:</span>
-                    <span className="font-bold text-emerald-400">{checkoutConfirmVisitor.timeIn}</span>
+                    <span className="text-[#FDE68A] block text-[9px] font-bold">የገባበት ሰዓት:</span>
+                    <span className="font-bold text-[#A7F3D0]">{checkoutConfirmVisitor.timeIn}</span>
                   </div>
                 </div>
               </div>
 
               {/* Twin Verification Checklist */}
-              <div className="bg-amber-500/10 border border-amber-500/30 p-3.5 rounded-xl space-y-2 text-xs font-mono text-amber-200">
-                <div className="font-bold text-yellow-300 uppercase flex items-center gap-1">
+              <div className="bg-[#8C1414] border border-[#F4C22B]/50 p-3.5 rounded-xl space-y-2 text-xs font-mono text-[#FEF3C7]">
+                <div className="font-bold text-[#F4C22B] uppercase flex items-center gap-1">
                   <span>✅ የጥበቃ ማረጋገጫ ዝርዝር (Checklist):</span>
                 </div>
-                <div className="space-y-1.5 text-[11px] text-white/80">
+                <div className="space-y-1.5 text-[11px] text-white">
                   <div className="flex items-center gap-2">
-                    <span className="text-emerald-400 font-bold">✓</span>
-                    <span>1️⃣ ተሽከርካሪው ላይ የነበረው ካርድ ቁጥር፦ <strong className="text-yellow-300">{checkoutConfirmVisitor.ticketTagNumber || 'TAG-#101'}</strong></span>
+                    <span className="text-[#A7F3D0] font-bold">✓</span>
+                    <span>1️⃣ ተሽከርካሪው ላይ የነበረው ካርድ ቁጥር፦ <strong className="text-[#F4C22B]">{checkoutConfirmVisitor.ticketTagNumber || 'TAG-#101'}</strong></span>
                   </div>
                   <div className="flex items-center gap-2">
-                    <span className="text-emerald-400 font-bold">✓</span>
-                    <span>2️⃣ ባለቤቱ ያቀረበው ካርድ ቁጥር፦ <strong className="text-yellow-300">{checkoutConfirmVisitor.ticketTagNumber || 'TAG-#101'}</strong></span>
+                    <span className="text-[#A7F3D0] font-bold">✓</span>
+                    <span>2️⃣ ባለቤቱ ያቀረበው ካርድ ቁጥር፦ <strong className="text-[#F4C22B]">{checkoutConfirmVisitor.ticketTagNumber || 'TAG-#101'}</strong></span>
                   </div>
-                  <div className="text-[10px] text-amber-300/80 italic pt-1">
+                  <div className="text-[10px] text-[#FDE68A] italic pt-1">
                     * ሁለቱም ካርዶች ከተረከቡ በኋላ ተሽከርካሪው ውጭ እንዲወጣ ይፈቀድለታል።
                   </div>
                 </div>
@@ -16011,14 +18795,14 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                 <button
                   type="button"
                   onClick={() => confirmExitCheckout(checkoutConfirmVisitor)}
-                  className="flex-1 bg-yellow-400 hover:bg-white text-black font-black text-xs uppercase py-3.5 tracking-wider rounded-xl transition-all cursor-pointer shadow-lg flex items-center justify-center gap-1.5"
+                  className="flex-1 bg-[#F4C22B] hover:bg-white text-[#1C1917] font-black text-xs uppercase py-3.5 tracking-wider rounded-xl transition-all cursor-pointer shadow-lg flex items-center justify-center gap-1.5 border border-[#CF9D12]"
                 >
                   <span>🚪 መውጫውን አረጋግጥና አስወጣ (CONFIRM EXIT)</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => setCheckoutConfirmVisitor(null)}
-                  className="bg-white/10 hover:bg-white/20 text-white font-mono text-xs font-bold uppercase px-4 py-3.5 rounded-xl cursor-pointer"
+                  className="bg-[#7A1212] hover:bg-[#8C1414] text-white font-mono text-xs font-bold uppercase px-4 py-3.5 rounded-xl cursor-pointer border border-[#F4C22B]/40"
                 >
                   ሰርዝ
                 </button>
@@ -16027,6 +18811,45 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* TARGETED ASSIGNED WAITER & LEADERSHIP / SUPPORT MODAL */}
+      {(() => {
+        const { waiterName, staffMember } = getAssignedWaiterDetails(guestLocation);
+        const activeLocCalls = assistanceCalls.filter(
+          (c) =>
+            c.active &&
+            c.location.trim().toLowerCase() === (guestLocation || '').trim().toLowerCase(),
+        );
+        return (
+          <GuestConciergeModal
+            isOpen={conciergeModalTab !== null}
+            initialTab={conciergeModalTab || 'waiter'}
+            onClose={() => setConciergeModalTab(null)}
+            appLang={appLang}
+            guestLocation={guestLocation}
+            onChangeGuestLocation={setGuestLocation}
+            assignedWaiterName={waiterName}
+            assignedWaiterStaff={staffMember}
+            activeLocationCalls={activeLocCalls}
+            onSendWaiterCall={handleSendTargetedWaiterCall}
+            onCancelWaiterCall={handleResolveBuzzer}
+            leadershipContacts={leadershipContacts}
+            leadershipMessages={leadershipMessages}
+            onSendLeadershipMessage={handleSendLeadershipMessage}
+          />
+        );
+      })()}
+
+      {/* GLOBAL NON-BLOCKING TOAST FOR STAFF PORTALS */}
+      {accessibleToast && activeRole !== 'customer' && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[120] max-w-md w-[90%] rounded-xl bg-[#065F46] text-white border-2 border-[#6EE7B7] px-4 py-3 text-xs font-black text-center shadow-2xl"
+        >
+          {accessibleToast}
+        </div>
+      )}
 
     </div>
   );

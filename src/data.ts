@@ -204,14 +204,12 @@ export const PROMO_BANNERS: PromoBanner[] = [
     title: 'በፓፒረስ ሎጅ ልዩ የሳምንቱ መጨረሻ ቅናሽ!',
     desc: 'የቪ አይ ፒ ክፍሎችን ሲይዙ የ15% ቅናሽ ያገኛሉ፤ እንዲሁም ነጻ የሀይቅ ላይ የጀልባ ጉዞ ተዘጋጅቶልዎታል።',
     tag: 'ልዩ ቅናሽ (Lodge Specials)',
-    video: 'https://www.youtube.com/watch?v=AHuU7i--EUc',
     poster: 'https://images.unsplash.com/photo-1571003123894-1f0594d2b5d9?w=600&auto=format&fit=crop'
   },
   {
     title: 'የእንግዳ ማረፊያ እና የባህል ምግቦች',
     desc: 'የሀዋሳን ትኩስ ዓሳ እና ባህላዊ የሽከላ ጥብስ በቅናሽ ዋጋ እየተዝናኑ ይመገቡ።',
     tag: 'ምርጥ ምግቦች (Tasty Delights)',
-    video: 'https://www.youtube.com/watch?v=EvwYOmxaxdA',
     poster: 'https://images.unsplash.com/photo-1603048588665-791ca8aea617?w=600&auto=format&fit=crop'
   }
 ];

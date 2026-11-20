@@ -65,7 +65,7 @@ export interface BankAccount {
   number: string;
 }
 
-export type OrderStatus = 'Pending' | 'Preparing' | 'Completed' | 'Paid';
+export type OrderStatus = 'Pending' | 'Preparing' | 'Completed' | 'Paid' | 'Cancelled';
 export type OrderType = 'dine' | 'delivery';
 export type PaymentMethod = 'cash' | 'bank' | 'chapa';
 
@@ -87,6 +87,7 @@ export interface Order {
   tip: number;
   status: OrderStatus;
   payment: PaymentMethod;
+  paymentVerified?: boolean;
   bankRef?: string;
   bankId?: string;
   receiptScreenshot?: string;
@@ -104,6 +105,10 @@ export interface Order {
   createdAt?: number;
   cookingStatus?: 'Pending' | 'Preparing' | 'Completed';
   servedByWaiter?: boolean;
+  checkedByWaiter?: boolean;
+  readyAt?: string;
+  servedAt?: string;
+  updatedAt?: number;
 }
 
 export interface AssistanceCall {
@@ -111,8 +116,49 @@ export interface AssistanceCall {
   location: string;
   time: string;
   active: boolean;
-  type?: 'call' | 'pickup';
+  type?: 'call' | 'pickup' | 'new_order';
   message?: string;
+  targetWaiter?: string;
+  targetRole?: 'waiter' | 'chef' | 'cashier' | 'manager' | 'admin' | 'support';
+  reason?: string;
+  handledBy?: string;
+  orderId?: string;
+  createdAt?: number;
+  repeatCount?: number;
+}
+
+export interface LeadershipContacts {
+  managerName: string;
+  managerPhone: string;
+  managerTelegram?: string;
+  managerWhatsapp?: string;
+  managerAvailable?: boolean;
+  gmName: string;
+  gmPhone: string;
+  gmTelegram?: string;
+  gmWhatsapp?: string;
+  gmAvailable?: boolean;
+  supportName: string;
+  supportPhone: string;
+  supportTelegram?: string;
+  supportWhatsapp?: string;
+  supportAvailable?: boolean;
+}
+
+export interface LeadershipMessage {
+  id: string;
+  target: 'manager' | 'admin' | 'support' | 'both';
+  location: string;
+  senderName?: string;
+  senderPhone?: string;
+  topic: string;
+  message: string;
+  time: string;
+  date: string;
+  status: 'Pending' | 'Replied' | 'Resolved';
+  reply?: string;
+  repliedBy?: string;
+  replyTime?: string;
 }
 
 export interface Feedback {
@@ -127,7 +173,6 @@ export interface PromoBanner {
   title: string;
   desc: string;
   tag: string;
-  video: string;
   poster: string;
 }
 
@@ -178,5 +223,56 @@ export interface VisitorLog {
   verifiedByGuard?: string;
 }
 
+export type ShiftPeriod = 'Morning' | 'Afternoon' | 'Evening' | 'Night' | 'Full Day';
 
+export interface ShiftAssignment {
+  id: string;
+  staffName: string;
+  staffRole: 'waiter' | 'chef';
+  location: string;
+  locationType: 'table' | 'room';
+  shiftPeriod: ShiftPeriod;
+  date: string;
+  active: boolean;
+  assignedBy?: string;
+  notes?: string;
+}
 
+export interface StockAlertLogEntry {
+  id: string;
+  menuItemId: string;
+  itemNameAm: string;
+  itemNameEn: string;
+  category: string;
+  previousAvailable: boolean;
+  newAvailable: boolean;
+  changedByName: string;
+  changedByRole: string;
+  time: string;
+  date: string;
+  timestamp: number;
+  acknowledged: boolean;
+  acknowledgedBy?: string;
+  acknowledgedAt?: string;
+  pushDispatched?: boolean;
+  smsDispatched?: boolean;
+}
+
+export interface StockAlertSettings {
+  audioEnabled: boolean;
+  pushEnabled: boolean;
+  smsEnabled: boolean;
+  managerPhone: string;
+  customerSoldOutMode: 'show_sold_out' | 'hide';
+}
+
+export interface QrPrintLogEntry {
+  id: string;
+  location: string;
+  qrUrl: string;
+  printedByName: string;
+  printedByRole: string;
+  time: string;
+  date: string;
+  timestamp: number;
+}
