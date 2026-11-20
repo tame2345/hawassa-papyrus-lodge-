@@ -44,6 +44,12 @@ interface LiveOrderTrackerProps {
   onCancelOrder: (orderId: string) => void;
   onRefresh?: () => Promise<void> | void;
   onOpenFullModal?: () => void;
+  onConfirmOrderReceived?: (orderId: string) => void;
+  onRequestCashierPayment?: (
+    orderId: string,
+    cashPayMode: 'cashier_desk' | 'waiter_or_delivery',
+    tenderedAmount?: number
+  ) => void;
 }
 
 export default function LiveOrderTracker({
@@ -61,6 +67,8 @@ export default function LiveOrderTracker({
   onCancelOrder,
   onRefresh,
   onOpenFullModal,
+  onConfirmOrderReceived,
+  onRequestCashierPayment,
 }: LiveOrderTrackerProps) {
   const { t, tText, currency, isRtl } = useLanguage();
   const [lookupQuery, setLookupQuery] = useState('');
@@ -566,53 +574,138 @@ export default function LiveOrderTracker({
               )}
             </div>
           ) : (
-            <div
-              className={`bg-emerald-50 border border-emerald-200 rounded-2xl p-3.5 flex flex-wrap items-center justify-between gap-2 text-xs text-emerald-900 ${
-                isCompleted ? 'order-badge-pulse-completed' : ''
-              }`}
-            >
-              <div className="flex flex-col gap-0.5 font-bold">
-                <div className="flex items-center gap-2">
-                  <span className="relative inline-flex items-center justify-center shrink-0">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                    {isCompleted && (
-                      <span
-                        aria-hidden="true"
-                        className="ml-1 w-2 h-2 rounded-full bg-emerald-500 order-dot-completed"
-                      />
-                    )}
-                  </span>
-                  <span>
-                    {isCompleted
-                      ? t('tracker.status_completed')
-                      : t('tracker.status_served')}
-                  </span>
+            <div className="space-y-2.5">
+              <div
+                className={`bg-emerald-50 border border-emerald-200 rounded-2xl p-3.5 flex flex-wrap items-center justify-between gap-2 text-xs text-emerald-900 ${
+                  isCompleted ? 'order-badge-pulse-completed' : ''
+                }`}
+              >
+                <div className="flex flex-col gap-0.5 font-bold">
+                  <div className="flex items-center gap-2">
+                    <span className="relative inline-flex items-center justify-center shrink-0">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                      {isCompleted && (
+                        <span
+                          aria-hidden="true"
+                          className="ml-1 w-2 h-2 rounded-full bg-emerald-500 order-dot-completed"
+                        />
+                      )}
+                    </span>
+                    <span>
+                      {isCompleted
+                        ? t('tracker.status_completed')
+                        : t('tracker.status_served')}
+                    </span>
+                  </div>
+                  {(ord.chefName || ord.waiter || ord.servedAt) && (
+                    <p className="text-[11px] font-medium text-emerald-800/90 pl-6">
+                      {ord.chefName ? `👨‍🍳 ${ord.chefName}` : ''}
+                      {ord.chefName && ord.waiter ? ' · ' : ''}
+                      {ord.waiter ? `🏃 ${ord.waiter}` : ''}
+                      {ord.servedAt ? ` · ${ord.servedAt}` : ''}
+                    </p>
+                  )}
                 </div>
-                {(ord.chefName || ord.waiter || ord.servedAt) && (
-                  <p className="text-[11px] font-medium text-emerald-800/90 pl-6">
-                    {ord.chefName ? `👨‍🍳 ${ord.chefName}` : ''}
-                    {ord.chefName && ord.waiter ? ' · ' : ''}
-                    {ord.waiter ? `🏃 ${ord.waiter}` : ''}
-                    {ord.servedAt ? ` · ${ord.servedAt}` : ''}
-                  </p>
-                )}
+                <span className="font-mono text-[11px] font-black text-emerald-700">
+                  {metrics.effectiveStage === 'Served'
+                    ? tText({
+                        am: '✓ በአስተናጋጅ ተረጋግጦ ደርሷል',
+                        en: '✓ Verified & Delivered by Waiter',
+                        or: '✓ Keessummeessaan Mirkanaa\'ee Gahe',
+                        ti: '✓ ብኣስተናጋዲ ተረጋጊጹ በጺሑ',
+                        sid: '✓ Loosaanchu Buuxame Iillino',
+                        fr: '✓ Vérifié & Livré par le serveur',
+                        de: '✓ Vom Kellner geprüft & geliefert',
+                        it: '✓ Verificato & Consegnato dal cameriere',
+                        zh: '✓ 服务员已核验并送达',
+                        ar: '✓ تم التحقق والتسليم بواسطة النادل',
+                      })
+                    : `0 ${t('tracker.active')}`}
+                </span>
               </div>
-              <span className="font-mono text-[11px] font-black text-emerald-700">
-                {metrics.effectiveStage === 'Served'
-                  ? tText({
-                      am: '✓ ተረጋግጧል / ደርሷል',
-                      en: '✓ Verified & Delivered',
-                      or: '✓ Mirkanaa\'ee Gahe',
-                      ti: '✓ ተረጋጊጹ / በጺሑ',
-                      sid: '✓ Buuxame Iillino',
-                      fr: '✓ Vérifié & Livré',
-                      de: '✓ Geprüft & Geliefert',
-                      it: '✓ Verificato & Consegnato',
-                      zh: '✓ 已核验并送达',
-                      ar: '✓ تم التحقق والتسليم',
-                    })
-                  : `0 ${t('tracker.active')}`}
-              </span>
+
+              {metrics.effectiveStage === 'Served' && (
+                ord.customerConfirmedReceipt ? (
+                  <div className="bg-emerald-950/95 border border-emerald-500/40 rounded-2xl px-4 py-3 flex flex-wrap items-center justify-between gap-2 text-xs text-emerald-200 shadow-sm">
+                    <div className="flex items-center gap-2 font-black">
+                      <span className="text-base leading-none">🎉</span>
+                      <span>
+                        {tText({
+                          am: 'ደርሶኛል / ተቀብያለሁ — በደንበኛው ተረጋግጧል',
+                          en: 'Order Received — Confirmed by Customer',
+                          or: 'Fudhadheera / Na Gaheera — Maamilaan Mirkanaa\'e',
+                          ti: 'በጺሑኒ / ተቐቢለ — ብዓሚል ተረጋጊጹ',
+                          sid: 'Adhoommo / Iillinoonnie — Wosinchunni Buuxamino',
+                          fr: 'Commande reçue — Confirmée par le client',
+                          de: 'Erhalt bestätigt — Vom Gast bestätigt',
+                          it: 'Ordine ricevuto — Confermato dal cliente',
+                          zh: '已收到餐品 — 顾客已确认收货',
+                          ar: 'تم الاستلام — مؤكّد من العميل',
+                        })}
+                      </span>
+                    </div>
+                    {ord.customerReceivedAt && (
+                      <span className="font-mono text-[11px] font-bold text-emerald-300 tabular-nums">
+                        ✓ {ord.customerReceivedAt}
+                      </span>
+                    )}
+                  </div>
+                ) : onConfirmOrderReceived ? (
+                  <div className="bg-gradient-to-r from-[#f4c22b]/20 via-emerald-50 to-emerald-100/80 border-2 border-emerald-500/50 rounded-2xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="space-y-0.5">
+                      <p className="text-xs font-black text-stone-900">
+                        {tText({
+                          am: '🍽️ ምግብዎ ደርሶዎታል? እባክዎ መድረሱን ያረጋግጡ',
+                          en: '🍽️ Has your order arrived? Please confirm receipt',
+                          or: '🍽️ Nyaanni keessan isin gaheeraa? Gahuusaa mirkaneessaa',
+                          ti: '🍽️ መግብኹም በጺሑኩም ዶ? በጃኹም ምብጽሑ ኣረጋግጹ',
+                          sid: '🍽️ Sagalikki iillinohe? Eeggatte iillinota buuxi',
+                          fr: '🍽️ Votre commande est-elle arrivée ? Confirmez la réception',
+                          de: '🍽️ Ist Ihre Bestellung angekommen? Bitte Empfang bestätigen',
+                          it: '🍽️ Il tuo ordine è arrivato? Conferma la ricezione',
+                          zh: '🍽️ 您的餐品已送达了吗？请点击确认收货',
+                          ar: '🍽️ هل وصلك طلبك؟ يرجى تأكيد الاستلام',
+                        })}
+                      </p>
+                      <p className="text-[11px] font-medium text-stone-600">
+                        {tText({
+                          am: 'ተቀብያለሁ ሲሉ ለአስተናጋጁ እና ለኩሽናው ወዲያውኑ ማረጋገጫ ይደርሳል።',
+                          en: 'Tap below to notify the waiter & kitchen that you received your meal.',
+                          or: 'Akkuma tuqxaniin keessummeessaa fi kushiinaaf mirkaneessi ni ergama.',
+                          ti: 'ምስ ጠወቕኩም ንኣስተናጋድን ክሽነን መረጋገጺ ብቐጥታ ይበጽሖም።',
+                          sid: 'Woroonni qinaatte loosaanchohonna kishinatenni buuxo soyatto.',
+                          fr: 'Appuyez ci-dessous pour confirmer la livraison au serveur et en cuisine.',
+                          de: 'Tippen Sie unten, um Kellner und Küche die Zustellung zu bestätigen.',
+                          it: 'Tocca qui sotto per confermare la consegna al cameriere e alla cucina.',
+                          zh: '点击下方按钮即可通知服务员与后厨您已收到餐品。',
+                          ar: 'اضغط أدناه لإعلام النادل والمطبخ باستلام طلبك.',
+                        })}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => onConfirmOrderReceived(ord.id)}
+                      className="shrink-0 bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] text-white font-black text-xs px-4 py-2.5 rounded-xl shadow-md border border-emerald-500 transition-all cursor-pointer flex items-center justify-center gap-2"
+                    >
+                      <CheckCircle2 className="w-4 h-4 shrink-0" />
+                      <span>
+                        {tText({
+                          am: '✅ ምግቡ ደርሶኛል / ተቀብያለሁ',
+                          en: '✅ I Received My Order',
+                          or: '✅ Na Gaheera / Fudhadheera',
+                          ti: '✅ በጺሑኒ / ተቐቢለ ኣለኹ',
+                          sid: '✅ Iillinoonnie / Adhoommo',
+                          fr: '✅ Commande Reçue',
+                          de: '✅ Bestellung Erhalten',
+                          it: '✅ Ordine Ricevuto',
+                          zh: '✅ 我已收到餐品',
+                          ar: '✅ تم استلام طلبي',
+                        })}
+                      </span>
+                    </button>
+                  </div>
+                ) : null
+              )}
             </div>
           )}
 
@@ -669,6 +762,145 @@ export default function LiveOrderTracker({
                     {t('tracker.total_label')} {ord.total} {currency}
                   </div>
                 </div>
+
+                {/* Cash Payment & Cashier Request Sync Banner */}
+                {ord.status !== 'Paid' && ord.status !== 'Cancelled' && (ord.payment === 'cash' || ord.cashPaymentRequested || onRequestCashierPayment) && (
+                  <div className={`rounded-2xl p-3.5 border space-y-2 ${
+                    ord.cashPaymentRequested
+                      ? 'bg-emerald-50 border-emerald-300 text-stone-900'
+                      : 'bg-amber-50 border-amber-300 text-stone-900'
+                  }`}>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="space-y-0.5">
+                        <p className="text-xs font-black text-stone-900 flex items-center gap-1.5">
+                          <span>💵</span>
+                          <span>
+                            {ord.cashPaymentRequested
+                              ? tText({
+                                  am: 'የካሽ መክፈያ ጥያቄ ወደ ካሸር ተልኳል',
+                                  en: 'Cash Payment Request Sent to Cashier',
+                                  or: 'Gaaffiin Kaashii Kaasheeraaf Ergameera',
+                                  ti: 'ሕቶ ክፍሊት ካሽ ናብ ካሸር ተላኢኹ',
+                                  sid: 'Kaashete Baatooshshu Xa’mo Kaasheeraho Soyinoonni',
+                                  fr: 'Demande de paiement envoyée à la caisse',
+                                  de: 'Barzahlungsanfrage an die Kasse gesendet',
+                                  it: 'Richiesta pagamento in contanti inviata alla cassa',
+                                  zh: '现金付款请求已发送至收银台',
+                                  ar: 'تم إرسال طلب الدفع نقداً إلى الكاشير',
+                                })
+                              : tText({
+                                  am: 'በካሽ መክፈል ይፈልጋሉ? ለካሸር ጥያቄ ይላኩ',
+                                  en: 'Want to pay in Cash? Send Request to Cashier',
+                                  or: 'Kaashiin kaffaluu barbaadduu? Kaasheeraaf ergaa',
+                                  ti: 'ብጥረ ገንዘብ ክትከፍሉ ትደልዩ? ናብ ካሸር ለኣኹ',
+                                  sid: 'Kaashinni baata hasiratto? Kaasheeraho soyi',
+                                  fr: 'Payer en espèces ? Envoyer une demande à la caisse',
+                                  de: 'Bar bezahlen? Anfrage an die Kasse senden',
+                                  it: 'Vuoi pagare in contanti? Invia richiesta alla cassa',
+                                  zh: '需要现金付款？立即通知收银台',
+                                  ar: 'هل تريد الدفع نقداً؟ أرسل طلباً للكاشير',
+                                })}
+                          </span>
+                        </p>
+                        <p className="text-[11px] font-semibold text-stone-600">
+                          {ord.cashPaymentRequested ? (
+                            <>
+                              {ord.cashPayMode === 'cashier_desk'
+                                ? tText({
+                                    am: '🏪 በካሸር ዴስክ መክፈያ · ካሸሩ ክፍያውን ሲረከብ ደረሰኝ ይዘጋጃል',
+                                    en: '🏪 Cashier Desk · Present ticket code at cashier desk to complete payment',
+                                    or: '🏪 Kaasheera Biratti · Koodii kana kaasheeratti agarsiisaa',
+                                    ti: '🏪 ኣብ ካሸር ዴስክ · እዚ ኮድ ኣርእዮም ይኽፈሉ',
+                                    sid: '🏪 Kaasheeru Ulaa · Tenne koode kaasheeraho leellishi',
+                                    fr: '🏪 À la caisse · Présentez ce code au caissier',
+                                    de: '🏪 An der Kasse · Code an der Kasse vorzeigen',
+                                    it: '🏪 Alla cassa · Mostra questo codice in cassa',
+                                    zh: '🏪 收银台付款 · 请向前台出示此编号完成支付',
+                                    ar: '🏪 الدفع في الصندوق · قدّم الرمز للكاشير لإتمام الدفع',
+                                  })
+                                : tText({
+                                    am: '🏃 በአስተናጋጅ / ሲደርስ በጥሬ ገንዘብ ክፍያ',
+                                    en: '🏃 Cash to Waiter / On Delivery · Synced with Cashier',
+                                    or: '🏃 Keessummeessaaf / Yeroo Gahu Kaashiin',
+                                    ti: '🏃 ብኣስተናጋጅ / ምስ በጽሐ ብጥረ ገንዘብ',
+                                    sid: '🏃 Loosaanchoho / Iilliro Kaashinni',
+                                    fr: '🏃 Au serveur / À la livraison (synchronisé)',
+                                    de: '🏃 Beim Kellner / Bei Lieferung (mit Kasse synchronisiert)',
+                                    it: '🏃 Al cameriere / Alla consegna (sincronizzato)',
+                                    zh: '🏃 服务员代收 / 货到付现（与收银台同步）',
+                                    ar: '🏃 للنادل / عند التسليم (متزامن مع الكاشير)',
+                                  })}
+                              {ord.cashTenderedAmount && ord.cashTenderedAmount >= ord.total && (
+                                <span className="ml-1.5 font-mono text-emerald-800 font-bold">
+                                  ({ord.cashTenderedAmount} {currency} · Change: {ord.cashTenderedAmount - ord.total} {currency})
+                                </span>
+                              )}
+                            </>
+                          ) : (
+                            tText({
+                              am: 'ይህን ትዕዛዝ በጥሬ ገንዘብ ከካሸሩ ጋር ለመክፈል ቁልፉን ይጫኑ።',
+                              en: 'Tap below to notify the Cashier Desk that you are ready to pay in cash.',
+                              or: 'Kaashiin kaffaluuf qophaa’uu keessan kaasheeraaf beeksisuuf tuqaa.',
+                              ti: 'ብጥረ ገንዘብ ንምኽፋል ድሉው ምዃንኩም ንካሸር ንምፍላጥ ጠውቑ።',
+                              sid: 'Kaashinni baata qixxaawoottoha kaasheeraho egensiisi.',
+                              fr: 'Appuyez ci-dessous pour prévenir la caisse de votre paiement en espèces.',
+                              de: 'Tippen Sie unten, um die Kasse über Ihre Barzahlung zu informieren.',
+                              it: 'Tocca qui sotto per avvisare la cassa del pagamento in contanti.',
+                              zh: '点击下方按钮即可通知收银台准备现金结账。',
+                              ar: 'اضغط أدناه لإبلاغ الكاشير برغبتك في الدفع نقداً.',
+                            })
+                          )}
+                        </p>
+                      </div>
+
+                      {ord.cashPaymentCode && (
+                        <span className="font-mono text-xs font-black bg-emerald-700 text-white px-2.5 py-1 rounded-xl shrink-0">
+                          {ord.cashPaymentCode}
+                        </span>
+                      )}
+                    </div>
+
+                    {onRequestCashierPayment && (
+                      <div className="flex flex-wrap gap-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => onRequestCashierPayment(ord.id, 'cashier_desk')}
+                          className={`flex-1 min-w-[160px] text-xs font-black px-3.5 py-2 rounded-xl transition-all cursor-pointer border ${
+                            ord.cashPaymentRequested && ord.cashPayMode === 'cashier_desk'
+                              ? 'bg-emerald-700 hover:bg-emerald-800 text-white border-emerald-700'
+                              : 'bg-white hover:bg-emerald-100 text-emerald-900 border-emerald-300'
+                          }`}
+                        >
+                          🏪 {ord.cashPaymentRequested
+                            ? tText({
+                                am: 'ለካሸር ዴስክ ድጋሚ አሳውቅ',
+                                en: 'Ping Cashier Desk Again',
+                                or: 'Kaasheera Irra Deebi’ii Waami',
+                                ti: 'ንካሸር ዴስክ ደጊምካ ኣፍልጥ',
+                                sid: 'Kaasheera Marro Egensiisi',
+                                fr: 'Relancer la Caisse',
+                                de: 'Kasse erneut benachrichtigen',
+                                it: 'Sollecita Cassa',
+                                zh: '再次提醒收银台',
+                                ar: 'تذكير الكاشير مرة أخرى',
+                              })
+                            : tText({
+                                am: '💵 በካሸር ዴስክ መክፈያ ላክ',
+                                en: '💵 Request Cash Payment at Cashier',
+                                or: '💵 Kaasheera Biratti Kaffali',
+                                ti: '💵 ናብ ካሸር መክፈሊ ሕቶ ስደድ',
+                                sid: '💵 Kaasheeraho Kaashu Xa’mo Soyi',
+                                fr: '💵 Payer en Espèces à la Caisse',
+                                de: '💵 Barzahlung an Kasse anfordern',
+                                it: '💵 Richiedi Pagamento in Cassa',
+                                zh: '💵 发送收银台现金付款请求',
+                                ar: '💵 طلب الدفع نقداً في الصندوق',
+                              })}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* Edit / Cancel only when still Pending */}
                 {metrics.effectiveStage === 'Pending' && (

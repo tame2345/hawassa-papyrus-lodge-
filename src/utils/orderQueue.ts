@@ -5,6 +5,54 @@
 
 import { AssistanceCall, Order } from '../types';
 
+export function getLocalTodayIso(): string {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const d = String(now.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+export function normalizeRecordDateToIso(rawStr?: string): string {
+  if (!rawStr) return '';
+  const trimmed = String(rawStr).trim();
+  if (!trimmed) return '';
+  const datePart = trimmed.split(/[\sT]/)[0];
+
+  // Already YYYY-MM-DD (or YYYY/MM/DD)
+  const isoMatch = datePart.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/);
+  if (isoMatch) {
+    return `${isoMatch[1]}-${isoMatch[2].padStart(2, '0')}-${isoMatch[3].padStart(2, '0')}`;
+  }
+
+  // DD.MM.YYYY (e.g. et-EE / European locale)
+  const dotMatch = datePart.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+  if (dotMatch) {
+    return `${dotMatch[3]}-${dotMatch[2].padStart(2, '0')}-${dotMatch[1].padStart(2, '0')}`;
+  }
+
+  // MM/DD/YYYY or DD/MM/YYYY
+  const slashMatch = datePart.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (slashMatch) {
+    const first = Number(slashMatch[1]);
+    const second = Number(slashMatch[2]);
+    // If first > 12 it must be DD/MM/YYYY, otherwise treat as MM/DD/YYYY
+    const month = first > 12 ? second : first;
+    const day = first > 12 ? first : second;
+    return `${slashMatch[3]}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  }
+
+  const parsed = new Date(trimmed);
+  if (!Number.isNaN(parsed.getTime())) {
+    const y = parsed.getFullYear();
+    const m = String(parsed.getMonth() + 1).padStart(2, '0');
+    const d = String(parsed.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+
+  return '';
+}
+
 export type EffectiveOrderStage = 'Pending' | 'Preparing' | 'Completed' | 'Served' | 'Inactive';
 
 export interface OrderQueueMetrics {
@@ -214,6 +262,11 @@ export function mergeSingleOrder(localOrd: Order, remoteOrd: Order): Order {
 
   const servedByWaiter = Boolean(localOrd.servedByWaiter || remoteOrd.servedByWaiter);
   const checkedByWaiter = Boolean(localOrd.checkedByWaiter || remoteOrd.checkedByWaiter || servedByWaiter);
+  const customerConfirmedReceipt = Boolean(localOrd.customerConfirmedReceipt || remoteOrd.customerConfirmedReceipt);
+
+  const cashPaymentRequested = Boolean(
+    localOrd.cashPaymentRequested || remoteOrd.cashPaymentRequested
+  );
 
   let mergedStatus: Order['status'] = base.status;
   if (isCancelled) {
@@ -235,6 +288,15 @@ export function mergeSingleOrder(localOrd: Order, remoteOrd: Order): Order {
     cookingStatus: mergedCook,
     servedByWaiter,
     checkedByWaiter,
+    customerConfirmedReceipt,
+    customerReceivedAt: base.customerReceivedAt || secondary.customerReceivedAt,
+    cashPaymentRequested,
+    cashPayMode: base.cashPayMode || secondary.cashPayMode,
+    cashPaymentCode: base.cashPaymentCode || secondary.cashPaymentCode,
+    cashTenderedAmount: base.cashTenderedAmount ?? secondary.cashTenderedAmount,
+    cashChangeAmount: base.cashChangeAmount ?? secondary.cashChangeAmount,
+    cashRequestedAt: base.cashRequestedAt || secondary.cashRequestedAt,
+    cashConfirmedAt: base.cashConfirmedAt || secondary.cashConfirmedAt,
     paymentVerified: Boolean(localOrd.paymentVerified || remoteOrd.paymentVerified || isPaid),
     waiter: base.waiter || secondary.waiter,
     chefName: base.chefName || secondary.chefName,
@@ -283,7 +345,7 @@ export function mergeOrdersByLifecycle(localOrders: Order[], incomingOrders: Ord
 
 export function getAssistanceCallDedupKey(call: AssistanceCall): string {
   const typeKey = call.type || 'call';
-  if ((typeKey === 'pickup' || typeKey === 'new_order') && call.orderId) {
+  if ((typeKey === 'pickup' || typeKey === 'new_order' || typeKey === 'cash_request') && call.orderId) {
     const bareOrder = call.orderId.replace(/^#/, '').trim().toLowerCase();
     return `${typeKey}:order:${bareOrder}`;
   }

@@ -108,6 +108,15 @@ export interface Order {
   checkedByWaiter?: boolean;
   readyAt?: string;
   servedAt?: string;
+  customerConfirmedReceipt?: boolean;
+  customerReceivedAt?: string;
+  cashPayMode?: 'cashier_desk' | 'waiter_or_delivery';
+  cashPaymentRequested?: boolean;
+  cashPaymentCode?: string;
+  cashTenderedAmount?: number;
+  cashChangeAmount?: number;
+  cashRequestedAt?: string;
+  cashConfirmedAt?: string;
   updatedAt?: number;
 }
 
@@ -116,7 +125,7 @@ export interface AssistanceCall {
   location: string;
   time: string;
   active: boolean;
-  type?: 'call' | 'pickup' | 'new_order';
+  type?: 'call' | 'pickup' | 'new_order' | 'cash_request';
   message?: string;
   targetWaiter?: string;
   targetRole?: 'waiter' | 'chef' | 'cashier' | 'manager' | 'admin' | 'support';

@@ -27,6 +27,9 @@ interface CartModalProps {
     bankRef?: string;
     receiptScreenshot?: string;
     receiptComment?: string;
+    cashPayMode?: 'cashier_desk' | 'waiter_or_delivery';
+    cashTenderedAmount?: number;
+    cashPaymentRequested?: boolean;
   }) => void;
   serviceChargeRate: number;
   vatRate: number;
@@ -203,16 +206,16 @@ export default function CartModal({
       ar: 'طريقة الدفع'
     },
     cash: {
-      am: '💵 ጥሬ ገንዘብ',
-      en: '💵 Cash On Delivery',
-      or: '💵 Kaffaltii doroqo',
-      ti: '💵 ጥረ ገንዘብ',
-      sid: '💵 Anga Womaasha',
-      fr: '💵 Espèces',
-      de: '💵 Barzahlung',
-      it: '💵 Contanti',
-      zh: '💵 现金支付',
-      ar: '💵 الدفع نقداً'
+      am: '💵 በካሽ (ጥሬ ገንዘብ)',
+      en: '💵 Cash / Cashier',
+      or: '💵 Kaashii (Maallaqa)',
+      ti: '💵 ብጥረ ገንዘብ (Cash)',
+      sid: '💵 Kaashe / Womaasha',
+      fr: '💵 Espèces / Caisse',
+      de: '💵 Bar / Kasse',
+      it: '💵 Contanti / Cassa',
+      zh: '💵 现金 / 收银台',
+      ar: '💵 نقداً / الصندوق'
     },
     bank: {
       am: '🏦 የባንክ አካውንት',
@@ -359,6 +362,8 @@ export default function CartModal({
   const [bankRef, setBankRef] = useState('');
   const [receiptScreenshot, setReceiptScreenshot] = useState('');
   const [receiptComment, setReceiptComment] = useState('');
+  const [cashPayMode, setCashPayMode] = useState<'cashier_desk' | 'waiter_or_delivery'>('cashier_desk');
+  const [cashTenderedInput, setCashTenderedInput] = useState<string>('');
 
   // Chapa specific local states
   const [chapaEmail, setChapaEmail] = useState('guest@papyrus.com');
@@ -687,10 +692,37 @@ export default function CartModal({
       return;
     }
 
+    if (payment === 'cash' && cashTenderedInput.trim() !== '') {
+      const parsedCash = Number(cashTenderedInput);
+      if (Number.isNaN(parsedCash) || parsedCash < grandTotal) {
+        const msg = tText({
+          am: `⚠️ የገባው የጥሬ ገንዘብ መጠን ከጠቅላላው ሂሳብ (${grandTotal} ${currency}) ያንሳል።`,
+          en: `⚠️ Tendered cash cannot be less than grand total (${grandTotal} ${currency}).`,
+          or: `⚠️ Maallaqni galchitan waliigala (${grandTotal} ${currency}) gadi ta’uu hin qabu.`,
+          ti: `⚠️ ዝኣተወ ጥረ ገንዘብ ካብ ጠቕላላ ሒሳብ (${grandTotal} ${currency}) ክንእስ የብሉን።`,
+          sid: `⚠️ Eessinoonni kaashi xaphooma (${grandTotal} ${currency}) woroonni ikka hasiissanno.`,
+          fr: `⚠️ Le montant remis ne peut pas être inférieur au total (${grandTotal} ${currency}).`,
+          de: `⚠️ Der gegebene Betrag darf nicht unter ${grandTotal} ${currency} liegen.`,
+          it: `⚠️ L’importo in contanti non può essere inferiore a ${grandTotal} ${currency}.`,
+          zh: `⚠️ 支付现金额度不能少于总额 ${grandTotal} ${currency}。`,
+          ar: `⚠️ لا يمكن أن يكون المبلغ النقدي أقل من الإجمالي (${grandTotal} ${currency}).`
+        });
+        playCartChime('alert');
+        speakCartFeedback(msg, `Tendered cash cannot be less than ${grandTotal} ${currency}.`);
+        showCartNotice('error', msg);
+        return;
+      }
+    }
+
     executeOrderPlacement();
   };
 
   const executeOrderPlacement = (customRef?: string) => {
+    const parsedCashTendered =
+      payment === 'cash' && cashTenderedInput.trim() !== '' && !Number.isNaN(Number(cashTenderedInput))
+        ? Number(cashTenderedInput)
+        : undefined;
+
     onPlaceOrder({
       location: orderType === 'dine' ? location : 'Delivery Route',
       orderType,
@@ -701,12 +733,18 @@ export default function CartModal({
       bankId: payment === 'bank' ? (selectedBankId || undefined) : undefined,
       bankRef: payment === 'bank' ? bankRef : (payment === 'chapa' ? (customRef || 'CHAP-TXN-' + Math.floor(100000 + Math.random() * 900000)) : undefined),
       receiptScreenshot: payment === 'bank' ? (receiptScreenshot || undefined) : (payment === 'chapa' ? 'https://images.unsplash.com/photo-1554774853-aae0a22c8aa4?w=600' : undefined),
-      receiptComment: payment === 'bank' ? (receiptComment || undefined) : (payment === 'chapa' ? `Chapa Secure Verified. Billing: ${chapaFirstName} ${chapaLastName} (${chapaEmail})` : undefined)
+      receiptComment: payment === 'bank' || payment === 'cash'
+        ? (receiptComment.trim() || undefined)
+        : (payment === 'chapa' ? `Chapa Secure Verified. Billing: ${chapaFirstName} ${chapaLastName} (${chapaEmail})` : undefined),
+      cashPayMode: payment === 'cash' ? cashPayMode : undefined,
+      cashTenderedAmount: parsedCashTendered,
+      cashPaymentRequested: payment === 'cash',
     });
 
     // Reset screenshot & comment after order placing
     setReceiptScreenshot('');
     setReceiptComment('');
+    setCashTenderedInput('');
     setChapaFirstName('');
     setChapaLastName('');
     onClose();
@@ -1313,6 +1351,223 @@ export default function CartModal({
             </div>
           </div>
 
+          {/* Cash Payment Request & Cashier Counter Sync Block */}
+          {payment === 'cash' && (
+            <div className="bg-emerald-50/90 p-3.5 border border-emerald-300 rounded-2xl space-y-3 text-stone-900">
+              <div className="flex items-center justify-between gap-2 border-b border-emerald-200 pb-2">
+                <span className="text-[10px] font-mono uppercase text-emerald-900 font-black tracking-wider">
+                  💵 {tText({
+                    am: 'በካሽ መክፈያ እና የካሸር መጠየቂያ (CASHIER REQUEST)',
+                    or: 'GAAFFII KAASHII FI KAASHEERA (CASHIER REQUEST)',
+                    ti: 'ሕቶ ክፍሊት ጥረ ገንዘብን ካሸርን',
+                    sid: 'KAASHETE BAATOOSHSHU XA’MO',
+                    en: 'CASH PAYMENT & CASHIER REQUEST',
+                    fr: 'DEMANDE DE PAIEMENT EN ESPÈCES',
+                    de: 'BARZAHLUNG & KASSENANFRAGE',
+                    it: 'RICHIESTA PAGAMENTO IN CONTANTI',
+                    zh: '现金支付与收银台请求',
+                    ar: 'طلب الدفع نقداً عبر الصندوق'
+                  })}
+                </span>
+                <span className="bg-emerald-700 text-white px-2 py-0.5 rounded-md text-[8.5px] font-mono font-black">
+                  LIVE SYNC
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  id="btn-cash-mode-desk"
+                  onClick={() => setCashPayMode('cashier_desk')}
+                  className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
+                    cashPayMode === 'cashier_desk'
+                      ? 'bg-[#b21f1f] text-white border-[#8c1414] shadow-sm'
+                      : 'bg-white text-stone-800 border-emerald-200 hover:border-emerald-400'
+                  }`}
+                >
+                  <span className="text-xs font-black block">
+                    🏪 {tText({
+                      am: 'በካሸር ዴስክ መክፈል',
+                      en: 'Pay at Cashier Desk',
+                      or: 'Kaasheera Biratti Kaffali',
+                      ti: 'ኣብ ካሸር ዴስክ ክፈሉ',
+                      sid: 'Kaasheeru Ulaa Baati',
+                      fr: 'Payer à la Caisse',
+                      de: 'An der Kasse zahlen',
+                      it: 'Paga alla Cassa',
+                      zh: '前往收银台付款',
+                      ar: 'الدفع في صندوق الكاشير'
+                    })}
+                  </span>
+                  <span className={`text-[10px] block mt-0.5 ${cashPayMode === 'cashier_desk' ? 'text-yellow-200' : 'text-stone-500'}`}>
+                    {tText({
+                      am: 'ወደ ካሸሩ የመክፈያ ጥያቄ እና ቲኬት ይልካል',
+                      en: 'Sends instant Cash Bill Request & Ticket to Cashier',
+                      or: 'Gaaffii kaffaltii kaashii kallattiin kaasheeraaf erga',
+                      ti: 'ናብ ካሸር ብቐጥታ ናይ ክፍሊት ሕቶ ይልእኽ',
+                      sid: 'Kaasheeraho kaashu baatooshshu xa’mo soyi',
+                      fr: 'Envoie une demande de paiement directe au caissier',
+                      de: 'Sendet direkte Barzahlungsanfrage an die Kasse',
+                      it: 'Invia richiesta di pagamento diretta al cassiere',
+                      zh: '向收银台发送实时现金收款请求',
+                      ar: 'يرسل طلب دفع نقدي فوري إلى الكاشير'
+                    })}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  id="btn-cash-mode-waiter"
+                  onClick={() => setCashPayMode('waiter_or_delivery')}
+                  className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
+                    cashPayMode === 'waiter_or_delivery'
+                      ? 'bg-[#b21f1f] text-white border-[#8c1414] shadow-sm'
+                      : 'bg-white text-stone-800 border-emerald-200 hover:border-emerald-400'
+                  }`}
+                >
+                  <span className="text-xs font-black block">
+                    🏃 {tText({
+                      am: 'በአስተናጋጅ / ሲደርስ በካሽ',
+                      en: 'Pay Waiter / On Delivery',
+                      or: 'Keessummeessaaf / Yeroo Gahu',
+                      ti: 'ንኣስተናጋጅ / ምስ በጽሐ',
+                      sid: 'Loosaanchoho / Iilliro',
+                      fr: 'Au serveur / À la livraison',
+                      de: 'Beim Kellner / Bei Lieferung',
+                      it: 'Al cameriere / Alla consegna',
+                      zh: '交由服务员 / 货到付现',
+                      ar: 'للنادل / عند التسليم'
+                    })}
+                  </span>
+                  <span className={`text-[10px] block mt-0.5 ${cashPayMode === 'waiter_or_delivery' ? 'text-yellow-200' : 'text-stone-500'}`}>
+                    {tText({
+                      am: 'ከምግብ አቅርቦት ጋር በጥሬ ገንዘብ መክፈል',
+                      en: 'Pay cash when served; synced with Cashier register',
+                      or: 'Yeroo dhiyaatu kaashiin kaffali; kaasheera waliin walqabata',
+                      ti: 'ምግቢ ምስ ቀረበ ብጥረ ገንዘብ ክፈሉ',
+                      sid: 'Sagale shiqqi yito kaashinni baati',
+                      fr: 'Payez en espèces au service ; synchronisé caisse',
+                      de: 'Bar bei Übergabe zahlen; mit Kasse synchronisiert',
+                      it: 'Paga in contanti al servizio; sincronizzato cassa',
+                      zh: '送达时现金支付，同步记入收银台',
+                      ar: 'ادفع نقداً عند الاستلام مع المزامنة مع الكاشير'
+                    })}
+                  </span>
+                </button>
+              </div>
+
+              {/* Tendered cash / change helper */}
+              <div className="bg-white border border-emerald-200 rounded-xl p-2.5 space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <label className="text-[10px] font-mono uppercase text-emerald-900 font-black">
+                    💸 {tText({
+                      am: `የሚከፍሉት ብር / መልስ ማዘጋጃ (${currency})`,
+                      en: `Cash Note You Will Pay With (${currency}, Optional)`,
+                      or: `Maallaqa Kaffaltan (${currency}, Filannoo)`,
+                      ti: `ዝኸፍሉሉ ገንዘብ (${currency}, ኣማራጺ)`,
+                      sid: `Baatatto Womaashi Bikka (${currency})`,
+                      fr: `Montant remis (${currency}, Optionnel)`,
+                      de: `Gegebener Barbetrag (${currency}, Optional)`,
+                      it: `Contanti consegnati (${currency}, Opzionale)`,
+                      zh: `预计支付现金额 (${currency}，可选)`,
+                      ar: `المبلغ النقدي المدفوع (${currency}، اختياري)`
+                    })}
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setCashTenderedInput(String(grandTotal))}
+                    className="text-[10px] font-mono font-black bg-emerald-100 hover:bg-emerald-200 text-emerald-900 px-2 py-0.5 rounded-lg cursor-pointer"
+                  >
+                    ✓ {tText({ am: 'ትክክለኛ ሂሳብ', en: 'Exact', or: 'Sirrii', ti: 'ልክዕ', sid: 'Likki', fr: 'Exact', de: 'Passend', it: 'Esatto', zh: '刚好', ar: 'المبلغ بالضبط' })} ({grandTotal})
+                  </button>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <input
+                    type="number"
+                    min={0}
+                    value={cashTenderedInput}
+                    onChange={(e) => setCashTenderedInput(e.target.value)}
+                    placeholder={`${grandTotal} ${currency}`}
+                    className="flex-1 min-w-[120px] bg-stone-50 border border-stone-300 text-stone-900 font-mono font-bold text-xs p-2 rounded-xl outline-none focus:border-emerald-600"
+                  />
+                  {[500, 1000, 2000].filter((n) => n >= grandTotal).map((noteAmt) => (
+                    <button
+                      key={noteAmt}
+                      type="button"
+                      onClick={() => setCashTenderedInput(String(noteAmt))}
+                      className={`px-2.5 py-1.5 rounded-xl text-[10px] font-mono font-black border cursor-pointer transition-colors ${
+                        Number(cashTenderedInput) === noteAmt
+                          ? 'bg-emerald-700 text-white border-emerald-700'
+                          : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border-emerald-200'
+                      }`}
+                    >
+                      {noteAmt}
+                    </button>
+                  ))}
+                </div>
+
+                {cashTenderedInput.trim() !== '' && !Number.isNaN(Number(cashTenderedInput)) && (
+                  <div className={`text-[11px] font-mono font-bold px-2.5 py-1.5 rounded-lg flex items-center justify-between ${
+                    Number(cashTenderedInput) >= grandTotal
+                      ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                      : 'bg-red-50 text-red-700 border border-red-200'
+                  }`}>
+                    <span>
+                      {Number(cashTenderedInput) >= grandTotal
+                        ? tText({
+                            am: 'መልስ (Change Due):',
+                            en: 'Change Cashier Will Prepare:',
+                            or: 'Deebii (Change):',
+                            ti: 'መልሲ (Change):',
+                            sid: 'Qolamanno Womaashi:',
+                            fr: 'Monnaie à rendre :',
+                            de: 'Rückgeld:',
+                            it: 'Resto dovuto:',
+                            zh: '收银台需找零：',
+                            ar: 'الباقي المستحق:'
+                          })
+                        : tText({
+                            am: 'የጎደለ መጠን:',
+                            en: 'Shortfall:',
+                            or: 'Hanqina:',
+                            ti: 'ዝጎደለ:',
+                            sid: 'Ajinohu:',
+                            fr: 'Manquant :',
+                            de: 'Fehlbetrag:',
+                            it: 'Mancante:',
+                            zh: '差额：',
+                            ar: 'النقص:'
+                          })}
+                    </span>
+                    <span className="font-black">
+                      {Math.abs(Number(cashTenderedInput) - grandTotal)} {currency}
+                    </span>
+                  </div>
+                )}
+
+                <input
+                  type="text"
+                  value={receiptComment}
+                  onChange={(e) => setReceiptComment(e.target.value)}
+                  placeholder={tText({
+                    am: 'ለካሸር / ለአስተናጋጅ ማሳሰቢያ (ከተፈለገ)...',
+                    en: 'Optional note for Cashier or Waiter...',
+                    or: 'Yaada dabalataa kaasheeraaf (yoo jiraate)...',
+                    ti: 'ንካሸር ወይ ኣስተናጋጅ ተወሳኺ መዘኻኸሪ...',
+                    sid: 'Kaasheeraho ledote hedo...',
+                    fr: 'Note optionnelle pour le caissier...',
+                    de: 'Optionale Notiz für die Kasse...',
+                    it: 'Nota opzionale per il cassiere...',
+                    zh: '给收银员的备注（可选）...',
+                    ar: 'ملاحظة اختيارية للكاشير...'
+                  })}
+                  className="w-full bg-stone-50 border border-stone-200 text-stone-900 text-xs p-2 rounded-xl outline-none focus:border-emerald-600"
+                />
+              </div>
+            </div>
+          )}
+
           {/* Bank Transfer block */}
           {payment === 'bank' && (
             <div className="bg-stone-50 p-3.5 border border-stone-200 rounded-2xl space-y-3">
@@ -1803,7 +2058,20 @@ export default function CartModal({
             onClick={handleSubmit}
             className="w-full bg-[#b21f1f] hover:bg-[#8c1414] text-white font-black uppercase text-xs sm:text-sm tracking-wider py-3.5 mt-3 transition-all rounded-2xl border-2 border-[#8c1414] shadow-lg shrink-0 font-sans cursor-pointer active:scale-95"
           >
-            {cartUiLocales.place_order_btn[appLang as keyof typeof cartUiLocales.place_order_btn] || cartUiLocales.place_order_btn.en}
+            {payment === 'cash' && cashPayMode === 'cashier_desk'
+              ? tText({
+                  am: '💵 ትዕዛዝ ላክ እና የካሽ መክፈያ ጥያቄ ወደ ካሸር አስተላልፍ ⚡',
+                  en: '💵 PLACE ORDER & REQUEST CASH PAYMENT AT CASHIER ⚡',
+                  or: '💵 AJAJA ERGI & GAAFFII KAASHII KAASHEERAAF ERGI ⚡',
+                  ti: '💵 ትእዛዝ ስደድን ናይ ካሽ ሕቶ ናብ ካሸር ለኣኽን ⚡',
+                  sid: '💵 HAJAJA SOYINNA KAASHETE XA’MO KAASHEERAHO SOYI ⚡',
+                  fr: '💵 COMMANDER & DEMANDER LE PAIEMENT EN CAISSE ⚡',
+                  de: '💵 BESTELLEN & BARZAHLUNG AN DER KASSE ANFORDERN ⚡',
+                  it: '💵 ORDINA E RICHIEDI PAGAMENTO IN CASSA ⚡',
+                  zh: '💵 下单并向收银台发送现金付款请求 ⚡',
+                  ar: '💵 إرسال الطلب وطلب الدفع نقداً في الصندوق ⚡'
+                })
+              : (cartUiLocales.place_order_btn[appLang as keyof typeof cartUiLocales.place_order_btn] || cartUiLocales.place_order_btn.en)}
           </button>
         </div>
 

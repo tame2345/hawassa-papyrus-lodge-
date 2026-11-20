@@ -37,6 +37,7 @@ export default function LoginModal({ isOpen, onClose, role, staffList, onSuccess
   const [newPassword, setNewPassword] = useState('');
   const [newUsername, setNewUsername] = useState('');
   const [isResetMode, setIsResetMode] = useState(false);
+  const [recoveryStatus, setRecoveryStatus] = useState<{ type: 'error' | 'success'; message: string } | null>(null);
 
   useEffect(() => {
     if (isOpen) {
@@ -54,6 +55,7 @@ export default function LoginModal({ isOpen, onClose, role, staffList, onSuccess
       setNewPassword('');
       setNewUsername('');
       setIsResetMode(false);
+      setRecoveryStatus(null);
       if (staffList.length > 0) {
         const eligible = role ? staffList.filter(s => s.role === role || s.accessPrivilege === role) : staffList;
         setRecoveryStaff(eligible[0]?.name || staffList[0].name);
@@ -155,6 +157,7 @@ export default function LoginModal({ isOpen, onClose, role, staffList, onSuccess
 
   const handleRecoverySubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    setRecoveryStatus(null);
     const ans = recoveryAnswer.trim().toLowerCase();
     const matchStaff = staffList.find(s => s.name === recoveryStaff);
 
@@ -172,65 +175,78 @@ export default function LoginModal({ isOpen, onClose, role, staffList, onSuccess
         setNewPassword(matchStaff.password || 'Pass123!');
         setNewUsername(matchStaff.username || 'user99');
       } else {
-        alert(tText({
-          am: 'የደህንነት ሚስጥር ቃል ስህተት ነው! እባክዎ በትክክል ይመልሱ።',
-          en: 'Incorrect Security Answer!',
-          or: 'Deebiin nageenyaa dogoggora!',
-          ti: 'ናይ ድሕነት መልሲ ተጋግዩ!',
-          sid: 'Keeru dawaro soroho!',
-          fr: 'Réponse de sécurité incorrecte !',
-          de: 'Falsche Sicherheitsantwort!',
-          it: 'Risposta di sicurezza errata!',
-          zh: '安全问题答案错误！',
-          ar: 'إجابة سؤال الأمان غير صحيحة!',
-        }));
+        setRecoveryStatus({
+          type: 'error',
+          message: tText({
+            am: 'የደህንነት ሚስጥር ቃል ስህተት ነው! እባክዎ በትክክል ይመልሱ።',
+            en: 'Incorrect Security Answer!',
+            or: 'Deebiin nageenyaa dogoggora!',
+            ti: 'ናይ ድሕነት መልሲ ተጋግዩ!',
+            sid: 'Keeru dawaro soroho!',
+            fr: 'Réponse de sécurité incorrecte !',
+            de: 'Falsche Sicherheitsantwort!',
+            it: 'Risposta di sicurezza errata!',
+            zh: '安全问题答案错误！',
+            ar: 'إجابة سؤال الأمان غير صحيحة!',
+          }),
+        });
       }
     } else {
-      alert(tText({
-        am: 'ሰራተኛው አልተገኘም!',
-        en: 'Staff member not found!',
-        or: 'Hojjetaan hin argamne!',
-        ti: 'ሰራሕተኛ ኣይተረኽበን!',
-        sid: 'Loosaanchu diafamino!',
-        fr: 'Membre du personnel introuvable !',
-        de: 'Mitarbeiter nicht gefunden!',
-        it: 'Membro dello staff non trovato!',
-        zh: '未找到该员工！',
-        ar: 'لم يتم العثور على الموظف!',
-      }));
+      setRecoveryStatus({
+        type: 'error',
+        message: tText({
+          am: 'ሰራተኛው አልተገኘም!',
+          en: 'Staff member not found!',
+          or: 'Hojjetaan hin argamne!',
+          ti: 'ሰራሕተኛ ኣይተረኽበን!',
+          sid: 'Loosaanchu diafamino!',
+          fr: 'Membre du personnel introuvable !',
+          de: 'Mitarbeiter nicht gefunden!',
+          it: 'Membro dello staff non trovato!',
+          zh: '未找到该员工！',
+          ar: 'لم يتم العثور على الموظف!',
+        }),
+      });
     }
   };
 
   const handlePerformReset = (e: React.FormEvent) => {
     e.preventDefault();
+    setRecoveryStatus(null);
     if (newPin.length !== 4 || isNaN(Number(newPin))) {
-      alert(tText({
-        am: 'ባለ 4 አሃዝ ኮድ (PIN) ቁጥር ብቻ መሆን አለበት!',
-        en: 'PIN must be exactly 4 numeric digits!',
-        or: 'PIN lakkoofsa 4 qofa ta\'uu qaba!',
-        ti: 'ፒን 4 ኣሃዛት ጥራይ ክኸውን ኣለዎ!',
-        sid: 'PIN 4 koode calla ikka noosi!',
-        fr: 'Le PIN doit contenir exactement 4 chiffres !',
-        de: 'Die PIN muss genau 4 Ziffern haben!',
-        it: 'Il PIN deve essere composto da 4 cifre!',
-        zh: 'PIN必须为4位数字！',
-        ar: 'يجب أن يتكون رمز PIN من 4 أرقام فقط!',
-      }));
+      setRecoveryStatus({
+        type: 'error',
+        message: tText({
+          am: 'ባለ 4 አሃዝ ኮድ (PIN) ቁጥር ብቻ መሆን አለበት!',
+          en: 'PIN must be exactly 4 numeric digits!',
+          or: 'PIN lakkoofsa 4 qofa ta\'uu qaba!',
+          ti: 'ፒን 4 ኣሃዛት ጥራይ ክኸውን ኣለዎ!',
+          sid: 'PIN 4 koode calla ikka noosi!',
+          fr: 'Le PIN doit contenir exactement 4 chiffres !',
+          de: 'Die PIN muss genau 4 Ziffern haben!',
+          it: 'Il PIN deve essere composto da 4 cifre!',
+          zh: 'PIN必须为4位数字！',
+          ar: 'يجب أن يتكون رمز PIN من 4 أرقام فقط!',
+        }),
+      });
       return;
     }
     if (!newPassword.trim() || !newUsername.trim()) {
-      alert(tText({
-        am: 'እባክዎ መግቢያ ስምና የይለፍ ቃል በትክክል ያስገቡ!',
-        en: 'Please provide a valid username and password!',
-        or: 'Maaloo maqaa fi jecha darbii sirrii galchaa!',
-        ti: 'በጃኹም ስምን መሕለፊ ቓልን ኣእትዉ!',
-        sid: 'Su\'manna sai qaale eessi!',
-        fr: 'Veuillez entrer un identifiant et un mot de passe valides !',
-        de: 'Bitte gültigen Benutzernamen und Passwort eingeben!',
-        it: 'Inserisci un nome utente e una password validi!',
-        zh: '请输入有效的用户名和密码！',
-        ar: 'يرجى إدخال اسم مستخدم وكلمة مرور صحيحين!',
-      }));
+      setRecoveryStatus({
+        type: 'error',
+        message: tText({
+          am: 'እባክዎ መግቢያ ስምና የይለፍ ቃል በትክክል ያስገቡ!',
+          en: 'Please provide a valid username and password!',
+          or: 'Maaloo maqaa fi jecha darbii sirrii galchaa!',
+          ti: 'በጃኹም ስምን መሕለፊ ቓልን ኣእትዉ!',
+          sid: 'Su\'manna sai qaale eessi!',
+          fr: 'Veuillez entrer un identifiant et un mot de passe valides !',
+          de: 'Bitte gültigen Benutzernamen und Passwort eingeben!',
+          it: 'Inserisci un nome utente e una password validi!',
+          zh: '请输入有效的用户名和密码！',
+          ar: 'يرجى إدخال اسم مستخدم وكلمة مرور صحيحين!',
+        }),
+      });
       return;
     }
 
@@ -240,31 +256,37 @@ export default function LoginModal({ isOpen, onClose, role, staffList, onSuccess
       setRecoveredPass(newPassword);
       setRecoveredUser(newUsername);
       setIsResetMode(false);
-      alert(tText({
-        am: '🔑 የደህንነት መግቢያ መለያው በተሳካ ሁኔታ ተቀይሯል!',
-        en: '🔑 Credentials updated successfully!',
-        or: '🔑 Odeeffannoon seensaa milkiin haaromfameera!',
-        ti: '🔑 መለለዪ መእተዊ ብዓወት ተቐይሩ!',
-        sid: '🔑 Seenate koode garunni soorramino!',
-        fr: '🔑 Identifiants mis à jour avec succès !',
-        de: '🔑 Zugangsdaten erfolgreich aktualisiert!',
-        it: '🔑 Credenziali aggiornate con successo!',
-        zh: '🔑 登录凭据已成功更新！',
-        ar: '🔑 تم تحديث بيانات الدخول بنجاح!',
-      }));
+      setRecoveryStatus({
+        type: 'success',
+        message: tText({
+          am: '🔑 የደህንነት መግቢያ መለያው በተሳካ ሁኔታ ተቀይሯል!',
+          en: '🔑 Credentials updated successfully!',
+          or: '🔑 Odeeffannoon seensaa milkiin haaromfameera!',
+          ti: '🔑 መለለዪ መእተዊ ብዓወት ተቐይሩ!',
+          sid: '🔑 Seenate koode garunni soorramino!',
+          fr: '🔑 Identifiants mis à jour avec succès !',
+          de: '🔑 Zugangsdaten erfolgreich aktualisiert!',
+          it: '🔑 Credenziali aggiornate con successo!',
+          zh: '🔑 登录凭据已成功更新！',
+          ar: '🔑 تم تحديث بيانات الدخول بنجاح!',
+        }),
+      });
     } else {
-      alert(tText({
-        am: 'ስህተት ተከስቷል፤ እባክዎ እንደገና ይሞክሩ።',
-        en: 'An error occurred. Please try again.',
-        or: 'Dogoggorri uumameera; irra deebi\'aa yaalaa.',
-        ti: 'ጌጋ ተፈጢሩ፤ ደጊምኩም ፈትኑ።',
-        sid: 'Soro kalaqamino; marro wo\'naali.',
-        fr: 'Une erreur est survenue. Veuillez réessayer.',
-        de: 'Ein Fehler ist aufgetreten. Bitte erneut versuchen.',
-        it: 'Si è verificato un errore. Riprova.',
-        zh: '发生错误，请重试。',
-        ar: 'حدث خطأ، يرجى المحاولة مرة أخرى.',
-      }));
+      setRecoveryStatus({
+        type: 'error',
+        message: tText({
+          am: 'ስህተት ተከስቷል፤ እባክዎ እንደገና ይሞክሩ።',
+          en: 'An error occurred. Please try again.',
+          or: 'Dogoggorri uumameera; irra deebi\'aa yaalaa.',
+          ti: 'ጌጋ ተፈጢሩ፤ ደጊምኩም ፈትኑ።',
+          sid: 'Soro kalaqamino; marro wo\'naali.',
+          fr: 'Une erreur est survenue. Veuillez réessayer.',
+          de: 'Ein Fehler ist aufgetreten. Bitte erneut versuchen.',
+          it: 'Si è verificato un errore. Riprova.',
+          zh: '发生错误，请重试。',
+          ar: 'حدث خطأ، يرجى المحاولة مرة أخرى.',
+        }),
+      });
     }
   };
 
@@ -478,18 +500,19 @@ export default function LoginModal({ isOpen, onClose, role, staffList, onSuccess
               </form>
             )}
 
-            <button
-              onClick={() => {
-                setShowRecovery(true);
-                setRecoveredPin(null);
-                setRecoveryAnswer('');
-                setIsResetMode(false);
-              }}
-              className="text-[10px] font-mono text-[#F4C22B] hover:underline mt-6 uppercase tracking-wider cursor-pointer font-sans font-bold"
-              id="btn-login-forgot"
-            >
-              {t('auth.forgot_creds')} 🔑
-            </button>
+              <button
+                onClick={() => {
+                  setShowRecovery(true);
+                  setRecoveredPin(null);
+                  setRecoveryAnswer('');
+                  setIsResetMode(false);
+                  setRecoveryStatus(null);
+                }}
+                className="text-[10px] font-mono text-[#F4C22B] hover:underline mt-6 uppercase tracking-wider cursor-pointer font-sans font-bold"
+                id="btn-login-forgot"
+              >
+                {t('auth.forgot_creds')} 🔑
+              </button>
           </div>
         ) : (
           <div className="p-6">
@@ -510,6 +533,18 @@ export default function LoginModal({ isOpen, onClose, role, staffList, onSuccess
                 })}
               </h4>
             </div>
+
+            {recoveryStatus && (
+              <div
+                className={`mb-3 p-2.5 rounded-xl border text-[11px] font-bold leading-snug ${
+                  recoveryStatus.type === 'success'
+                    ? 'bg-emerald-950/90 border-emerald-400 text-emerald-100'
+                    : 'bg-[#5C0A0A] border-[#FEF08A] text-[#FEF08A]'
+                }`}
+              >
+                {recoveryStatus.message}
+              </div>
+            )}
 
             {!recoveredPin ? (
               <form onSubmit={handleRecoverySubmit} className="space-y-4 text-left font-sans">
@@ -589,7 +624,10 @@ export default function LoginModal({ isOpen, onClose, role, staffList, onSuccess
                   <input
                     type="text"
                     value={recoveryAnswer}
-                    onChange={(e) => setRecoveryAnswer(e.target.value)}
+                    onChange={(e) => {
+                      setRecoveryAnswer(e.target.value);
+                      setRecoveryStatus(null);
+                    }}
                     placeholder="hawassa"
                     required
                     className="w-full bg-white border-2 border-[#F4C22B] text-stone-900 placeholder-stone-400 text-xs font-bold p-2.5 rounded-xl outline-none"
@@ -599,7 +637,10 @@ export default function LoginModal({ isOpen, onClose, role, staffList, onSuccess
                 <div className="flex gap-2 pt-2">
                   <button
                     type="button"
-                    onClick={() => setShowRecovery(false)}
+                    onClick={() => {
+                      setShowRecovery(false);
+                      setRecoveryStatus(null);
+                    }}
                     className="flex-1 bg-[#7A1212] hover:bg-[#B21F1F] text-white text-[10px] uppercase font-mono font-bold py-2.5 rounded-xl border border-[#F4C22B]/40 cursor-pointer"
                   >
                     {tText({ am: 'ተመለስ', en: 'BACK', or: 'DEEBI\'I', ti: 'ተመለስ', sid: 'HIGI', fr: 'RETOUR', de: 'ZURÜCK', it: 'INDIETRO', zh: '返回', ar: 'رجوع' })}

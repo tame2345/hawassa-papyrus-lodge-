@@ -49,8 +49,10 @@ import {
   deduplicateAssistanceCalls,
   getAssistanceCallDedupKey,
   getEffectiveCookingStatus,
+  getLocalTodayIso,
   mergeAssistanceCalls,
   mergeOrdersByLifecycle,
+  normalizeRecordDateToIso,
   subscribeSettingSync,
   upsertDeduplicatedAssistanceCall,
 } from './utils/orderQueue';
@@ -228,6 +230,28 @@ export default function App() {
   const [cashierLocation, setCashierLocation] = useState('Walk-In');
   const [cashierOrderType, setCashierOrderType] = useState<'Dine-In' | 'Takeaway' | 'Room Service'>('Dine-In');
   const [cashierActivePosCat, setCashierActivePosCat] = useState('food');
+  const [cashierPosSearch, setCashierPosSearch] = useState('');
+  const [cashierPosPayment, setCashierPosPayment] = useState<PaymentMethod>('cash');
+  const [cashierPosIncludeTax, setCashierPosIncludeTax] = useState(true);
+  const [cashierPosTendered, setCashierPosTendered] = useState('');
+  const [cashierPosBankRef, setCashierPosBankRef] = useState('');
+  const [cashierLastPosOrder, setCashierLastPosOrder] = useState<Order | null>(null);
+  const [cashierSearchQuery, setCashierSearchQuery] = useState('');
+  const [cashierBillFilter, setCashierBillFilter] = useState<'all' | 'cash_requests' | 'cash' | 'bank' | 'chapa'>('all');
+  const [cashierActiveSettleOrderId, setCashierActiveSettleOrderId] = useState<string | null>(null);
+  const [cashierSettleTenderedInput, setCashierSettleTenderedInput] = useState('');
+  const [cashierReceiptPreviewUrl, setCashierReceiptPreviewUrl] = useState<string | null>(null);
+  const [cashierStartingFloat, setCashierStartingFloat] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem('papyrus_cashier_float');
+      const num = saved !== null ? Number(saved) : 5000;
+      return !Number.isNaN(num) && num >= 0 ? num : 5000;
+    } catch {
+      return 5000;
+    }
+  });
+  const [cashierActualCounted, setCashierActualCounted] = useState('');
+  const [cashierShiftClosedAt, setCashierShiftClosedAt] = useState<string | null>(null);
 
   const [roomBookings, setRoomBookings] = useState<RoomBooking[]>([
     {
@@ -617,6 +641,18 @@ export default function App() {
   const [voiceSpeed, setVoiceSpeed] = useState<number>(1.0);
   const [lastSpokenTranscript, setLastSpokenTranscript] = useState<string>('');
   const [accessibleToast, setAccessibleToast] = useState<string>('');
+  const toastTimerRef = useRef<number | null>(null);
+  const showAppToast = (msg: string, durationMs = 4500) => {
+    setAccessibleToast(msg);
+    if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = window.setTimeout(() => setAccessibleToast(''), durationMs);
+  };
+  const [isSyncingCloudSettings, setIsSyncingCloudSettings] = useState<boolean>(false);
+  const [cacheMetricsTick, setCacheMetricsTick] = useState<number>(0);
+  const [showInlineNewRoleEdit, setShowInlineNewRoleEdit] = useState<boolean>(false);
+  const [inlineNewRoleEditVal, setInlineNewRoleEditVal] = useState<string>('');
+  const [showInlineNewRoleAdd, setShowInlineNewRoleAdd] = useState<boolean>(false);
+  const [inlineNewRoleAddVal, setInlineNewRoleAddVal] = useState<string>('');
 
   // Entry-page Blind / Visually Impaired Voice Menu & Ordering Launcher state
   const [pendingEntryVoiceCommand, setPendingEntryVoiceCommand] = useState<string | null>(null);
@@ -1902,6 +1938,204 @@ export default function App() {
     setDeleteConfWindow({ msg, onGo });
   };
 
+  const handleCustomerConfirmOrderReceived = (orderId: string) => {
+    const targetOrder = orders.find((o) => o.id === orderId);
+    if (!targetOrder) return;
+    const nowMs = Date.now();
+    const timeNow = new Date(nowMs).toLocaleTimeString('en-US', {
+      hour12: false,
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+
+    setOrders((prev) =>
+      prev.map((o) =>
+        o.id === orderId
+          ? {
+              ...o,
+              servedByWaiter: true,
+              checkedByWaiter: true,
+              customerConfirmedReceipt: true,
+              customerReceivedAt: o.customerReceivedAt || timeNow,
+              updatedAt: nowMs,
+            }
+          : o
+      )
+    );
+
+    playVoiceAlert(
+      tText({
+        am: `ትዕዛዝ ${orderId} በሰላም እንደደረሰዎ ስላረጋገጡ እናመሰግናለን! መልካም ምግብ።`,
+        en: `Thank you for confirming receipt of order ${orderId}! Enjoy your meal.`,
+        or: `Ajajni ${orderId} nagaan isin qaqqabuu mirkaneessuu keessaniif galatoomaa!`,
+        ti: `ትእዛዝ ${orderId} ብሰላም ከም ዝበጽሓኩም ስለ ዘረጋገጽኩም ነመስግን!`,
+        sid: `Ajaji ${orderId} keere iillinoohota buuxxinoonni galateemmo!`,
+        fr: `Merci d'avoir confirmé la réception de la commande ${orderId} ! Bon appétit.`,
+        de: `Vielen Dank für die Empfangsbestätigung von Bestellung ${orderId}! Guten Appetit.`,
+        it: `Grazie per aver confermato la ricezione dell'ordine ${orderId}! Buon appetito.`,
+        zh: `感谢您确认收到订单 ${orderId}！祝您用餐愉快。`,
+        ar: `شكراً لتأكيد استلام الطلب ${orderId}! نتمنى لك وجبة شهية.`,
+      })
+    );
+
+    showAppToast(
+      tText({
+        am: `🎉 እናመሰግናለን! ትዕዛዝ ${orderId} እንደደረሰዎ ተረጋግጧል።`,
+        en: `🎉 Thank you! Order ${orderId} receipt has been confirmed.`,
+        or: `🎉 Galatoomaa! Ajajni ${orderId} qaqqabuun mirkanaa'eera.`,
+        ti: `🎉 የቐንየልና! ትእዛዝ ${orderId} ምብጻሑ ተረጋጊጹ።`,
+        sid: `🎉 Galateemmo! Ajaji ${orderId} iillasi buuxamino.`,
+        fr: `🎉 Merci ! Réception de la commande ${orderId} confirmée.`,
+        de: `🎉 Danke! Empfang der Bestellung ${orderId} bestätigt.`,
+        it: `🎉 Grazie! Ricezione dell'ordine ${orderId} confermata.`,
+        zh: `🎉 谢谢！订单 ${orderId} 收货已确认。`,
+        ar: `🎉 شكراً لك! تم تأكيد استلام الطلب ${orderId}.`,
+      }),
+      5000
+    );
+  };
+
+  const handleGuestRequestCashierPayment = (
+    orderId: string,
+    cashPayMode: 'cashier_desk' | 'waiter_or_delivery' = 'cashier_desk',
+    tenderedAmount?: number
+  ) => {
+    const targetOrder = orders.find((o) => o.id === orderId);
+    if (!targetOrder) return;
+    if (targetOrder.status === 'Paid' || targetOrder.status === 'Cancelled') return;
+
+    const nowMs = Date.now();
+    const timeNow = new Date(nowMs).toLocaleTimeString('en-US', {
+      hour12: false,
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+    const cashCode = targetOrder.cashPaymentCode || `CASH-${Math.floor(1000 + Math.random() * 9000)}`;
+    const validTendered =
+      typeof tenderedAmount === 'number' && !Number.isNaN(tenderedAmount) && tenderedAmount >= targetOrder.total
+        ? tenderedAmount
+        : targetOrder.cashTenderedAmount;
+    const changeAmt =
+      validTendered !== undefined ? Math.max(0, validTendered - targetOrder.total) : targetOrder.cashChangeAmount;
+
+    setOrders((prev) =>
+      prev.map((o) =>
+        o.id === orderId
+          ? {
+              ...o,
+              payment: 'cash',
+              cashPayMode,
+              cashPaymentRequested: true,
+              cashPaymentCode: cashCode,
+              cashTenderedAmount: validTendered,
+              cashChangeAmount: changeAmt,
+              cashRequestedAt: timeNow,
+              updatedAt: nowMs,
+            }
+          : o
+      )
+    );
+
+    addAssistanceCall({
+      id: `cashreq-${orderId.replace('#', '')}-${nowMs}`,
+      orderId,
+      location: targetOrder.location,
+      time: timeNow,
+      active: true,
+      type: 'cash_request',
+      targetRole: 'cashier',
+      reason: cashPayMode === 'cashier_desk' ? 'Cash at Cashier Desk' : 'Cash to Waiter / Delivery',
+      createdAt: nowMs,
+      message: `💵 የካሽ መክፈያ ጥያቄ ${orderId} [${cashCode}] (${targetOrder.location}) — ${targetOrder.total} ${currency}${
+        validTendered !== undefined ? ` (Tendered: ${validTendered}, Change: ${changeAmt || 0})` : ''
+      }`,
+    });
+
+    if (isVoiceOverEnabled) playAccessibleChime('added');
+    showAppToast(
+      tText({
+        am: `💵 የካሽ መክፈያ ጥያቄ (${cashCode}) ወደ ካሸር ተልኳል! ሂሳብ: ${targetOrder.total} ${currency}`,
+        en: `💵 Cash payment request (${cashCode}) sent to Cashier! Total: ${targetOrder.total} ${currency}`,
+        or: `💵 Gaaffiin kaashii (${cashCode}) gara kaasheeraatti ergameera! Waliigala: ${targetOrder.total} ${currency}`,
+        ti: `💵 ሕቶ ክፍሊት ካሽ (${cashCode}) ናብ ካሸር ተላኢኹ! ጠቕላላ: ${targetOrder.total} ${currency}`,
+        sid: `💵 Kaashete baatooshshu xa’mo (${cashCode}) kaasheeraho soyinoonni!`,
+        fr: `💵 Demande de paiement en espèces (${cashCode}) envoyée au caissier !`,
+        de: `💵 Barzahlungsanfrage (${cashCode}) an die Kasse gesendet!`,
+        it: `💵 Richiesta pagamento in contanti (${cashCode}) inviata alla cassa!`,
+        zh: `💵 现金付款请求（${cashCode}）已发送至收银台！`,
+        ar: `💵 تم إرسال طلب الدفع نقداً (${cashCode}) إلى الكاشير!`,
+      }),
+      5000
+    );
+  };
+
+  const handleCashierConfirmCashPayment = (orderId: string, tenderedAmountInput?: string): Order | null => {
+    const targetOrder = orders.find((o) => o.id === orderId);
+    if (!targetOrder) return null;
+
+    const subtotal = targetOrder.items.reduce((s, item) => s + (item.qty || 1) * (item.price || 0), 0);
+    const billTotal = targetOrder.total > 0 ? targetOrder.total : subtotal;
+    const trimmedTender = (tenderedAmountInput || '').trim();
+    let parsedTender = targetOrder.cashTenderedAmount;
+    if (trimmedTender !== '') {
+      const n = Number(trimmedTender);
+      if (Number.isNaN(n) || n < billTotal) {
+        showAppToast(
+          `⚠️ ${tText({
+            am: `የተቀበሉት ገንዘብ ከጠቅላላው ሂሳብ (${billTotal} ${currency}) ማነስ የለበትም!`,
+            en: `Cash received cannot be less than bill total (${billTotal} ${currency})!`,
+            or: `Maallaqni fudhattan waliigala (${billTotal} ${currency}) gadi ta'uu hin qabu!`,
+            ti: `ዝተቐበልኩሞ ገንዘብ ካብ ጠቕላላ ሒሳብ (${billTotal} ${currency}) ክንእስ የብሉን!`,
+            sid: `Adhitto womaashi xaphooma (${billTotal} ${currency}) woroonni ikka dihasiissanno!`,
+            fr: `Le montant encaissé ne peut pas être inférieur à ${billTotal} ${currency} !`,
+            de: `Erhaltener Betrag darf nicht unter ${billTotal} ${currency} liegen!`,
+            it: `L'importo incassato non può essere inferiore a ${billTotal} ${currency}!`,
+            zh: `实收现金不能少于账单总额 ${billTotal} ${currency}！`,
+            ar: `لا يمكن أن يكون المبلغ المستلم أقل من إجمالي الفاتورة (${billTotal} ${currency})!`,
+          })}`
+        );
+        return null;
+      }
+      parsedTender = n;
+    }
+
+    const nowMs = Date.now();
+    const timeNow = new Date(nowMs).toLocaleTimeString('en-US', {
+      hour12: false,
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+    const finalTendered = parsedTender ?? billTotal;
+    const finalChange = Math.max(0, finalTendered - billTotal);
+    const cashierActor = currentUser?.name || 'Cashier';
+
+    const updatedOrder: Order = {
+      ...targetOrder,
+      total: billTotal,
+      status: 'Paid',
+      paymentVerified: true,
+      cashPaymentRequested: targetOrder.cashPaymentRequested ?? (targetOrder.payment === 'cash'),
+      cashTenderedAmount: finalTendered,
+      cashChangeAmount: finalChange,
+      cashConfirmedAt: timeNow,
+      cashierName: cashierActor,
+      updatedAt: nowMs,
+    };
+
+    setOrders((prev) => prev.map((o) => (o.id === orderId ? updatedOrder : o)));
+    resolveOrderAssistanceCalls(orderId, cashierActor, ['cash_request']);
+    setCashierActiveSettleOrderId(null);
+    setCashierSettleTenderedInput('');
+    playVoiceAlert(`Cash payment of ${billTotal} ${currency} confirmed for ${targetOrder.location}.`);
+    showAppToast(
+      `💵 ክፍያ ተረጋግጧል! ${orderId} (${targetOrder.location}) — ${billTotal} ${currency}${
+        finalChange > 0 ? ` · መልስ/Change: ${finalChange} ${currency}` : ''
+      }`,
+      5000
+    );
+    return updatedOrder;
+  };
+
   // MANAGER VIEW LOCAL STATES
   const [selectedBonusStaff, setSelectedBonusStaff] = useState('');
   const [bonusAmount, setBonusAmount] = useState('500');
@@ -2236,11 +2470,10 @@ export default function App() {
     } catch {}
   }, []);
 
-  useEffect(() => {
-    const fetchCloudSettings = async () => {
-      // Read from local cache first if enabled, for instantaneous loading
-      try {
-        if (localStorage.getItem('papyrus_cache_enabled') !== 'false') {
+  const syncAllCloudSettings = async (skipCacheRead = false): Promise<{ syncedCount: number }> => {
+    // Read from local cache first if enabled, for instantaneous loading
+    try {
+      if (!skipCacheRead && localStorage.getItem('papyrus_cache_enabled') !== 'false') {
           const raw = localStorage.getItem('papyrus_settings_cache');
           if (raw) {
             const cachedData = JSON.parse(raw);
@@ -2430,7 +2663,9 @@ export default function App() {
               } catch {}
 
               cloudHydratedAtRef.current = Date.now();
-              return;
+              setHasLoadedCloudSettings(true);
+              setCacheMetricsTick((t) => t + 1);
+              return { syncedCount: Object.keys(s).length };
             }
           }
         } catch (bootErr) {
@@ -2609,14 +2844,19 @@ export default function App() {
         if (rae && rae.text !== undefined) setReceptionAssistanceEn(rae.text);
         const re = await fetchKeyAndCache('reception_emergency');
         if (re && re.text !== undefined) setReceptionEmergency(re.text);
+        setCacheMetricsTick((t) => t + 1);
+        return { syncedCount: 25 };
       } catch (err) {
         console.warn("Error fetching configurations from Supabase, using local state and cache systems:", err);
+        return { syncedCount: 0 };
       } finally {
         cloudHydratedAtRef.current = Date.now();
         setHasLoadedCloudSettings(true);
       }
-    };
-    fetchCloudSettings();
+  };
+
+  useEffect(() => {
+    syncAllCloudSettings(false);
   }, []);
 
   // REAL-TIME SUPABASE SYNC FOR CLOUD SETTINGS
@@ -3455,11 +3695,26 @@ export default function App() {
 
   const renderWiFiClockInWidget = () => {
     if (!currentUser) return null;
-    const todayDate = new Date().toLocaleDateString('et-EE', { year: 'numeric', month: '2-digit', day: '2-digit' });
+    const todayDate = getLocalTodayIso();
 
-    const clockedInToday = attendance.some(a => a.staffName === currentUser.name && a.date === todayDate && (a.status === 'Present' || a.status === 'Late'));
-    const pendingRequest = pendingAttendanceRequests.find(r => r.staffName === currentUser.name && r.time === todayDate && r.status === 'pending');
-    const rejectedRequest = pendingAttendanceRequests.find(r => r.staffName === currentUser.name && r.time === todayDate && r.status === 'rejected');
+    const clockedInToday = attendance.some(
+      (a) =>
+        a.staffName === currentUser.name &&
+        normalizeRecordDateToIso(a.date) === todayDate &&
+        (a.status === 'Present' || a.status === 'Late')
+    );
+    const pendingRequest = pendingAttendanceRequests.find(
+      (r) =>
+        r.staffName === currentUser.name &&
+        (normalizeRecordDateToIso(r.time) || r.time) === todayDate &&
+        r.status === 'pending'
+    );
+    const rejectedRequest = pendingAttendanceRequests.find(
+      (r) =>
+        r.staffName === currentUser.name &&
+        (normalizeRecordDateToIso(r.time) || r.time) === todayDate &&
+        r.status === 'rejected'
+    );
 
     if (clockedInToday) {
       return (
@@ -3571,7 +3826,7 @@ export default function App() {
                 };
                 setPendingAttendanceRequests(prev => [newReq, ...prev]);
                 playVoiceAlert(`Clock-in request submitted for ${currentUser.name}. Waiting for manager approval.`);
-                alert(`🎉 የዋይፋይ ክሎክ-ኢን ጥያቄ በተሳካ ሁታ ተልኳል! ማናጀሩ ሲያፀድቁት ሙሉ በሙሉ ይንቀሳቀሳሉ።`);
+                showAppToast(`🎉 የዋይፋይ ክሎክ-ኢን ጥያቄ በተሳካ ሁኔታ ተልኳል! ማናጀሩ ሲያፀድቁት ሙሉ በሙሉ ይንቀሳቀሳሉ።`);
               }}
               className="w-full sm:w-auto bg-[#b21f1f] hover:bg-[#8c1414] text-white font-black text-xs uppercase px-5 py-2.5 font-mono cursor-pointer transition-all border-b-2 border-[#f4c22b] shadow-md rounded-xl"
             >
@@ -3593,7 +3848,7 @@ export default function App() {
   const handleAddVisitor = (e: React.FormEvent) => {
     e.preventDefault();
     if (!gName.trim()) {
-      alert("እባክዎ የእንግዳውን ስም ያስገቡ!");
+      showAppToast("⚠️ እባክዎ የእንግዳውን ስም ያስገቡ!");
       return;
     }
     const autoTag = gTicketTag.trim() || `TAG-#${100 + visitorLog.length + 1}`;
@@ -3616,7 +3871,7 @@ export default function App() {
     setGPlate('');
     setGTicketTag('');
     setSelectedTicketPassVisitor(newVisitor);
-    alert(`👮 የፓርኪንግና የእንግዳ መግቢያ ተመዝግቧል!\n\n🎫 የፓርኪንግ ካርድ ቁጥር፡ ${autoTag}\n1️⃣ ተሽከርካሪው/ሞተሩ ላይ የሚቀመጥ ሎጎ ያለው ካርድ\n2️⃣ ለእንግዳው/ባለቤቱ የሚሰጥ ተመሳስይ ካርድ ተዘጋጅቷል!`);
+    showAppToast(`👮 የፓርኪንግና የእንግዳ መግቢያ ተመዝግቧል! 🎫 ካርድ: ${autoTag}`, 5500);
   };
 
   const handleCheckoutVisitor = (v: VisitorLog) => {
@@ -3647,9 +3902,10 @@ export default function App() {
   };
 
   const handleDeleteVisitor = (id: string) => {
-    if (confirm('እርግጠኛ ነዎት ይህንን የጎብኚ መዝገብ መሰረዝ ይፈልጋሉ? (Are you sure you want to delete this visitor record?)')) {
+    askConfirmAndRun('እርግጠኛ ነዎት ይህንን የጎብኚ መዝገብ መሰረዝ ይፈልጋሉ? (Are you sure you want to delete this visitor record?)', () => {
       setVisitorLog(visitorLog.filter(v => v.id !== id));
-    }
+      showAppToast('🗑️ የጎብኚው መዝገብ ተሰርዟል።');
+    });
   };
 
   const handleSuccessLogin = (matchedStaff: StaffMember) => {
@@ -3924,7 +4180,7 @@ export default function App() {
       setCurrentUser(newStaff);
       setActiveRole(signupRole);
 
-      alert(`🎉 ሠራተኛው ${newStaff.name} በስኬት ተመዝግቧል! (Staff user registered successfully via Supabase!)`);
+      showAppToast(`🎉 ሠራተኛው ${newStaff.name} በስኬት ተመዝግቧል! (Staff user registered successfully via Supabase!)`);
       
       // Clear signup fields
       setSignupName('');
@@ -3975,7 +4231,7 @@ export default function App() {
       return;
     }
     if (customRoles.includes(normNew)) {
-      alert(`የስራ መደቡ "${normNew}" ቀድሞውኑ አለ!`);
+      showAppToast(`⚠️ የስራ መደቡ "${normNew}" ቀድሞውኑ አለ!`);
       return;
     }
     // 1. Update customRoles
@@ -3988,7 +4244,7 @@ export default function App() {
       return updated;
     }));
     setEditingRoleName(null);
-    alert(`✔ የስራ መደቡ ስም ከ "${oldRole.toUpperCase()}" ወደ "${normNew.toUpperCase()}" በተሳካ ሁኔታ ተቀይሯል!`);
+    showAppToast(`✔ የስራ መደቡ ስም ከ "${oldRole.toUpperCase()}" ወደ "${normNew.toUpperCase()}" በተሳካ ሁኔታ ተቀይሯል!`);
   };
 
   const handleDeleteRole = (role: string) => {
@@ -4000,7 +4256,7 @@ export default function App() {
         }
         return s;
       }));
-      alert(`የስራ መደብ "${role}" ተወግዷል!`);
+      showAppToast(`🗑️ የስራ መደብ "${role}" ተወግዷል!`);
     });
   };
 
@@ -4012,7 +4268,7 @@ export default function App() {
       return;
     }
     if (customPrivileges.includes(normNew)) {
-      alert(`የመዳረሻ ፈቃዱ "${normNew}" ቀድሞውኑ አለ!`);
+      showAppToast(`⚠️ የመዳረሻ ፈቃዱ "${normNew}" ቀድሞውኑ አለ!`);
       return;
     }
     // Update customPrivileges
@@ -4024,7 +4280,7 @@ export default function App() {
       return updated;
     }));
     setEditingPrivilegeName(null);
-    alert(`✔ የሲስተም መዳረሻ ፈቃድ ስም ከ "${oldPriv.toUpperCase()}" ወደ "${normNew.toUpperCase()}" በተሳካ ሁኔታ ተቀይሯል!`);
+    showAppToast(`✔ የሲስተም መዳረሻ ፈቃድ ስም ከ "${oldPriv.toUpperCase()}" ወደ "${normNew.toUpperCase()}" በተሳካ ሁኔታ ተቀይሯል!`);
   };
 
   const handleDeletePrivilege = (priv: string) => {
@@ -4036,7 +4292,7 @@ export default function App() {
         }
         return s;
       }));
-      alert(`የሲስተም መዳረሻ ፈቃድ "${priv}" ተወግዷል!`);
+      showAppToast(`🗑️ የሲስተም መዳረሻ ፈቃድ "${priv}" ተወግዷል!`);
     });
   };
 
@@ -4821,6 +5077,9 @@ export default function App() {
     bankRef?: string;
     receiptScreenshot?: string;
     receiptComment?: string;
+    cashPayMode?: 'cashier_desk' | 'waiter_or_delivery';
+    cashTenderedAmount?: number;
+    cashPaymentRequested?: boolean;
   }) => {
     const soldOutInCart = cart.filter((ci) => {
       const match = menuItems.find((m) => m.id === ci.baseId);
@@ -4848,19 +5107,28 @@ export default function App() {
     const subtotal = cart.reduce((sum, item) => sum + (item.price * item.qty), 0);
     const sc = Math.round((subtotal * serviceChargeRate) / 100);
     const vt = Math.round(((subtotal + sc) * vatRate) / 100);
+    const grandTotal = subtotal + sc + vt + details.tip;
     const nowMs = Date.now();
     const timeNow = new Date(nowMs).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
-    const dateTodayStr = new Date(nowMs).toISOString().split('T')[0]; // Format: YYYY-MM-DD
+    const dateTodayStr = getLocalTodayIso(); // Format: YYYY-MM-DD
 
     const assignedWaiterForLoc = getAssignedWaiterForTable(details.location);
     const assignedChefForLoc = getAssignedChefForTable(details.location);
     const isPaidUpfront = details.payment === 'chapa';
+    const isCashOrder = details.payment === 'cash';
+    const cashMode = isCashOrder ? (details.cashPayMode || 'cashier_desk') : undefined;
+    const cashCode = isCashOrder ? `CASH-${Math.floor(1000 + Math.random() * 9000)}` : undefined;
+    const cashTendered =
+      isCashOrder && typeof details.cashTenderedAmount === 'number' && details.cashTenderedAmount >= grandTotal
+        ? details.cashTenderedAmount
+        : undefined;
+    const cashChange = cashTendered !== undefined ? Math.max(0, cashTendered - grandTotal) : undefined;
 
     const newOrder: Order = {
       id: '#O-' + Math.floor(100 + Math.random() * 900),
       location: details.location,
       items: cart,
-      total: subtotal + sc + vt + details.tip,
+      total: grandTotal,
       serviceCharge: sc,
       vat: vt,
       tip: details.tip,
@@ -4874,6 +5142,12 @@ export default function App() {
       bankRef: details.bankRef,
       receiptScreenshot: details.receiptScreenshot,
       receiptComment: details.receiptComment,
+      cashPayMode: cashMode,
+      cashPaymentRequested: isCashOrder ? (details.cashPaymentRequested ?? true) : false,
+      cashPaymentCode: cashCode,
+      cashTenderedAmount: cashTendered,
+      cashChangeAmount: cashChange,
+      cashRequestedAt: isCashOrder ? timeNow : undefined,
       confirmed: true,
       waiter: assignedWaiterForLoc || (currentUser?.role === 'waiter' ? currentUser.name : undefined),
       chefName: assignedChefForLoc || undefined,
@@ -4903,16 +5177,38 @@ export default function App() {
       targetRole: 'chef',
       targetWaiter: assignedWaiterForLoc || undefined,
       createdAt: nowMs,
-      message: `🛎️ አዲስ ትዕዛዝ ${newOrder.id} (${details.location}) ወደ ኩሽና ገብቷል! (${isPaidUpfront ? 'Paid · Chapa' : details.payment.toUpperCase()})`
+      message: `🛎️ አዲስ ትዕዛዝ ${newOrder.id} (${details.location}) ወደ ኩሽና ገብቷል! (${isPaidUpfront ? 'Paid · Chapa' : isCashOrder ? `Cash · ${cashCode}` : details.payment.toUpperCase()})`
     };
     addAssistanceCall(orderBuzzerCall);
+
+    // Notify Cashier Desk in real time whenever guest chooses Cash payment or Cashier Desk request
+    if (isCashOrder) {
+      addAssistanceCall({
+        id: `cashreq-${newOrder.id.replace('#', '')}-${nowMs}`,
+        orderId: newOrder.id,
+        location: details.location,
+        time: timeNow,
+        active: true,
+        type: 'cash_request',
+        targetRole: 'cashier',
+        reason: cashMode === 'cashier_desk' ? 'Cash at Cashier Desk' : 'Cash to Waiter / Delivery',
+        createdAt: nowMs,
+        message: `💵 ${cashMode === 'cashier_desk' ? 'በካሸር መክፈያ ጥያቄ' : 'በጥሬ ገንዘብ ትዕዛዝ'} ${newOrder.id} [${cashCode}] — ${grandTotal} ${currency}${
+          cashTendered !== undefined ? ` (ብር: ${cashTendered}, መልስ: ${cashChange || 0})` : ''
+        }`
+      });
+    }
 
     if (isVoiceOverEnabled) playAccessibleChime('added');
     const placedEn = `Order ${newOrder.id} placed successfully for ${details.location}. Total ${newOrder.total} Birr.`;
     runVoiceOver(
       tText({
-        am: `ትዕዛዝዎ ${newOrder.id} በተሳካ ሁኔታ ተልኳል። ጠቅላላ ሂሳብ ${newOrder.total} ${currency} ነው።`,
-        en: `Order ${newOrder.id} placed successfully for ${details.location}. Total ${newOrder.total} ${currency}.`,
+        am: isCashOrder && cashMode === 'cashier_desk'
+          ? `ትዕዛዝዎ ${newOrder.id} ተልኳል፤ የካሽ መክፈያ ጥያቄ (${cashCode}) ወደ ካሸር ደርሷል። ጠቅላላ ${newOrder.total} ${currency}።`
+          : `ትዕዛዝዎ ${newOrder.id} በተሳካ ሁኔታ ተልኳል። ጠቅላላ ሂሳብ ${newOrder.total} ${currency} ነው።`,
+        en: isCashOrder && cashMode === 'cashier_desk'
+          ? `Order ${newOrder.id} placed! Cash request (${cashCode}) sent to Cashier Desk. Total ${newOrder.total} ${currency}.`
+          : `Order ${newOrder.id} placed successfully for ${details.location}. Total ${newOrder.total} ${currency}.`,
         or: `Ajajni keessan ${newOrder.id} (${details.location}) milkaa'inaan ergameera. Waliigala ${newOrder.total} ${currency}.`,
         ti: `ትእዛዝኩም ${newOrder.id} ናብ ${details.location} ብዓወት ተላኢኹ። ጠቕላላ ${newOrder.total} ${currency}።`,
         sid: `Hajajokki ${newOrder.id} (${details.location}) danchunni soyino. Mulu ${newOrder.total} ${currency}.`,
@@ -4926,7 +5222,7 @@ export default function App() {
       placedEn,
     );
 
-    // Open Live Order Tracker modal immediately so guest sees queue position & orders ahead
+    // Open Live Order Tracker modal immediately so guest sees queue position, Cash ticket & orders ahead
     setIsLiveTrackerOpen(true);
   };
 
@@ -4958,7 +5254,7 @@ export default function App() {
     setMenuItems(prev => [...prev, newItem]);
     setAddMenuImage('');
     e.currentTarget.reset();
-    alert('🍽️ አዲስ ምናሌ በተሳካ ሁኔታ ተመዝግቧል! / Menu item saved.');
+    showAppToast('🍽️ አዲስ ምናሌ በተሳካ ሁኔታ ተመዝግቧል! / Menu item saved.');
   };
 
   const handleToggleMenuItemAvailable = (id: string) => {
@@ -5106,7 +5402,7 @@ export default function App() {
     const securityAnswer = securityAnsEl ? securityAnsEl.value.trim() : 'hawassa';
 
     if (pin.length !== 4 || isNaN(Number(pin))) {
-      alert('የይለፍ ቃል በትክክል 4 ቁጥሮች ብቻ መሆን አለበት!');
+      showAppToast('⚠️ የይለፍ ቃል በትክክል 4 ቁጥሮች ብቻ መሆን አለበት!');
       return;
     }
 
@@ -5163,7 +5459,7 @@ export default function App() {
     setAddStaffRoleSelected('waiter');
     setAddStaffAccessSelected('waiter');
     e.currentTarget.reset();
-    alert('👥 ሰራተኛው በተሳካ ሁኔታ ተመዝግቧል! / Staff registered.');
+    showAppToast('👥 ሰራተኛው በተሳካ ሁኔታ ተመዝግቧል! / Staff registered.');
   };
 
   const handleRemoveStaff = (name: string) => {
@@ -5221,12 +5517,12 @@ export default function App() {
     setBookingGuestCount(1);
     setGuestIdsState([{ fullName: '', idNumber: '' }]);
     form.reset();
-    alert('🛎️ አልጋው በተሳካ ሁኔታ ተይዟል! / Bed reserved successfully.');
+    showAppToast('🛎️ አልጋው በተሳካ ሁኔታ ተይዟል! / Bed reserved successfully.');
   };
 
   const handleCheckoutBooking = (id: string) => {
     setRoomBookings(prev => prev.map(b => b.id === id ? { ...b, status: 'Checked Out', checkedOutByStaff: currentUser?.name || 'Reception Staff' } : b));
-    alert('🔑 እንግዳው በተገቢው ሁኔታ ወጥቷል! / Checked out successfully.');
+    showAppToast('🔑 እንግዳው በተገቢው ሁኔታ ወጥቷል! / Checked out successfully.');
   };
 
   const handleDeleteBooking = (id: string) => {
@@ -5250,7 +5546,7 @@ export default function App() {
       recordedByRole: currentUser?.role || 'manager'
     };
     setExpenses(prev => [newExp, ...prev]);
-    alert('💸 አዲስ ወጪ በተሳካ ሁኔታ ተመዝግቧል! / Expense recorded successfully.');
+    showAppToast('💸 አዲስ ወጪ በተሳካ ሁኔታ ተመዝግቧል! / Expense recorded successfully.');
   };
 
   const handleRemoveExpense = (id: string) => {
@@ -5261,14 +5557,15 @@ export default function App() {
 
   // MANAGER ATTENDANCE & BONUSES OPERATIONS
   const handleManagerUpdateAttendance = (staffName: string, status: 'Present' | 'Absent' | 'Late', customTime?: string) => {
-    const todayStr = new Date().toLocaleDateString('et-EE', { year: 'numeric', month: '2-digit', day: '2-digit' });
+    const todayIso = getLocalTodayIso();
     const nowTimeStr = customTime || new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
     
     setAttendance(prev => {
-      const existingIdx = prev.findIndex(a => a.staffName === staffName && a.date === todayStr);
+      const existingIdx = prev.findIndex(a => a.staffName === staffName && normalizeRecordDateToIso(a.date) === todayIso);
       if (existingIdx > -1) {
         return prev.map((a, i) => i === existingIdx ? { 
           ...a, 
+          date: todayIso,
           status, 
           clockInTime: status === 'Present' || status === 'Late' ? (a.clockInTime || nowTimeStr) : undefined,
           clockOutTime: status === 'Absent' ? undefined : a.clockOutTime
@@ -5278,7 +5575,7 @@ export default function App() {
           id: 'att-' + Date.now() + '-' + Math.random().toString(36).substr(2, 4),
           staffName,
           role: staff.find(s => s.name === staffName)?.role || 'waiter',
-          date: todayStr,
+          date: todayIso,
           status,
           clockInTime: status === 'Present' || status === 'Late' ? nowTimeStr : undefined
         };
@@ -5288,14 +5585,15 @@ export default function App() {
   };
 
   const handleClockOutAttendance = (staffName: string) => {
-    const todayStr = new Date().toLocaleDateString('et-EE', { year: 'numeric', month: '2-digit', day: '2-digit' });
+    const todayIso = getLocalTodayIso();
     const nowTimeStr = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
     
     setAttendance(prev => {
-      const existingIdx = prev.findIndex(a => a.staffName === staffName && a.date === todayStr);
+      const existingIdx = prev.findIndex(a => a.staffName === staffName && normalizeRecordDateToIso(a.date) === todayIso);
       if (existingIdx > -1) {
         return prev.map((a, i) => i === existingIdx ? { 
           ...a, 
+          date: todayIso,
           clockOutTime: nowTimeStr 
         } : a);
       } else {
@@ -5303,7 +5601,7 @@ export default function App() {
           id: 'att-' + Date.now() + '-' + Math.random().toString(36).substr(2, 4),
           staffName,
           role: staff.find(s => s.name === staffName)?.role || 'waiter',
-          date: todayStr,
+          date: todayIso,
           status: 'Present',
           clockInTime: '08:00',
           clockOutTime: nowTimeStr
@@ -5318,16 +5616,16 @@ export default function App() {
     const waitersList = staff.filter(s => s.role === 'waiter');
     const trgStaff = selectedBonusStaff || waitersList[0]?.name || '';
     if (!trgStaff) {
-      alert('እባክዎ መጀመሪያ አስተናጋጅ ይምረጡ! (Please select a waiter first)');
+      showAppToast('⚠️ እባክዎ መጀመሪያ ሰራተኛ ይምረጡ! (Please select staff first)');
       return;
     }
     const amt = parseFloat(bonusAmount);
     if (isNaN(amt) || amt <= 0) {
-      alert('እባክዎ ትክክለኛ የቦኖ መጠን ያስገቡ! (Please enter a valid bonus amount)');
+      showAppToast('⚠️ እባክዎ ትክክለኛ የቦኖ መጠን ያስገቡ! (Please enter a valid bonus amount)');
       return;
     }
 
-    const todayStr = new Date().toLocaleDateString('et-EE', { year: 'numeric', month: '2-digit', day: '2-digit' });
+    const todayStr = getLocalTodayIso();
     const timeNow = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
 
     const newBonus: BonusRecord = {
@@ -5341,7 +5639,7 @@ export default function App() {
 
     setBonuses(prev => [newBonus, ...prev]);
     setActiveBonusReceipt(newBonus);
-    alert(`🎉 ለ${trgStaff} የ ${amt} ብር ቦኖ (ቦኖ ወረቀት) በተሳካ ሁኔታ ተመርቷል!`);
+    showAppToast(`🎉 ለ${trgStaff} የ ${amt} ብር ቦኖ (ቦኖ ወረቀት) በተሳካ ሁኔታ ተመርቷል!`);
   };
 
   // QR GENERATIONS
@@ -5372,8 +5670,8 @@ export default function App() {
 
   // CHEF WORKFLOW
   const handleConfirmOrderPayment = (orderId: string, confirmed: boolean) => {
-    setOrders(prev => prev.map(o => o.id === orderId ? { ...o, confirmed } : o));
-    alert(confirmed ? '✔️ የባንክ እስክሪንሻት/ክፍያ በተሳካ ሁኔታ ተረጋግጧል! / Payment verified successfully.' : '⚠️ ክፍያው ውድቅ ተደርጓል። / Payment marked unverified.');
+    setOrders(prev => prev.map(o => o.id === orderId ? { ...o, confirmed, updatedAt: Date.now() } : o));
+    showAppToast(confirmed ? '✔️ የባንክ እስክሪንሻት/ክፍያ በተሳካ ሁኔታ ተረጋግጧል! / Payment verified successfully.' : '⚠️ ክፍያው ውድቅ ተደርጓል። / Payment marked unverified.');
   };
 
   const getAmharicDayOfDate = (dateStr?: string): { dayName: string; formattedDate: string } => {
@@ -5592,7 +5890,7 @@ export default function App() {
     if (isStaffOrderRestricted()) {
       const access = canStaffAccessOrder(currentUser, ord, shiftAssignments, tableAssignments);
       if (!access.allowed) {
-        alert(`🔒 የፈረቃ መዳረሻ ተከልክሏል (Edit Blocked): ${access.reason}`);
+        showAppToast(`🔒 የፈረቃ መዳረሻ ተከልክሏል (Edit Blocked): ${access.reason}`);
         return;
       }
     }
@@ -5604,14 +5902,14 @@ export default function App() {
     if (isStaffOrderRestricted()) {
       const access = canStaffAccessOrder(currentUser, existing, shiftAssignments, tableAssignments);
       if (!access.allowed) {
-        alert(`🔒 የፈረቃ መዳረሻ ተከልክሏል (Save Blocked): ${access.reason}`);
+        showAppToast(`🔒 የፈረቃ መዳረሻ ተከልክሏል (Save Blocked): ${access.reason}`);
         setAdjustingOrder(null);
         return;
       }
     }
-    setOrders(prev => prev.map(o => o.id === updatedOrder.id ? updatedOrder : o));
+    setOrders(prev => prev.map(o => o.id === updatedOrder.id ? { ...updatedOrder, updatedAt: Date.now() } : o));
     setAdjustingOrder(null);
-    alert('✔️ ትዕዛዙ በተሳካ ሁኔታ ተስተካክሏል! / Order adjustments saved successfully.');
+    showAppToast('✔️ ትዕዛዙ በተሳካ ሁኔታ ተስተካክሏል! / Order adjustments saved successfully.');
   };
 
   // FEEDBACK SUBMIT
@@ -5627,7 +5925,7 @@ export default function App() {
     };
     setFeedback(prev => [newFeedback, ...prev]);
     setFeedbackText('');
-    alert('💬 ለአስተያየትዎ እናመሰግናለን! / Feedback submitted smoothly.');
+    showAppToast('💬 ለአስተያየትዎ እናመሰግናለን! / Feedback submitted smoothly.');
   };
 
   // ADMIN REPLY TO FEEDBACK
@@ -5646,7 +5944,7 @@ export default function App() {
       delete updated[feedbackId];
       return updated;
     });
-    alert('💬 መልስዎ በተሳካ ሁኔታ ተልኳል! / Reply submitted successfully.');
+    showAppToast('💬 መልስዎ በተሳካ ሁኔታ ተልኳል! / Reply submitted successfully.');
   };
 
   // ADMIN DELETE FEEDBACK
@@ -5670,7 +5968,7 @@ export default function App() {
     if (!editingStaff || !originalStaffName) return;
 
     if (editingStaff.pin.length !== 4 || isNaN(Number(editingStaff.pin))) {
-      alert('የይለፍ ቃል በትክክል 4 ቁጥሮች ብቻ መሆን አለበት!');
+      showAppToast('⚠️ የይለፍ ቃል በትክክል 4 ቁጥሮች ብቻ መሆን አለበት!');
       return;
     }
 
@@ -5707,7 +6005,7 @@ export default function App() {
     }
     setEditingStaff(null);
     setOriginalStaffName(null);
-    alert('👥 የሰራተኛ መረጃ በተሳካ ሁኔታ ተስተካክሏል! / Staff information updated.');
+    showAppToast('👥 የሰራተኛ መረጃ በተሳካ ሁኔታ ተስተካክሏል! / Staff information updated.');
   };
 
   const handleSaveEditedMenuItem = (e: React.FormEvent) => {
@@ -5716,7 +6014,7 @@ export default function App() {
 
     setMenuItems(prev => prev.map(m => m.id === editingMenuItem.id ? editingMenuItem : m));
     setEditingMenuItem(null);
-    alert('🍽️ የሜኑ መረጃ በተሳካ ሁኔታ ተስተካክሏል! / Menu item updated.');
+    showAppToast('🍽️ የሜኑ መረጃ በተሳካ ሁኔታ ተስተካክሏል! / Menu item updated.');
   };
 
   const handleSaveEditedBank = (e: React.FormEvent) => {
@@ -5725,7 +6023,7 @@ export default function App() {
 
     setBanks(prev => prev.map(b => b.id === editingBank.id ? editingBank : b));
     setEditingBank(null);
-    alert('💳 የባንክ አካውንት በተሳካ ሁኔታ ተስተካክሏል! / Bank account updated.');
+    showAppToast('💳 የባንክ አካውንት በተሳካ ሁኔታ ተስተካክሏል! / Bank account updated.');
   };
 
   const handleSaveEditedPromo = (e: React.FormEvent) => {
@@ -5735,7 +6033,7 @@ export default function App() {
     setPromos(prev => prev.map((p, idx) => idx === editingPromoIndex ? editingPromo : p));
     setEditingPromoIndex(null);
     setEditingPromo(null);
-    alert('📢 የማስታወቂያ መረጃ በተሳካ ሁኔታ ተስተካክሏል! / Promotion campaign updated.');
+    showAppToast('📢 የማስታወቂያ መረጃ በተሳካ ሁኔታ ተስተካክሏል! / Promotion campaign updated.');
   };
 
   // BANK REGISTRATIONS
@@ -5753,7 +6051,7 @@ export default function App() {
     };
     setBanks(prev => [...prev, newBank]);
     e.currentTarget.reset();
-    alert('💳 የባንክ አካውንት በተሳካ ሁኔታ ተመዝግቧል!');
+    showAppToast('💳 የባንክ አካውንት በተሳካ ሁኔታ ተመዝግቧል!');
   };
 
   const handleRemoveBank = (id: string) => {
@@ -5804,7 +6102,7 @@ export default function App() {
 
       if (res.error) {
         console.error("Supabase gallery save failed with error:", res.error);
-        alert(`❌ Supabase Gallery Save Error:\nMessage: ${res.error.message}\nCode: ${res.error.code}\nDetails: ${res.error.details || 'None'}`);
+        showAppToast(`❌ Supabase Gallery Save Error: ${res.error.message}`, 6000);
         return null;
       }
 
@@ -5825,12 +6123,12 @@ export default function App() {
       }
 
       if (res.data && res.data[0]) {
-        alert('✨ ጋለሪ ምስል በተሳካ ሁኔታ ተቀምጧል! / Gallery item saved successfully to Supabase!');
+        showAppToast('✨ ጋለሪ ምስል በተሳካ ሁኔታ ተቀምጧል! / Gallery item saved successfully!');
         return res.data[0];
       }
     } catch (err: any) {
       console.error("Exception saving gallery item:", err);
-      alert(`❌ Unexpected Error while saving gallery: ${err.message || err}`);
+      showAppToast(`❌ Unexpected Error while saving gallery: ${err.message || err}`, 6000);
     }
     return null;
   };
@@ -5846,7 +6144,7 @@ export default function App() {
 
       if (error) {
         console.error("Supabase gallery delete failed with error:", error);
-        alert(`❌ Supabase Gallery Delete Error:\nMessage: ${error.message}\nCode: ${error.code}`);
+        showAppToast(`❌ Supabase Gallery Delete Error: ${error.message}`, 6000);
         return;
       }
 
@@ -5862,10 +6160,10 @@ export default function App() {
         setGalleryItems(galleryData);
       }
       
-      alert('🗑️ የጋለሪው ምስል ተሰርዟል! / Gallery item deleted successfully!');
+      showAppToast('🗑️ የጋለሪው ምስል ተሰርዟል! / Gallery item deleted successfully!');
     } catch (err: any) {
       console.error("Exception deleting gallery item:", err);
-      alert(`❌ Unexpected Error while deleting gallery: ${err.message || err}`);
+      showAppToast(`❌ Unexpected Error while deleting gallery: ${err.message || err}`, 6000);
     }
   };
 
@@ -5880,7 +6178,7 @@ export default function App() {
     const newPr = { title, desc, tag, poster };
     setPromos(prev => [...prev, newPr]);
     setAddPromoPoster('');
-    alert('📢 ማስታወቂያው በተሳካ ሁኔታ ተመዝግቧል! / Promotion campaign registered.');
+    showAppToast('📢 ማስታወቂያው በተሳካ ሁኔታ ተመዝግቧል! / Promotion campaign registered.');
     e.currentTarget.reset();
   };
 
@@ -7920,6 +8218,8 @@ export default function App() {
                   }}
                   onRefresh={handleRefreshLiveOrders}
                   onOpenFullModal={() => setIsLiveTrackerOpen(true)}
+                  onConfirmOrderReceived={handleCustomerConfirmOrderReceived}
+                  onRequestCashierPayment={handleGuestRequestCashierPayment}
                 />
 
                 {/* STANDALONE VOICE ORDERING & AUDIO ACCESSIBILITY SECTION (COMPLETELY SEPARATE FROM DIGITAL MENU) */}
@@ -9239,7 +9539,7 @@ export default function App() {
                   const supervisorUser = isSupervisorRole(currentUser);
                   const myName = (currentUser?.name || '').trim().toLowerCase();
                   const isAssignedCallToMe = (c: AssistanceCall) => {
-                    if (c.active === false || c.type === 'new_order' || c.targetRole === 'chef') return false;
+                    if (c.active === false || c.type === 'new_order' || c.type === 'cash_request' || c.targetRole === 'chef' || c.targetRole === 'cashier') return false;
                     if (supervisorUser) return true;
                     if (!myName) return false;
                     const explicit = (c.targetWaiter || '').trim().toLowerCase();
@@ -9799,6 +10099,33 @@ export default function App() {
                         <h4 className="text-2xl font-black mt-1 text-[#C1FF00]">
                           {orders.filter(o => Boolean(o.servedByWaiter)).length}
                         </h4>
+                      </div>
+                      <div className="bg-[#181818] p-3 border border-emerald-500/20">
+                        <span className="font-mono text-[9px] uppercase text-emerald-300/70 block">🎉 በደንበኛ የተረጋገጠ (CUSTOMER CONFIRMED)</span>
+                        <h4 className="text-2xl font-black mt-1 text-emerald-400">
+                          {orders.filter(o => Boolean(o.servedByWaiter) && Boolean(o.customerConfirmedReceipt)).length}
+                        </h4>
+                        {orders.some(o => Boolean(o.servedByWaiter)) && (
+                          <div className="mt-2 pt-2 border-t border-white/5 space-y-1.5 max-h-36 overflow-y-auto no-scrollbar">
+                            {orders
+                              .filter(o => Boolean(o.servedByWaiter))
+                              .slice(0, 5)
+                              .map((dOrd) => (
+                                <div key={`w-rec-${dOrd.id}`} className="flex items-center justify-between gap-2 text-[10px]">
+                                  <span className="text-white/80 truncate">{dOrd.id} · {dOrd.location}</span>
+                                  {dOrd.customerConfirmedReceipt ? (
+                                    <span className="px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-bold shrink-0">
+                                      🎉 ተቀብያለሁ {dOrd.customerReceivedAt ? `(${dOrd.customerReceivedAt})` : ''}
+                                    </span>
+                                  ) : (
+                                    <span className="px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 font-bold shrink-0">
+                                      ⏳ በመጠባበቅ ላይ
+                                    </span>
+                                  )}
+                                </div>
+                              ))}
+                          </div>
+                        )}
                       </div>
                       <div className="bg-[#181818] p-3 border border-white/5">
                         <span className="font-mono text-[9px] uppercase text-white/40 block">የእንግዶች ግምገማ (RATING)</span>
@@ -10420,7 +10747,7 @@ export default function App() {
                                           : 'bg-sky-400 text-black'
                                     }`}>
                                       {dOrd.servedByWaiter
-                                        ? '✅ DELIVERED'
+                                        ? (dOrd.customerConfirmedReceipt ? '🎉 CUSTOMER RECEIVED' : '✅ DELIVERED')
                                         : isPickupAlertActive
                                           ? '🔔 PICKUP WAIT'
                                           : '✔ ACKNOWLEDGED'}
@@ -11126,7 +11453,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                       <td className="py-2 px-3 font-black text-white">{o.id}</td>
                                       <td className="py-2 px-3 font-bold text-sky-300">{o.waiter || 'አስተናጋጅ'}</td>
                                       <td className="py-2 px-3 text-stone-400">{tRole('waiter')}</td>
-                                      <td className="py-2 px-3 text-white">{o.location} ({o.items.length} {t('common.items')}) - {o.total} {currency}</td>
+                                      <td className="py-2 px-3 text-white">{o.location} ({o.items.length} {t('common.items')}) - {o.total} {currency}{o.customerConfirmedReceipt ? ' · 🎉 Customer Confirmed' : o.servedByWaiter ? ' · ✓ Delivered' : ''}</td>
                                       <td className="py-2 px-3 text-sky-400 tabular-nums">{o.date ? `${o.date} · ` : ''}{o.time}</td>
                                     </tr>
                                   ))}
@@ -11266,17 +11593,8 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                 <button
                                   type="button"
                                   onClick={() => {
-                                    const val = prompt('እባክዎ አዲስ የስራ መደብ ስም ያስገቡ (Enter new job position):');
-                                    if (val && val.trim()) {
-                                      const normalized = val.trim().toLowerCase();
-                                      if (!customRoles.includes(normalized)) {
-                                        setCustomRoles(prev => [...prev, normalized]);
-                                        setEditingStaff({ ...editingStaff, role: normalized });
-                                        alert(`✔ አዲስ የስራ መደብ "${normalized}" ተጨምሯል!`);
-                                      } else {
-                                        setEditingStaff({ ...editingStaff, role: normalized });
-                                      }
-                                    }
+                                    setShowInlineNewRoleEdit((prev) => !prev);
+                                    setInlineNewRoleEditVal('');
                                   }}
                                   className="bg-[#C1FF00]/15 hover:bg-[#C1FF00] hover:text-black text-[#C1FF00] px-3.5 text-xs font-black border border-[#C1FF00]/30 transition-all cursor-pointer"
                                   title="Add new custom role position"
@@ -11284,6 +11602,47 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                   ➕ አዲስ መደብ
                                 </button>
                               </div>
+                              {showInlineNewRoleEdit && (
+                                <div className="flex gap-1.5 mt-2">
+                                  <input
+                                    type="text"
+                                    value={inlineNewRoleEditVal}
+                                    onChange={(e) => setInlineNewRoleEditVal(e.target.value)}
+                                    placeholder="አዲስ የስራ መደብ ስም..."
+                                    className="flex-1 bg-[#181818] border border-[#C1FF00]/50 text-white text-xs font-bold px-2.5 py-1.5 outline-none focus:border-[#C1FF00]"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const normalized = inlineNewRoleEditVal.trim().toLowerCase();
+                                      if (!normalized) {
+                                        showAppToast('⚠️ እባክዎ የስራ መደብ ስም ያስገቡ!');
+                                        return;
+                                      }
+                                      if (!customRoles.includes(normalized)) {
+                                        setCustomRoles(prev => [...prev, normalized]);
+                                        showAppToast(`✔ አዲስ የስራ መደብ "${normalized}" ተጨምሯል!`);
+                                      }
+                                      setEditingStaff({ ...editingStaff, role: normalized });
+                                      setInlineNewRoleEditVal('');
+                                      setShowInlineNewRoleEdit(false);
+                                    }}
+                                    className="bg-[#C1FF00] hover:bg-white text-black px-3 text-xs font-black cursor-pointer"
+                                  >
+                                    ✔️
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setShowInlineNewRoleEdit(false);
+                                      setInlineNewRoleEditVal('');
+                                    }}
+                                    className="bg-white/10 hover:bg-white/20 text-white px-2.5 text-xs font-bold cursor-pointer"
+                                  >
+                                    ✕
+                                  </button>
+                                </div>
+                              )}
                             </div>
                             <div>
                               <label className="text-[9px] font-mono text-white/40 uppercase block mb-1">የሲስተም መዳረሻ ፈቃድ (System Access Privilege)</label>
@@ -11529,17 +11888,8 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                 <button
                                   type="button"
                                   onClick={() => {
-                                    const val = prompt('እባክዎ አዲስ የስራ መደብ ስም ያስገቡ (Enter new job position):');
-                                    if (val && val.trim()) {
-                                      const normalized = val.trim().toLowerCase();
-                                      if (!customRoles.includes(normalized)) {
-                                        setCustomRoles(prev => [...prev, normalized]);
-                                        setAddStaffRoleSelected(normalized);
-                                        alert(`✔ አዲስ የስራ መደብ "${normalized}" ተጨምሯል!`);
-                                      } else {
-                                        setAddStaffRoleSelected(normalized);
-                                      }
-                                    }
+                                    setShowInlineNewRoleAdd((prev) => !prev);
+                                    setInlineNewRoleAddVal('');
                                   }}
                                   className="bg-[#C1FF00]/15 hover:bg-[#C1FF00] hover:text-black text-[#C1FF00] px-3.5 text-xs font-black border border-[#C1FF00]/30 transition-all cursor-pointer"
                                   title="Add new custom role position"
@@ -11547,6 +11897,47 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                   ➕ አዲስ መደብ
                                 </button>
                               </div>
+                              {showInlineNewRoleAdd && (
+                                <div className="flex gap-1.5 mt-2">
+                                  <input
+                                    type="text"
+                                    value={inlineNewRoleAddVal}
+                                    onChange={(e) => setInlineNewRoleAddVal(e.target.value)}
+                                    placeholder="አዲስ የስራ መደብ ስም..."
+                                    className="flex-1 bg-[#181818] border border-[#C1FF00]/50 text-white text-xs font-bold px-2.5 py-1.5 outline-none focus:border-[#C1FF00]"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const normalized = inlineNewRoleAddVal.trim().toLowerCase();
+                                      if (!normalized) {
+                                        showAppToast('⚠️ እባክዎ የስራ መደብ ስም ያስገቡ!');
+                                        return;
+                                      }
+                                      if (!customRoles.includes(normalized)) {
+                                        setCustomRoles(prev => [...prev, normalized]);
+                                        showAppToast(`✔ አዲስ የስራ መደብ "${normalized}" ተጨምሯል!`);
+                                      }
+                                      setAddStaffRoleSelected(normalized);
+                                      setInlineNewRoleAddVal('');
+                                      setShowInlineNewRoleAdd(false);
+                                    }}
+                                    className="bg-[#C1FF00] hover:bg-white text-black px-3 text-xs font-black cursor-pointer"
+                                  >
+                                    ✔️
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setShowInlineNewRoleAdd(false);
+                                      setInlineNewRoleAddVal('');
+                                    }}
+                                    className="bg-white/10 hover:bg-white/20 text-white px-2.5 text-xs font-bold cursor-pointer"
+                                  >
+                                    ✕
+                                  </button>
+                                </div>
+                              )}
                             </div>
 
                             <div>
@@ -11772,38 +12163,71 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                             key={role} 
                             className="px-2.5 py-1.5 rounded-lg text-xs font-mono font-bold flex items-center gap-1.5 bg-red-950/80 border border-yellow-400/50 text-yellow-300 shadow-sm"
                           >
-                            <span>{role === 'waiter' ? 'አስተናጋጅ (Waiter)' : 
-                                   role === 'chef' ? 'የኩሽና ሰራተኛ (Chef)' : 
-                                   role === 'receptionist' ? 'ሪሴብሽነር (Receptionist)' : 
-                                   role === 'admin' ? 'አድሚን (Admin)' : 
-                                   role === 'manager' ? 'ማናጀር (Manager)' : 
-                                   role === 'guard' ? 'ጥበቃ (Guard)' : 
-                                   role === 'cashier' ? 'ካሸር (Cashier)' : role.toUpperCase()}</span>
-                            
-                            {/* Rename Role Button */}
-                            <button 
-                              type="button"
-                              onClick={() => {
-                                const val = prompt(`የስራ መደቡን ስም ይቀይሩ (Rename "${role.toUpperCase()}"):`, role);
-                                if (val && val.trim()) {
-                                  handleRenameRole(role, val.trim());
-                                }
-                              }}
-                              className="text-white hover:text-[#C1FF00] transition-colors shrink-0 ml-1 text-[10px] bg-transparent border-none cursor-pointer"
-                              title="የስራ መደቡን ስም ቀይር (Rename role)"
-                            >
-                              ✍️
-                            </button>
+                            {editingRoleName === role ? (
+                              <span className="flex items-center gap-1">
+                                <input
+                                  type="text"
+                                  value={editingRoleNewVal}
+                                  onChange={(e) => setEditingRoleNewVal(e.target.value)}
+                                  className="w-28 bg-black/70 border border-[#C1FF00] text-white text-[11px] font-bold px-1.5 py-0.5 rounded outline-none"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (!editingRoleNewVal.trim()) {
+                                      showAppToast('⚠️ እባክዎ ባዶ ያልሆነ ስም ያስገቡ!');
+                                      return;
+                                    }
+                                    handleRenameRole(role, editingRoleNewVal.trim());
+                                  }}
+                                  className="text-black bg-[#C1FF00] hover:bg-white px-1.5 py-0.5 rounded text-[10px] font-black cursor-pointer"
+                                  title="Save"
+                                >
+                                  ✔️
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setEditingRoleName(null)}
+                                  className="text-white/80 hover:text-white bg-white/10 px-1.5 py-0.5 rounded text-[10px] cursor-pointer"
+                                  title="Cancel"
+                                >
+                                  ✕
+                                </button>
+                              </span>
+                            ) : (
+                              <>
+                                <span>{role === 'waiter' ? 'አስተናጋጅ (Waiter)' : 
+                                       role === 'chef' ? 'የኩሽና ሰራተኛ (Chef)' : 
+                                       role === 'receptionist' ? 'ሪሴብሽነር (Receptionist)' : 
+                                       role === 'admin' ? 'አድሚን (Admin)' : 
+                                       role === 'manager' ? 'ማናጀር (Manager)' : 
+                                       role === 'guard' ? 'ጥበቃ (Guard)' : 
+                                       role === 'cashier' ? 'ካሸር (Cashier)' : role.toUpperCase()}</span>
+                                
+                                {/* Rename Role Button */}
+                                <button 
+                                  type="button"
+                                  onClick={() => {
+                                    setEditingRoleName(role);
+                                    setEditingRoleNewVal(role);
+                                  }}
+                                  className="text-white hover:text-[#C1FF00] transition-colors shrink-0 ml-1 text-[10px] bg-transparent border-none cursor-pointer"
+                                  title="የስራ መደቡን ስም ቀይር (Rename role)"
+                                >
+                                  ✍️
+                                </button>
 
-                            {/* Delete Role Button */}
-                            <button 
-                              type="button"
-                              onClick={() => handleDeleteRole(role)}
-                              className="text-red-400 hover:text-red-600 transition-colors shrink-0 ml-1 text-[10px] bg-transparent border-none cursor-pointer"
-                              title="የስራ መደብ አስወግድ (Delete role)"
-                            >
-                              ❌
-                            </button>
+                                {/* Delete Role Button */}
+                                <button 
+                                  type="button"
+                                  onClick={() => handleDeleteRole(role)}
+                                  className="text-red-400 hover:text-red-600 transition-colors shrink-0 ml-1 text-[10px] bg-transparent border-none cursor-pointer"
+                                  title="የስራ መደብ አስወግድ (Delete role)"
+                                >
+                                  ❌
+                                </button>
+                              </>
+                            )}
                           </span>
                         ))}
                       </div>
@@ -11828,13 +12252,13 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                 const normalized = val.toLowerCase();
                                 if (!customRoles.includes(normalized)) {
                                   setCustomRoles(prev => [...prev, normalized]);
-                                  alert(`✔ አዲስ የስራ መደብ "${val}" በተሳካ ሁኔታ ተጨምሯል!`);
+                                  showAppToast(`✔ አዲስ የስራ መደብ "${val}" በተሳካ ሁኔታ ተጨምሯል!`);
                                   input.value = '';
                                 } else {
-                                  alert(`የስራ መደቡ "${val}" ቀድሞውኑ ተመዝግቧል!`);
+                                  showAppToast(`⚠️ የስራ መደቡ "${val}" ቀድሞውኑ ተመዝግቧል!`);
                                 }
                               } else {
-                                  alert(`አሁኑኑ የሚጨምሩትን ባዶ ያልሆነ የስራ መደብ ስም ይጻፉ!`);
+                                showAppToast(`⚠️ አሁኑኑ የሚጨምሩትን ባዶ ያልሆነ የስራ መደብ ስም ይጻፉ!`);
                               }
                             }}
                             className="bg-[#C1FF00] hover:bg-white text-black px-4 font-black text-xs font-mono uppercase cursor-pointer"
@@ -11861,39 +12285,72 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                             key={priv} 
                             className="px-2.5 py-1.5 rounded-lg text-xs font-mono font-bold flex items-center gap-1.5 bg-red-950/80 border border-yellow-400/50 text-yellow-300 shadow-sm"
                           >
-                            <span>{priv === 'waiter' ? 'አስተናጋጅ (Waiter)' :
-                                   priv === 'chef' ? 'የኩሽና ሰራተኛ (Chef)' :
-                                   priv === 'receptionist' ? 'ሪሴብሽነር (Receptionist)' :
-                                   priv === 'admin' ? 'አድሚን (Admin)' :
-                                   priv === 'manager' ? 'ማናጀር (Manager)' :
-                                   priv === 'cashier' ? 'ካሸር (Cashier)' :
-                                   priv === 'guard' ? 'ጥበቃ (Guard)' :
-                                   priv === 'none' ? 'ምንም (None)' : priv.toUpperCase()}</span>
-                            
-                            {/* Rename Privilege Button */}
-                            <button 
-                              type="button"
-                              onClick={() => {
-                                const val = prompt(`የመዳረሻ ፈቃድ ስም ይቀይሩ (Rename "${priv.toUpperCase()}"):`, priv);
-                                if (val && val.trim()) {
-                                  handleRenamePrivilege(priv, val.trim());
-                                }
-                              }}
-                              className="text-white hover:text-yellow-300 transition-colors shrink-0 ml-1 text-[10px] bg-transparent border-none cursor-pointer"
-                              title="የመዳረሻ ፈቃድ ስም ቀይር (Rename privilege)"
-                            >
-                              ✍️
-                            </button>
+                            {editingPrivilegeName === priv ? (
+                              <span className="flex items-center gap-1">
+                                <input
+                                  type="text"
+                                  value={editingPrivilegeNewVal}
+                                  onChange={(e) => setEditingPrivilegeNewVal(e.target.value)}
+                                  className="w-28 bg-black/70 border border-[#00f5ff] text-white text-[11px] font-bold px-1.5 py-0.5 rounded outline-none"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (!editingPrivilegeNewVal.trim()) {
+                                      showAppToast('⚠️ እባክዎ ባዶ ያልሆነ ስም ያስገቡ!');
+                                      return;
+                                    }
+                                    handleRenamePrivilege(priv, editingPrivilegeNewVal.trim());
+                                  }}
+                                  className="text-black bg-[#00f5ff] hover:bg-white px-1.5 py-0.5 rounded text-[10px] font-black cursor-pointer"
+                                  title="Save"
+                                >
+                                  ✔️
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setEditingPrivilegeName(null)}
+                                  className="text-white/80 hover:text-white bg-white/10 px-1.5 py-0.5 rounded text-[10px] cursor-pointer"
+                                  title="Cancel"
+                                >
+                                  ✕
+                                </button>
+                              </span>
+                            ) : (
+                              <>
+                                <span>{priv === 'waiter' ? 'አስተናጋጅ (Waiter)' :
+                                       priv === 'chef' ? 'የኩሽና ሰራተኛ (Chef)' :
+                                       priv === 'receptionist' ? 'ሪሴብሽነር (Receptionist)' :
+                                       priv === 'admin' ? 'አድሚን (Admin)' :
+                                       priv === 'manager' ? 'ማናጀር (Manager)' :
+                                       priv === 'cashier' ? 'ካሸር (Cashier)' :
+                                       priv === 'guard' ? 'ጥበቃ (Guard)' :
+                                       priv === 'none' ? 'ምንም (None)' : priv.toUpperCase()}</span>
+                                
+                                {/* Rename Privilege Button */}
+                                <button 
+                                  type="button"
+                                  onClick={() => {
+                                    setEditingPrivilegeName(priv);
+                                    setEditingPrivilegeNewVal(priv);
+                                  }}
+                                  className="text-white hover:text-yellow-300 transition-colors shrink-0 ml-1 text-[10px] bg-transparent border-none cursor-pointer"
+                                  title="የመዳረሻ ፈቃድ ስም ቀይር (Rename privilege)"
+                                >
+                                  ✍️
+                                </button>
 
-                            {/* Delete Privilege Button */}
-                            <button 
-                              type="button"
-                              onClick={() => handleDeletePrivilege(priv)}
-                              className="text-red-400 hover:text-red-600 transition-colors shrink-0 ml-1 text-[10px] bg-transparent border-none cursor-pointer"
-                              title="መዳረሻ ፈቃድ አስወግድ (Delete privilege)"
-                            >
-                              ❌
-                            </button>
+                                {/* Delete Privilege Button */}
+                                <button 
+                                  type="button"
+                                  onClick={() => handleDeletePrivilege(priv)}
+                                  className="text-red-400 hover:text-red-600 transition-colors shrink-0 ml-1 text-[10px] bg-transparent border-none cursor-pointer"
+                                  title="መዳረሻ ፈቃድ አስወግድ (Delete privilege)"
+                                >
+                                  ❌
+                                </button>
+                              </>
+                            )}
                           </span>
                         ))}
                       </div>
@@ -11918,13 +12375,13 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                 const normalized = val.toLowerCase();
                                 if (!customPrivileges.includes(normalized)) {
                                   setCustomPrivileges(prev => [...prev, normalized]);
-                                  alert(`✔ አዲስ የመዳረሻ ፈቃድ "${val}" በተሳካ ሁኔታ ተጨምሯል!`);
+                                  showAppToast(`✔ አዲስ የመዳረሻ ፈቃድ "${val}" በተሳካ ሁኔታ ተጨምሯል!`);
                                   input.value = '';
                                 } else {
-                                  alert(`የመዳረሻ ፈቃዱ "${val}" ቀድሞውኑ ተመዝግቧል!`);
+                                  showAppToast(`⚠️ የመዳረሻ ፈቃዱ "${val}" ቀድሞውኑ ተመዝግቧል!`);
                                 }
                               } else {
-                                alert(`አሁኑኑ የሚጨምሩትን ባዶ ያልሆነ የመዳረሻ ፈቃድ ስም ይጻፉ!`);
+                                showAppToast(`⚠️ አሁኑኑ የሚጨምሩትን ባዶ ያልሆነ የመዳረሻ ፈቃድ ስም ይጻፉ!`);
                               }
                             }}
                             className="bg-[#00f5ff] hover:bg-white text-black px-4 font-black text-xs font-mono uppercase cursor-pointer"
@@ -12301,7 +12758,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                           const activeBg = (e.currentTarget.querySelector('#edit-cat-bg') as HTMLSelectElement).value;
 
                           if (!label.trim()) {
-                            alert('እባክዎ የምድብ ስም ያስገቡ!');
+                            showAppToast('⚠️ እባክዎ የምድብ ስም ያስገቡ!');
                             return;
                           }
 
@@ -12313,7 +12770,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                           } : c));
 
                           setEditingCategory(null);
-                          alert('🎉 የምግብ ምድቡ በተሳካ ሁኔታ ተስተካክሏል! / Category updated successfully.');
+                          showAppToast('🎉 የምግብ ምድቡ በተሳካ ሁኔታ ተስተካክሏል! / Category updated successfully.');
                         }} className="space-y-3.5">
                           <div>
                             <label className="text-[9px] font-mono text-white/40 uppercase block mb-1">የምድብ ስም (Category Name)</label>
@@ -12384,12 +12841,12 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                           const activeBg = (e.currentTarget.querySelector('#add-cat-bg') as HTMLSelectElement).value;
 
                           if (!slug) {
-                            alert('እባክዎ የተለየ ምድብ መለያ (slug) ያስገቡ!');
+                            showAppToast('⚠️ እባክዎ የተለየ ምድብ መለያ (slug) ያስገቡ!');
                             return;
                           }
 
                           if (categories.some(c => c.id === slug)) {
-                            alert('ይህ ምድብ መለያ ከዚህ በፊት ተመዝግቧል! / Slug already exists.');
+                            showAppToast('⚠️ ይህ ምድብ መለያ ከዚህ በፊት ተመዝግቧል! / Slug already exists.');
                             return;
                           }
 
@@ -12402,7 +12859,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
 
                           setCategories(prev => [...prev, newCat]);
                           e.currentTarget.reset();
-                          alert('🎉 አዲስ የሽያጭ ምድብ በተሳካ ሁኔታ ተፈጥሯል! / Brand new food category registered successfully.');
+                          showAppToast('🎉 አዲስ የሽያጭ ምድብ በተሳካ ሁኔታ ተፈጥሯል! / Brand new food category registered successfully.');
                         }} className="space-y-3.5">
                           <div>
                             <label className="text-[9px] font-mono text-white/40 uppercase block mb-1">ምድብ ስም Amharic (አማርኛ)</label>
@@ -12495,15 +12952,15 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                         const pricesParsed = injeraPricesRaw.split(',').map(s => Number(s.trim()) || 0);
 
                         if (qariaParsed.length === 0) {
-                          alert('እባክዎ ቢያንስ አንድ የቃሪያ አማራጭ ያስገቡ!');
+                          showAppToast('⚠️ እባክዎ ቢያንስ አንድ የቃሪያ አማራጭ ያስገቡ!');
                           return;
                         }
                         if (injeraParsed.length === 0) {
-                          alert('እባክዎ ቢያንስ አንድ የእንጀራ አማራጭ ያስገቡ!');
+                          showAppToast('⚠️ እባክዎ ቢያንስ አንድ የእንጀራ አማራጭ ያስገቡ!');
                           return;
                         }
                         if (isNaN(daboPriceVal) || daboPriceVal < 0) {
-                          alert('የዳቦ ዋጋ ትክክለኛ ቁጥር መሆን አለበት!');
+                          showAppToast('⚠️ የዳቦ ዋጋ ትክክለኛ ቁጥር መሆን አለበት!');
                           return;
                         }
 
@@ -12522,7 +12979,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                           mayoPrice: mayoPriceVal,
                           customAdditionsPrice: customAdditionsPriceVal
                         });
-                        alert('🎉 የምግብ ማሻሻያ ምርጫዎች ዝርዝር እና ዋጋ በተሳካ ሁኔታ ተቀይሯል! / Food modifier settings updated successfully.');
+                        showAppToast('🎉 የምግብ ማሻሻያ ምርጫዎች ዝርዝር እና ዋጋ በተሳካ ሁኔታ ተቀይሯል! / Food modifier settings updated successfully.');
                       }} className="space-y-3.5">
                         <div>
                           <label className="text-[9px] font-mono text-white/40 uppercase block mb-1">
@@ -12736,7 +13193,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                     // Protect core categories
                                     const protectedSlugs = ['food', 'drinks', 'traditional', 'room', 'venue'];
                                     if (protectedSlugs.includes(cat.id)) {
-                                      alert(`❌ ይህ ዋና/መሰረታዊ ምድብ ስለሆነ ማጥፋት አይቻልም! / Core system category "${cat.label}" is protected.`);
+                                      showAppToast(`❌ ይህ ዋና/መሰረታዊ ምድብ ስለሆነ ማጥፋት አይቻልም! / Core system category "${cat.label}" is protected.`);
                                       return;
                                     }
 
@@ -13417,7 +13874,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                           onSubmit={(e) => {
                             e.preventDefault();
                             setAboutLodgeText(aboutLodgeInput);
-                            alert('🍀 ስለ ሎጁ ያለው ማብራሪያ በተሳካ ሁኔታ ተቀይሯል! / Lodge info updated successfully.');
+                            showAppToast('🍀 ስለ ሎጁ ያለው ማብራሪያ በተሳካ ሁኔታ ተቀይሯል! / Lodge info updated successfully.');
                           }} 
                           className="space-y-4"
                         >
@@ -13469,7 +13926,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                             syncKeyToCloud('hero_intro_am', { text: heroIntroAmInput });
                             syncKeyToCloud('hero_intro_en', { text: heroIntroEnInput });
 
-                            alert('🍀 የፊት ገጽ ርዕስ በተሳካ ሁኔታ ተቀይሯል! / Hero text updated successfully.');
+                            showAppToast('🍀 የፊት ገጽ ርዕስ በተሳካ ሁኔታ ተቀይሯል! / Hero text updated successfully.');
                           }} 
                           className="space-y-4 text-left"
                         >
@@ -13562,7 +14019,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                             syncKeyToCloud('contact_location', { text: contactLocationInput });
                             syncKeyToCloud('contact_address', { text: contactAddressInput });
 
-                            alert('🍀 የHOTLINE የስልክ ቁጥር እና የLOCATION አድራሻ መረጃ በተሳካ ሁኔታ ተቀይሯል! / Contacts & Location updated successfully.');
+                            showAppToast('🍀 የHOTLINE የስልክ ቁጥር እና የLOCATION አድራሻ መረጃ በተሳካ ሁኔታ ተቀይሯል! / Contacts & Location updated successfully.');
                           }} 
                           className="space-y-4 text-left"
                         >
@@ -13633,7 +14090,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                             syncKeyToCloud('wifi_guest_ssid', { text: wifiGuestSsidInput });
                             syncKeyToCloud('wifi_guest_password', { text: wifiGuestPasswordInput });
 
-                            alert('📶 የእንግዳ ዋይፋይ መረጃ በተሳካ ሁኔታ ተቀይሯል! / WiFi settings updated successfully.');
+                            showAppToast('📶 የእንግዳ ዋይፋይ መረጃ በተሳካ ሁኔታ ተቀይሯል! / WiFi settings updated successfully.');
                           }} 
                           className="space-y-4 text-left"
                         >
@@ -13690,7 +14147,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                             syncKeyToCloud('dining_breakfast_hours_am', { text: diningBreakfastHoursAmInput });
                             syncKeyToCloud('dining_breakfast_hours_en', { text: diningBreakfastHoursEnInput });
 
-                            alert('🍳 የምግብ ሰዓት መረጃ በተሳካ ሁኔታ ተቀይሯል! / Dining hours updated successfully.');
+                            showAppToast('🍳 የምግብ ሰዓት መረጃ በተሳካ ሁኔታ ተቀይሯል! / Dining hours updated successfully.');
                           }} 
                           className="space-y-4 text-left"
                         >
@@ -13763,7 +14220,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                             syncKeyToCloud('reception_assistance_en', { text: receptionAssistanceEnInput });
                             syncKeyToCloud('reception_emergency', { text: receptionEmergencyInput });
 
-                            alert('🛎️ የሪሴብሽን መረጃ በተሳካ ሁኔታ ተቀይሯል! / Reception details updated successfully.');
+                            showAppToast('🛎️ የሪሴብሽን መረጃ በተሳካ ሁኔታ ተቀይሯል! / Reception details updated successfully.');
                           }} 
                           className="space-y-4 text-left"
                         >
@@ -14361,7 +14818,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                 onClick={() => {
                                   handleUpdateLogoAndSync(tempLogoFile);
                                   setTempLogoFile(null);
-                                  alert('🎨 አዲሱ ሎጎ ከፋይል በተሳካ ሁኔታ ተቀምጧል! / Logo uploaded and saved successfully.');
+                                  showAppToast('🎨 አዲሱ ሎጎ ከፋይል በተሳካ ሁኔታ ተቀምጧል! / Logo uploaded and saved successfully.');
                                 }}
                                 className="bg-[#C1FF00] hover:bg-white text-black px-4 py-2 text-[11px] font-black uppercase transition-colors cursor-pointer rounded flex items-center gap-1 shadow-md"
                               >
@@ -14427,7 +14884,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                         type="button"
                         onClick={() => {
                           handleUpdateLogoAndSync(DEFAULT_LOGO);
-                          alert('🔄 ሎጎው ወደ ቀድሞው የፓፒረስ ሎጅ አርማ ተመልሷል!');
+                          showAppToast('🔄 ሎጎው ወደ ቀድሞው የፓፒረስ ሎጅ አርማ ተመልሷል!');
                         }}
                         className="w-full py-2 border border-white/10 hover:border-white/25 hover:bg-white/5 text-white/60 hover:text-white transition-all rounded text-[10px] font-mono font-bold uppercase cursor-pointer"
                       >
@@ -14464,7 +14921,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                           const imageUrl = galleryNewImgUrl || urlInput?.value || '';
 
                           if (!imageUrl) {
-                            alert('⚠️ እባክዎ የምስል ፋይል ይጫኑ ወይም የምስል ዩአርኤል (Image URL) ያስገቡ!');
+                            showAppToast('⚠️ እባክዎ የምስል ፋይል ይጫኑ ወይም የምስል ዩአርኤል (Image URL) ያስገቡ!');
                             return;
                           }
 
@@ -15085,6 +15542,26 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                   >
                     👔 ማናጀር / ስራ አስኪያጅ / Support መገናኛ
                   </button>
+                  <button 
+                    onClick={() => setManagerTab('cleaner')}
+                    className={`px-5 py-3 font-mono text-[11px] uppercase font-black tracking-widest border-b-2 transition-all shrink-0 cursor-pointer ${
+                      managerTab === 'cleaner' 
+                        ? 'border-red-400 text-red-400 bg-red-500/10' 
+                        : 'border-transparent text-white/60 hover:text-white hover:bg-white/5'
+                    }`}
+                  >
+                    🛡️ ስፓምና መረጃ ማጽጃ (CLEANER)
+                  </button>
+                  <button 
+                    onClick={() => setManagerTab('cache')}
+                    className={`px-5 py-3 font-mono text-[11px] uppercase font-black tracking-widest border-b-2 transition-all shrink-0 cursor-pointer ${
+                      managerTab === 'cache' 
+                        ? 'border-emerald-400 text-emerald-400 bg-emerald-500/10' 
+                        : 'border-transparent text-white/60 hover:text-white hover:bg-white/5'
+                    }`}
+                  >
+                    ⚡ ፈጣን መሸጎጫ (CACHE SYNC)
+                  </button>
                 </div>
 
                 {/* TAB CONTENT: BONO SERVICE TYPE */}
@@ -15387,20 +15864,20 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                               <div className="flex gap-2 shrink-0">
                                 <button
                                   onClick={() => {
-                                    const todayDate = new Date().toLocaleDateString('et-EE', { year: 'numeric', month: '2-digit', day: '2-digit' });
+                                    const todayIso = getLocalTodayIso();
                                     const amharicTimeStr = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
                                     
                                     setAttendance(prev => {
-                                      const exists = prev.some(a => a.staffName === req.staffName && a.date === todayDate);
+                                      const exists = prev.some(a => a.staffName === req.staffName && normalizeRecordDateToIso(a.date) === todayIso);
                                       if (exists) {
-                                        return prev.map(a => (a.staffName === req.staffName && a.date === todayDate) ? { ...a, status: 'Present', clockInTime: amharicTimeStr } : a);
+                                        return prev.map(a => (a.staffName === req.staffName && normalizeRecordDateToIso(a.date) === todayIso) ? { ...a, date: todayIso, status: 'Present', clockInTime: amharicTimeStr } : a);
                                       }
                                       return [
                                         {
                                           id: 'att-' + Date.now(),
                                           staffName: req.staffName,
                                           role: req.role,
-                                          date: todayDate,
+                                          date: todayIso,
                                           clockInTime: amharicTimeStr,
                                           status: 'Present'
                                         },
@@ -15410,7 +15887,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
 
                                     setPendingAttendanceRequests(prev => prev.map(r => r.id === req.id ? { ...r, status: 'approved' } : r));
                                     playVoiceAlert(`${req.staffName} attendance clock in has been approved!`);
-                                    alert(`የገቡበት ጥያቄ በተሳካ ሁኔታ ፀድቋል! ${req.staffName} መግቢያው ተመዝግቧል።`);
+                                    showAppToast(`✔ የገቡበት ጥያቄ በተሳካ ሁኔታ ፀድቋል! ${req.staffName} መግቢያው ተመዝግቧል።`);
                                   }}
                                   className="bg-emerald-500 hover:bg-emerald-600 text-black text-[10px] font-bold font-mono px-3 py-1.5 rounded cursor-pointer transition-all"
                                 >
@@ -15420,7 +15897,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                   onClick={() => {
                                     setPendingAttendanceRequests(prev => prev.map(r => r.id === req.id ? { ...r, status: 'rejected' } : r));
                                     playVoiceAlert(`${req.staffName} request declined.`);
-                                    alert(`የስራ መግቢያ ጥያቄ በትክክል ባለመሆኑ ውድቅ ተደርጓል።`);
+                                    showAppToast(`⚠️ የ${req.staffName} የስራ መግቢያ ጥያቄ ውድቅ ተደርጓል።`);
                                   }}
                                   className="bg-red-500 hover:bg-red-600 text-white text-[10px] font-bold font-mono px-3 py-1.5 rounded cursor-pointer transition-all"
                                 >
@@ -15447,7 +15924,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                         <div>
                           <span className="text-[9px] text-lime-400/60 font-mono uppercase block">PRESENT TODAY (ያሉ)</span>
                           <span className="text-2xl font-black font-mono text-lime-400">
-                            {attendance.filter(a => a.date === new Date().toLocaleDateString('et-EE', { year: 'numeric', month: '2-digit', day: '2-digit' }) && (a.status === 'Present' || a.status === 'Late')).length}
+                            {attendance.filter(a => normalizeRecordDateToIso(a.date) === getLocalTodayIso() && (a.status === 'Present' || a.status === 'Late')).length}
                           </span>
                         </div>
                         <span className="text-2xl text-lime-400">✓</span>
@@ -15456,7 +15933,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                         <div>
                           <span className="text-[9px] text-red-400/60 font-mono uppercase block">ABSENT TODAY (የሌሉ)</span>
                           <span className="text-2xl font-black font-mono text-red-400">
-                            {attendance.filter(a => a.date === new Date().toLocaleDateString('et-EE', { year: 'numeric', month: '2-digit', day: '2-digit' }) && a.status === 'Absent').length}
+                            {attendance.filter(a => normalizeRecordDateToIso(a.date) === getLocalTodayIso() && a.status === 'Absent').length}
                           </span>
                         </div>
                         <span className="text-2xl text-red-500">✗</span>
@@ -15479,8 +15956,8 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                           </thead>
                           <tbody className="divide-y divide-white/5 font-bold">
                             {staff.map((s, idx) => {
-                              const todayDate = new Date().toLocaleDateString('et-EE', { year: 'numeric', month: '2-digit', day: '2-digit' });
-                              const record = attendance.find(a => a.staffName === s.name && a.date === todayDate);
+                              const todayIso = getLocalTodayIso();
+                              const record = attendance.find(a => a.staffName === s.name && normalizeRecordDateToIso(a.date) === todayIso);
 
                               return (
                                 <tr key={idx} className="hover:bg-white/[0.02] transition-colors">
@@ -15522,24 +15999,42 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                     {record?.clockOutTime || '--:--'}
                                   </td>
                                   <td className="p-3 text-right">
-                                    <div className="inline-flex gap-1">
+                                    <div className="inline-flex flex-wrap justify-end gap-1">
                                       <button 
-                                        onClick={() => handleManagerUpdateAttendance(s.name, 'Present', customAttendanceTime)}
+                                        onClick={() => {
+                                          handleManagerUpdateAttendance(s.name, 'Present', customAttendanceTime);
+                                          showAppToast(`✓ ${s.name} — Present ተመዝግቧል`);
+                                        }}
                                         className="px-2.5 py-1.5 bg-lime-900/30 hover:bg-lime-600 text-lime-400 hover:text-white border border-lime-800/40 text-[9px] uppercase font-mono font-black rounded transition-all cursor-pointer"
                                       >
                                         PRESENT
                                       </button>
                                       <button 
-                                        onClick={() => handleManagerUpdateAttendance(s.name, 'Late', customAttendanceTime)}
+                                        onClick={() => {
+                                          handleManagerUpdateAttendance(s.name, 'Late', customAttendanceTime);
+                                          showAppToast(`⏱ ${s.name} — Late ተመዝግቧል`);
+                                        }}
                                         className="px-2.5 py-1.5 bg-amber-900/30 hover:bg-amber-600 text-amber-400 hover:text-white border border-amber-800/40 text-[9px] uppercase font-mono font-black rounded transition-all cursor-pointer"
                                       >
                                         LATE
                                       </button>
                                       <button 
-                                        onClick={() => handleManagerUpdateAttendance(s.name, 'Absent', customAttendanceTime)}
+                                        onClick={() => {
+                                          handleManagerUpdateAttendance(s.name, 'Absent', customAttendanceTime);
+                                          showAppToast(`✗ ${s.name} — Absent ተመዝግቧል`);
+                                        }}
                                         className="px-2.5 py-1.5 bg-red-900/30 hover:bg-red-600 text-red-400 hover:text-white border border-red-800/40 text-[9px] uppercase font-mono font-black rounded transition-all cursor-pointer"
                                       >
                                         ABSENT
+                                      </button>
+                                      <button 
+                                        onClick={() => {
+                                          handleClockOutAttendance(s.name);
+                                          showAppToast(`🚪 ${s.name} የስራ መውጫ (Clock-out) ተመዝግቧል`);
+                                        }}
+                                        className="px-2.5 py-1.5 bg-sky-900/30 hover:bg-sky-600 text-sky-300 hover:text-white border border-sky-700/40 text-[9px] uppercase font-mono font-black rounded transition-all cursor-pointer"
+                                      >
+                                        🚪 CLOCK OUT
                                       </button>
                                     </div>
                                   </td>
@@ -15585,10 +16080,22 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                             className="w-full bg-[#181818] border border-white/10 rounded-lg p-2 text-xs text-white outline-none focus:border-[#C1FF00] font-medium"
                           >
                             <option value="all">{tText({ am: 'ሁሉም ዓመታት', en: 'All Years', or: 'Waggaa Hunda', ti: 'ኩሎም ዓመታት', sid: 'Diro Baala', fr: 'Toutes les années', de: 'Alle Jahre', it: 'Tutti gli anni', zh: '所有年份', ar: 'كل السنوات' })}</option>
-                            <option value="2025">2025</option>
-                            <option value="2026">2026</option>
-                            <option value="2027">2027</option>
-                            <option value="2028">2028</option>
+                            {Array.from(
+                              new Set([
+                                String(new Date().getFullYear()),
+                                String(new Date().getFullYear() - 1),
+                                String(new Date().getFullYear() + 1),
+                                '2025',
+                                '2026',
+                                '2027',
+                                '2028',
+                                ...attendance.map(a => normalizeRecordDateToIso(a.date).slice(0, 4)).filter(Boolean),
+                              ])
+                            )
+                              .sort((a, b) => b.localeCompare(a))
+                              .map((yr) => (
+                                <option key={yr} value={yr}>{yr}</option>
+                              ))}
                           </select>
                         </div>
 
@@ -15638,10 +16145,10 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                       {/* Filter Stats Metrics */}
                       {(() => {
                         const filtered = attendance.filter(a => {
-                          const parts = a.date.split('.');
-                          const d = parts[0] || '';
-                          const m = parts[1] || '';
-                          const y = parts[2] || '';
+                          const norm = normalizeRecordDateToIso(a.date);
+                          const y = norm.slice(0, 4);
+                          const m = norm.slice(5, 7);
+                          const d = norm.slice(8, 10);
                           
                           const sMatch = attFilterStaff === 'all' || a.staffName === attFilterStaff;
                           const yMatch = attFilterYear === 'all' || y === attFilterYear;
@@ -15789,15 +16296,16 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                     {ledgerFilterTab === 'daily' && (
                       <div className="space-y-4">
                         {(() => {
-                          const todayDate = new Date().toLocaleDateString('et-EE', { year: 'numeric', month: '2-digit', day: '2-digit' });
-                          const dailyOrders = orders.filter(o => o.date === todayDate);
+                          const todayIso = getLocalTodayIso();
+                          const dailyOrders = orders.filter(o => normalizeRecordDateToIso(o.date) === todayIso);
                           const totalSales = dailyOrders.reduce((s, o) => s + o.total, 0);
                           const cashSales = dailyOrders.filter(o => o.payment === 'cash').reduce((s, o) => s + o.total, 0);
                           const bankSales = dailyOrders.filter(o => o.payment === 'bank').reduce((s, o) => s + o.total, 0);
+                          const chapaSales = dailyOrders.filter(o => o.payment === 'chapa').reduce((s, o) => s + o.total, 0);
 
                           return (
                             <div className="space-y-4">
-                              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
                                 <div className="bg-black/30 border border-white/5 p-4 rounded-lg">
                                   <span className="text-[9px] text-white/40 block uppercase">{tText({ am: 'የዛሬ ጠቅላላ', en: "Today's Total", or: 'Ida’ama Har’aa', ti: 'ናይ ሎሚ ድምር', sid: 'Techo Xaphooma', fr: "Total du jour", de: 'Tagessumme', it: 'Totale odierno', zh: '今日总额', ar: 'إجمالي اليوم' })}</span>
                                   <span className="text-xl font-mono font-bold text-white">{totalSales} {currency}</span>
@@ -15809,6 +16317,10 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                 <div className="bg-sky-950/20 border border-sky-900/30 p-4 rounded-lg">
                                   <span className="text-[9px] text-sky-400/60 block uppercase">{tText({ am: 'በባንክ ዝውውር', en: 'Bank Transfers', or: 'Jijjiirraa Baankii', ti: 'ብባንኪ', sid: 'Baankete Soorro', fr: 'Virements bancaires', de: 'Banküberweisungen', it: 'Bonifici bancari', zh: '银行转账', ar: 'التحويلات البنكية' })}</span>
                                   <span className="text-xl font-mono font-bold text-sky-400">{bankSales} {currency}</span>
+                                </div>
+                                <div className="bg-teal-950/20 border border-teal-900/30 p-4 rounded-lg">
+                                  <span className="text-[9px] text-teal-400/70 block uppercase">⚡ CHAPA ONLINE</span>
+                                  <span className="text-xl font-mono font-bold text-teal-400">{chapaSales} {currency}</span>
                                 </div>
                               </div>
 
@@ -15826,11 +16338,22 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                           </tr>
                                         </thead>
                                         <tbody className="divide-y divide-white/5 font-medium">
-                                          {dailyOrders.map(ord => (
+                                          {dailyOrders.length === 0 ? (
+                                            <tr>
+                                              <td colSpan={6} className="p-8 text-center text-stone-500 font-mono italic">
+                                                ዛሬ ({todayIso}) እስካሁን የተመዘገበ ሽያጭ የለም። (No sales recorded today yet)
+                                              </td>
+                                            </tr>
+                                          ) : dailyOrders.map(ord => (
                                             <tr key={ord.id} className="hover:bg-white/2 transition-colors">
-                                              <td className="py-3 font-mono font-bold text-sky-400">
+                                              <td className="py-3 px-3 font-mono font-bold text-sky-400">
                                                 {ord.id}
                                                 <span className="text-[8px] text-white/30 font-mono block">{ord.time}</span>
+                                                {ord.customerConfirmedReceipt && (
+                                                  <span className="inline-block mt-1 px-1.5 py-0.5 rounded bg-emerald-500/20 border border-emerald-500/30 text-emerald-300 text-[8px] font-black">
+                                                    🎉 Customer Confirmed
+                                                  </span>
+                                                )}
                                               </td>
                                               <td className="py-3">
                                                 <span className="font-black text-white/90 block">{ord.location}</span>
@@ -15846,6 +16369,8 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                               <td className="py-3 font-mono">
                                                 {ord.payment === 'cash' ? (
                                                   <span className="text-emerald-400 font-bold bg-emerald-950/20 px-1.5 py-0.5 border border-emerald-900/30 rounded">CASH</span>
+                                                ) : ord.payment === 'chapa' ? (
+                                                  <span className="text-teal-300 font-bold bg-teal-950/30 px-1.5 py-0.5 border border-teal-700/40 rounded">⚡ CHAPA</span>
                                                 ) : (
                                                   <div className="space-y-1">
                                                     <span className="text-sky-400 font-bold bg-sky-950/20 px-1.5 py-0.5 border border-sky-900/30 rounded block w-fit text-[9px]">BANK TRANSFER</span>
@@ -15864,7 +16389,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                                         <div className="relative border border-white/10 bg-black max-h-12 flex justify-center">
                                                           <img src={ord.receiptScreenshot} referrerPolicy="no-referrer" className="h-10 object-contain" alt="Receipt proof" />
                                                         </div>
-                                                        <a href={ord.receiptScreenshot} target="_blank" referrerPolicy="no-referrer" className="text-[8px] text-[#C1FF00] hover:underline font-bold block text-center uppercase">🔍 VIEW FULL</a>
+                                                        <a href={ord.receiptScreenshot} target="_blank" rel="noreferrer" referrerPolicy="no-referrer" className="text-[8px] text-[#C1FF00] hover:underline font-bold block text-center uppercase">🔍 VIEW FULL</a>
                                                         {ord.receiptComment && (
                                                           <p className="text-[8px] text-white/50 leading-tight italic bg-black/40 p-1">"{ord.receiptComment}"</p>
                                                         )}
@@ -15905,17 +16430,26 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                             {(() => {
                               const groupedByMonth: { [key: string]: Order[] } = {};
                               orders.forEach(o => {
-                                const d = o.date || '2026-06-07';
+                                const d = normalizeRecordDateToIso(o.date) || getLocalTodayIso();
                                 const m = d.substring(0, 7);
                                 if (!groupedByMonth[m]) groupedByMonth[m] = [];
                                 groupedByMonth[m].push(o);
                               });
+                              const monthKeys = Object.keys(groupedByMonth).sort((a,b)=>b.localeCompare(a));
+                              if (monthKeys.length === 0) {
+                                return (
+                                  <div className="md:col-span-2 p-8 text-center text-stone-500 font-mono italic bg-black/30 border border-white/5 rounded-xl">
+                                    ምንም ወርሃዊ የሽያጭ መዝገብ አልተገኘም። (No monthly sales records found)
+                                  </div>
+                                );
+                              }
 
-                              return Object.keys(groupedByMonth).sort((a,b)=>b.localeCompare(a)).map(mKey => {
+                              return monthKeys.map(mKey => {
                                 const monthOrders = groupedByMonth[mKey];
                                 const mTotal = monthOrders.reduce((s,o)=>s+o.total,0);
                                 const mCash = monthOrders.filter(o=>o.payment==='cash').reduce((s,o)=>s+o.total,0);
                                 const mBank = monthOrders.filter(o=>o.payment==='bank').reduce((s,o)=>s+o.total,0);
+                                const mChapa = monthOrders.filter(o=>o.payment==='chapa').reduce((s,o)=>s+o.total,0);
 
                                 return (
                                   <div key={mKey} className="bg-black/50 p-4 border border-white/5 rounded-xl space-y-3">
@@ -15923,6 +16457,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                     <div className="space-y-1.5 text-xs font-mono">
                                       <div className="flex justify-between text-white/50"><span>{tText({ am: 'ጥሬ ገንዘብ', en: 'Cash', or: 'Kaashii', ti: 'ጥረ ገንዘብ', sid: 'Kaashe', fr: 'Espèces', de: 'Bar', it: 'Contanti', zh: '现金', ar: 'نقدي' })}:</span> <span className="font-bold text-white">{mCash} {currency}</span></div>
                                       <div className="flex justify-between text-white/50"><span>{tText({ am: 'ባንክ', en: 'Bank', or: 'Baankii', ti: 'ባንኪ', sid: 'Baanke', fr: 'Banque', de: 'Bank', it: 'Banca', zh: '银行', ar: 'بنك' })}:</span> <span className="font-bold text-white">{mBank} {currency}</span></div>
+                                      <div className="flex justify-between text-teal-400/80"><span>⚡ Chapa:</span> <span className="font-bold text-teal-300">{mChapa} {currency}</span></div>
                                       <div className="flex justify-between text-[#C1FF00] font-black border-t border-white/5 pt-1.5"><span>{tText({ am: 'ጠቅላላ', en: 'Total', or: 'Ida’ama', ti: 'ጠቕላላ', sid: 'Xaphooma', fr: 'Total', de: 'Gesamt', it: 'Totale', zh: '总计', ar: 'الإجمالي' })}:</span> <span>{mTotal} {currency}</span></div>
                                     </div>
                                   </div>
@@ -15938,18 +16473,32 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                             {(() => {
                               const groupedByYear: { [key: string]: Order[] } = {};
                               orders.forEach(o => {
-                                const d = o.date || '2026-06-07';
+                                const d = normalizeRecordDateToIso(o.date) || getLocalTodayIso();
                                 const y = d.substring(0, 4);
                                 if (!groupedByYear[y]) groupedByYear[y] = [];
                                 groupedByYear[y].push(o);
                               });
+                              const yearKeys = Object.keys(groupedByYear).sort((a,b)=>b.localeCompare(a));
+                              if (yearKeys.length === 0) {
+                                return (
+                                  <div className="p-8 text-center text-stone-500 font-mono italic bg-black/30 border border-white/5 rounded-xl">
+                                    ምንም ዓመታዊ የሽያጭ መዝገብ አልተገኘም። (No annual sales records found)
+                                  </div>
+                                );
+                              }
 
-                              return Object.keys(groupedByYear).sort((a,b)=>b.localeCompare(a)).map(yKey => {
+                              return yearKeys.map(yKey => {
                                 const yearOrders = groupedByYear[yKey];
                                 const yTotal = yearOrders.reduce((s,o)=>s+o.total,0);
+                                const yCash = yearOrders.filter(o=>o.payment==='cash').reduce((s,o)=>s+o.total,0);
+                                const yBank = yearOrders.filter(o=>o.payment==='bank').reduce((s,o)=>s+o.total,0);
+                                const yChapa = yearOrders.filter(o=>o.payment==='chapa').reduce((s,o)=>s+o.total,0);
                                 return (
-                                  <div key={yKey} className="bg-black/50 p-4 border border-white/5 rounded-xl flex justify-between items-center">
-                                    <span className="text-xs font-black text-white">🎄 {yKey} · {tText({ am: 'ዓመታዊ ጠቅላላ ድምር', en: 'Annual Total', or: 'Ida’ama Waggaa', ti: 'ዓመታዊ ድምር', sid: 'Diru Xaphooma', fr: 'Total annuel', de: 'Jahressumme', it: 'Totale annuale', zh: '年度总计', ar: 'الإجمالي السنوي' })}:</span>
+                                  <div key={yKey} className="bg-black/50 p-4 border border-white/5 rounded-xl flex flex-wrap justify-between items-center gap-3">
+                                    <div>
+                                      <span className="text-xs font-black text-white block">🎄 {yKey} · {tText({ am: 'ዓመታዊ ጠቅላላ ድምር', en: 'Annual Total', or: 'Ida’ama Waggaa', ti: 'ዓመታዊ ድምር', sid: 'Diru Xaphooma', fr: 'Total annuel', de: 'Jahressumme', it: 'Totale annuale', zh: '年度总计', ar: 'الإجمالي السنوي' })}</span>
+                                      <span className="text-[10px] font-mono text-white/50">Cash: {yCash} · Bank: {yBank} · Chapa: {yChapa} {currency}</span>
+                                    </div>
                                     <span className="font-mono font-black text-[#C1FF00] text-sm">{yTotal} {currency}</span>
                                   </div>
                                 );
@@ -16068,15 +16617,15 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                 <button
                                   disabled={spamFeedbacks.length === 0}
                                   onClick={() => {
-                                    if (confirm('የተገኙትን ስፓም አስተያየቶች በሙሉ ለማጥፋት እርግጠኛ ነዎት? (Delete all detected spam?)')) {
+                                    askConfirmAndRun('የተገኙትን ስፓም አስተያየቶች በሙሉ ለማጥፋት እርግጠኛ ነዎት? (Delete all detected spam?)', () => {
                                       const idsToKeep = feedback.filter(f => {
                                         const textLower = f.text.toLowerCase();
                                         const isSpam = spamKeywords.some(kw => textLower.includes(kw)) || f.text.length > 500;
                                         return !isSpam;
                                       });
                                       setFeedback(idsToKeep);
-                                      alert(`✓ ${spamFeedbacks.length} ስፓም አስተያየቶች ተሰርዘዋል!`);
-                                    }
+                                      showAppToast(`✓ ${spamFeedbacks.length} ስፓም አስተያየቶች ተሰርዘዋል!`);
+                                    });
                                   }}
                                   className={`w-full py-2 font-mono text-[10px] uppercase font-black tracking-wider transition-colors border ${
                                     spamFeedbacks.length > 0
@@ -16135,11 +16684,11 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                 <button
                                   disabled={totalLogs === 0}
                                   onClick={() => {
-                                    if (confirm('ቼክ-አውት የሆኑ ክፍሎችንና የለቀቁ ጎብኚዎችን መዝገብ በዘላቂነት ለማጥፋት እርግጠኛ ነዎት? (Delete checked-out records?)')) {
+                                    askConfirmAndRun('ቼክ-አውት የሆኑ ክፍሎችንና የለቀቁ ጎብኚዎችን መዝገብ በዘላቂነት ለማጥፋት እርግጠኛ ነዎት? (Delete checked-out records?)', () => {
                                       setRoomBookings(prev => prev.filter(b => b.status !== 'Checked Out'));
                                       setVisitorLog(prev => prev.filter(v => v.status !== 'Checked Out' && v.status !== 'Left'));
-                                      alert('✓ የቆዩ መዝገቦች በሙሉ በተሳካ ሁኔታ ተደምስሰዋል!');
-                                    }
+                                      showAppToast('✓ የቆዩ መዝገቦች በሙሉ በተሳካ ሁኔታ ተደምስሰዋል!');
+                                    });
                                   }}
                                   className={`w-full py-2 font-mono text-[10px] uppercase font-black tracking-wider transition-colors border ${
                                     totalLogs > 0
@@ -16176,6 +16725,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                               onClick={() => {
                                 askConfirmAndRun('ሁሉንም የፈረቃ እና የጠረጴዛ/ክፍል ምደባዎች ለማጥፋት እርግጠኛ ነዎት? (Reset all waiter & chef shift assignments?)', () => {
                                   handleSaveShiftAssignments([]);
+                                  showAppToast('✓ ሁሉም የፈረቃ ምደባዎች ተሰርዘዋል።');
                                 });
                               }}
                               className={`w-full py-2 font-mono text-[9px] uppercase font-black tracking-wider transition-colors border ${
@@ -16193,19 +16743,19 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                               <span className="text-[9px] font-mono text-stone-400 uppercase">COMPLETED ORDERS</span>
                               <h5 className="text-xs font-bold text-white mt-1">የተጠናቀቁና የተሰረዙ ትዕዛዞች</h5>
                               <p className="text-[10px] text-stone-500 mt-1">
-                                የደረሱ (Delivered) ወይም የተሰረዙ (Cancelled) ትዕዛዞችን በማጥፋት የትዕዛዝ መዝገቡን ማደስ። በአሁኑ ሰዓት <span className="text-yellow-400 font-mono font-bold">{orders.filter(o => o.status === 'Delivered' || o.status === 'Cancelled').length}</span> የደረሱ/የተሰረዙ ትዕዛዞች አሉ።
+                                የደረሱ (Delivered) ወይም የተሰረዙ (Cancelled) ትዕዛዞችን በማጥፋት የትዕዛዝ መዝገቡን ማደስ። በአሁኑ ሰዓት <span className="text-yellow-400 font-mono font-bold">{orders.filter(o => Boolean(o.servedByWaiter) || o.status === 'Cancelled').length}</span> የደረሱ/የተሰረዙ ትዕዛዞች አሉ።
                               </p>
                             </div>
                             <button
-                              disabled={orders.filter(o => o.status === 'Delivered' || o.status === 'Cancelled').length === 0}
+                              disabled={orders.filter(o => Boolean(o.servedByWaiter) || o.status === 'Cancelled').length === 0}
                               onClick={() => {
-                                if (confirm('የተጠናቀቁ እና የተሰረዙ ትዕዛዞችን በሙሉ ከሲስተሙ ለማጥፋት እርግጠኛ ነዎት? (Purge inactive orders?)')) {
-                                  setOrders(prev => prev.filter(o => o.status !== 'Delivered' && o.status !== 'Cancelled'));
-                                  alert('✓ የተጠናቀቁና የተሰረዙ ትዕዛዞች በሙሉ ተሰርዘዋል!');
-                                }
+                                askConfirmAndRun('የተጠናቀቁ እና የተሰረዙ ትዕዛዞችን በሙሉ ከሲስተሙ ለማጥፋት እርግጠኛ ነዎት? (Purge inactive orders?)', () => {
+                                  setOrders(prev => prev.filter(o => !o.servedByWaiter && o.status !== 'Cancelled'));
+                                  showAppToast('✓ የተጠናቀቁና የተሰረዙ ትዕዛዞች በሙሉ ተሰርዘዋል!');
+                                });
                               }}
                               className={`w-full py-2 font-mono text-[9px] uppercase font-black tracking-wider transition-colors border ${
-                                orders.filter(o => o.status === 'Delivered' || o.status === 'Cancelled').length > 0
+                                orders.filter(o => Boolean(o.servedByWaiter) || o.status === 'Cancelled').length > 0
                                   ? 'bg-red-600/10 hover:bg-red-600 text-red-400 hover:text-white border-red-500/20 hover:border-red-600 cursor-pointer'
                                   : 'bg-stone-900 text-stone-600 border-stone-800 cursor-not-allowed'
                               }`}
@@ -16244,7 +16794,8 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                               const nextVal = !isCacheEnabled;
                               setIsCacheEnabled(nextVal);
                               localStorage.setItem('papyrus_cache_enabled', nextVal ? 'true' : 'false');
-                              alert(nextVal ? '⚡ የፈጣን መሸጎጫ ሲስተም በርቷል!' : '⚠️ የመሸጎጫ ሲስተሙ ጠፍቷል! አፕሊኬሽኑ በቀጥታ ከዳታቤዝ መጫን ይጀምራል።');
+                              setCacheMetricsTick((t) => t + 1);
+                              showAppToast(nextVal ? '⚡ የፈጣን መሸጎጫ ሲስተም በርቷል!' : '⚠️ የመሸጎጫ ሲስተሙ ጠፍቷል! አፕሊኬሽኑ በቀጥታ ከዳታቤዝ መጫን ይጀምራል።');
                             }}
                             className={`px-4 py-2 text-xs font-black font-mono uppercase tracking-wider rounded border cursor-pointer w-full transition-colors ${
                               isCacheEnabled 
@@ -16264,7 +16815,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                           <h4 className="text-xs font-black text-white uppercase mt-1">የመሸጎጫ መጠን እና ሁኔታ</h4>
                           <p className="text-[10px] text-stone-500 mt-1">በአሁኑ ሰዓት በአካባቢው ኮምፒውተር/ስልክ ላይ የተቀመጠ የሲስተም ውሂብ መጠን።</p>
                         </div>
-                        <div className="space-y-1 text-xs">
+                        <div className="space-y-1 text-xs" data-cache-tick={cacheMetricsTick}>
                           <div className="flex justify-between">
                             <span className="text-stone-400">ጠቅላላ መሸጎጫ ፋይል (Stored Size):</span>
                             <span className="font-mono font-bold text-emerald-400">
@@ -16294,24 +16845,30 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                         </div>
                         <div className="grid grid-cols-2 gap-2 font-mono text-[9px] font-bold">
                           <button
+                            type="button"
                             onClick={() => {
                               localStorage.removeItem('papyrus_settings_cache');
                               localStorage.removeItem('papyrus_cache_last_sync');
-                              alert('🧹 መሸጎጫው በተሳካ ሁኔታ ተጠርጓል! በሚቀጥለው አፕሊኬሽኑ ሲከፈት መረጃውን ከዳታቤዝ ያወርዳል።');
-                              window.location.reload();
+                              setCacheMetricsTick((t) => t + 1);
+                              showAppToast('🧹 መሸጎጫው በተሳካ ሁኔታ ተጠርጓል! አዳዲስ መረጃዎችን ለማውረድ FORCE SYNC ይጫኑ።');
                             }}
                             className="bg-red-600/10 hover:bg-red-600 border border-red-500/20 text-red-400 hover:text-white py-2 rounded uppercase tracking-widest cursor-pointer transition-colors w-full"
                           >
                             🧹 CLEAR CACHE
                           </button>
                           <button
+                            type="button"
+                            disabled={isSyncingCloudSettings}
                             onClick={async () => {
-                              alert('🔄 የመሸጎጫ ማመሳሰል ተጀምሯል፤ እባክዎ ጥቂት ሰከንዶችን ይጠብቁ...');
-                              window.location.reload();
+                              setIsSyncingCloudSettings(true);
+                              const result = await syncAllCloudSettings(true);
+                              setIsSyncingCloudSettings(false);
+                              setCacheMetricsTick((t) => t + 1);
+                              showAppToast(`🔄 ${result.syncedCount} የሲስተም መረጃዎች ከዳታቤዝ ጋር በተሳካ ሁኔታ ተመሳስለዋል!`);
                             }}
-                            className="bg-emerald-600/10 hover:bg-emerald-600 border border-emerald-500/20 text-emerald-400 hover:text-white py-2 rounded uppercase tracking-widest cursor-pointer transition-colors w-full"
+                            className="bg-emerald-600/10 hover:bg-emerald-600 border border-emerald-500/20 text-emerald-400 hover:text-white py-2 rounded uppercase tracking-widest cursor-pointer transition-colors w-full disabled:opacity-50"
                           >
-                            🔄 FORCE SYNC
+                            {isSyncingCloudSettings ? '⏳ SYNCING...' : '🔄 FORCE SYNC'}
                           </button>
                         </div>
                       </div>
@@ -16851,8 +17408,123 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
             )}
 
             {/* VIEW_7: CASHIER PORTAL */}
-            {activeRole === 'cashier' && (
-              <motion.div 
+            {activeRole === 'cashier' && (() => {
+              const todayIso = getLocalTodayIso();
+              const activeCashierName = currentUser?.name || 'Cashier';
+
+              const matchesCashierScope = (o: Order) => {
+                if (selectedCashierShiftStaff === 'all') return true;
+                if (selectedCashierShiftStaff === 'my_shift') {
+                  return !o.cashierName || o.cashierName.toLowerCase() === activeCashierName.toLowerCase();
+                }
+                return (o.cashierName || '').toLowerCase() === selectedCashierShiftStaff.toLowerCase();
+              };
+
+              const getOrderGrandTotal = (o: Order) => {
+                const sub = o.items ? o.items.reduce((s, it) => s + (it.qty || 1) * (it.price || 0), 0) : 0;
+                return o.total > 0 ? o.total : sub;
+              };
+
+              const todayPaidOrders = orders.filter((o) => {
+                if (o.status !== 'Paid') return false;
+                const orderIso = normalizeRecordDateToIso(o.date) || todayIso;
+                if (orderIso !== todayIso) return false;
+                return matchesCashierScope(o);
+              });
+
+              const todayCashSales = todayPaidOrders
+                .filter((o) => o.payment === 'cash')
+                .reduce((sum, o) => sum + getOrderGrandTotal(o), 0);
+              const todayBankSales = todayPaidOrders
+                .filter((o) => o.payment === 'bank')
+                .reduce((sum, o) => sum + getOrderGrandTotal(o), 0);
+              const todayChapaSales = todayPaidOrders
+                .filter((o) => o.payment === 'chapa')
+                .reduce((sum, o) => sum + getOrderGrandTotal(o), 0);
+              const todayDigitalSales = todayBankSales + todayChapaSales;
+              const totalShiftSales = todayCashSales + todayDigitalSales;
+              const expectedDrawerCash = cashierStartingFloat + todayCashSales;
+
+              const parsedCountedCash =
+                cashierActualCounted.trim() !== '' && !Number.isNaN(Number(cashierActualCounted))
+                  ? Number(cashierActualCounted)
+                  : null;
+              const cashVariance = parsedCountedCash !== null ? parsedCountedCash - expectedDrawerCash : null;
+
+              const unsettledBills = orders.filter((o) => o.status !== 'Paid' && o.status !== 'Cancelled');
+              const cashRequestOrders = unsettledBills.filter(
+                (o) => o.payment === 'cash' || Boolean(o.cashPaymentRequested)
+              );
+
+              const queryLower = cashierSearchQuery.trim().toLowerCase();
+              const matchesSearch = (o: Order) => {
+                if (!queryLower) return true;
+                return (
+                  o.id.toLowerCase().includes(queryLower) ||
+                  (o.location || '').toLowerCase().includes(queryLower) ||
+                  (o.waiter || '').toLowerCase().includes(queryLower) ||
+                  (o.cashPaymentCode || '').toLowerCase().includes(queryLower) ||
+                  (o.bankRef || '').toLowerCase().includes(queryLower) ||
+                  o.items.some((it) => (it.name || '').toLowerCase().includes(queryLower))
+                );
+              };
+
+              const filteredUnsettledBills = unsettledBills.filter((o) => {
+                if (!matchesSearch(o)) return false;
+                if (cashierBillFilter === 'cash_requests') {
+                  return o.payment === 'cash' || Boolean(o.cashPaymentRequested);
+                }
+                if (cashierBillFilter === 'cash') return o.payment === 'cash';
+                if (cashierBillFilter === 'bank') return o.payment === 'bank';
+                if (cashierBillFilter === 'chapa') return o.payment === 'chapa';
+                return true;
+              });
+
+              const completedOrders = orders.filter((o) => {
+                const isCompletedOrder =
+                  o.status === 'Paid' ||
+                  o.status === 'Completed' ||
+                  o.cookingStatus === 'Completed' ||
+                  Boolean(o.servedByWaiter);
+                if (!isCompletedOrder || o.status === 'Cancelled') return false;
+                if (!matchesCashierScope(o)) return false;
+                return matchesSearch(o);
+              });
+
+              const posSubtotal = cashierCart.reduce((sum, item) => sum + item.qty * item.price, 0);
+              const posServiceCharge = cashierPosIncludeTax ? Math.round((posSubtotal * serviceChargeRate) / 100) : 0;
+              const posVat = cashierPosIncludeTax ? Math.round(((posSubtotal + posServiceCharge) * vatRate) / 100) : 0;
+              const posGrandTotal = posSubtotal + posServiceCharge + posVat;
+              const parsedPosTendered =
+                cashierPosTendered.trim() !== '' && !Number.isNaN(Number(cashierPosTendered))
+                  ? Number(cashierPosTendered)
+                  : null;
+              const posChangeAmount =
+                cashierPosPayment === 'cash' && parsedPosTendered !== null
+                  ? parsedPosTendered - posGrandTotal
+                  : null;
+
+              const cashierActiveAlerts = deduplicateAssistanceCalls(assistanceCalls).filter(
+                (c) => c.active && (c.type === 'cash_request' || c.targetRole === 'cashier' || c.type === 'call')
+              );
+
+              const activePosCatExists = categories.some((c) => c.id === cashierActivePosCat);
+              const resolvedPosCat = activePosCatExists ? cashierActivePosCat : (categories[0]?.id || 'food');
+              const posSearchLower = cashierPosSearch.trim().toLowerCase();
+              const posMenuItems = menuItems.filter((item) => {
+                if (!item.available) return false;
+                if (posSearchLower) {
+                  return (
+                    item.nameAm.toLowerCase().includes(posSearchLower) ||
+                    item.nameEn.toLowerCase().includes(posSearchLower) ||
+                    getAccessibleMenuItemFields(item).name.toLowerCase().includes(posSearchLower)
+                  );
+                }
+                return item.cat === resolvedPosCat;
+              });
+
+              return (
+              <motion.div
                 key="cashier"
                 initial={{ opacity: 0, y: 15 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -16864,15 +17536,21 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                   <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                     <div className="space-y-1">
                       <div className="flex items-center gap-2">
-                        <span className="hero-gold-badge text-[10px] font-mono font-black px-2.5 py-0.5 rounded-lg uppercase tracking-widest border">CASH DESK STATION TERMINAL</span>
+                        <span className="hero-gold-badge text-[10px] font-mono font-black px-2.5 py-0.5 rounded-lg uppercase tracking-widest border">
+                          CASH DESK STATION TERMINAL
+                        </span>
                       </div>
-                      <h2 className="text-xl sm:text-2xl font-black text-white uppercase">የካሸር የክፍያ እና የሽያጭ መቆጣጠሪያ ዋና ክፍል</h2>
+                      <h2 className="text-xl sm:text-2xl font-black text-white uppercase">
+                        የካሸር የክፍያ እና የሽያጭ መቆጣጠሪያ ዋና ክፍል
+                      </h2>
                       <p className="text-xs text-white/85">
-                        የእንግዶችን ሂሳብ መቀበል፣ የእለት ገቢ ማረጋገጥ እና ደረሰኞችን ማተሚያ ክፍል (Signed in as: <strong className="text-[#f4c22b]">{currentUser?.name || 'Cashier Portal'}</strong>)
+                        የእንግዶችን የካሽ ክፍያ ጥያቄ መቀበል፣ የእለት ገቢ ማረጋገጥ እና ደረሰኞችን ማተሚያ ክፍል (Signed in as:{' '}
+                        <strong className="text-[#f4c22b]">{activeCashierName}</strong>)
                       </p>
                     </div>
-                    
-                    <button 
+
+                    <button
+                      type="button"
                       onClick={handleLogout}
                       className="hero-logout-btn border px-4 py-2 text-xs font-mono font-black uppercase rounded-xl transition-colors flex items-center gap-1.5 cursor-pointer shrink-0 shadow-xs"
                     >
@@ -16885,13 +17563,22 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                     <div className="flex items-center gap-2">
                       <span className="text-xl">💵</span>
                       <div>
-                        <span className="text-[9px] text-[#f4c22b] font-bold uppercase block">🔒 በስራ ላይ ያለ ካሸር (ACTIVE CASHIER):</span>
-                        <span className="text-sm font-black text-white">{currentUser?.name || 'ሀይሌ (ካሸር)'}</span>
+                        <span className="text-[9px] text-[#f4c22b] font-bold uppercase block">
+                          🔒 በስራ ላይ ያለ ካሸር (ACTIVE CASHIER):
+                        </span>
+                        <span className="text-sm font-black text-white">{activeCashierName}</span>
                       </div>
                     </div>
 
-                    <div className="hero-gold-badge px-3 py-1.5 rounded-xl border text-xs font-black font-mono flex items-center gap-1.5">
-                      <span>🔒 በሲስተሙ የተመዘገበ የካሸር ፈረቃ</span>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {cashRequestOrders.length > 0 && (
+                        <span className="px-3 py-1.5 rounded-xl bg-amber-500/20 border border-amber-400/50 text-amber-300 text-xs font-black animate-pulse">
+                          💵 {cashRequestOrders.length} የካሽ መክፈያ ጥያቄዎች
+                        </span>
+                      )}
+                      <div className="hero-gold-badge px-3 py-1.5 rounded-xl border text-xs font-black font-mono flex items-center gap-1.5">
+                        <span>🔒 {todayIso} · በሲስተሙ የተመዘገበ ፈረቃ</span>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -16903,130 +17590,476 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                   {/* Left Column (2 Cols wide) for Bill Processing and Cash Drawer */}
                   <div className="lg:col-span-2 space-y-6">
-                    {/* Metrics Section */}
+                    {/* Real Computed Metrics Section */}
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                       <div className="bg-[#091518]/60 border border-cyan-500/20 p-4 rounded-xl flex justify-between items-center shadow-md">
                         <div>
-                          <span className="text-[9px] text-white/40 uppercase font-mono block">{tText({ am: 'ያልተከፈሉ ሂሳቦች', en: 'Active Unpaid Bills', or: 'Kaffaltii Hin Kaffalamin', ti: 'ዘይተኸፈሉ ሕሳባት', sid: 'Baatantinni Biiro', fr: 'Factures impayées', de: 'Offene Rechnungen', it: 'Conti non pagati', zh: '未结账单', ar: 'الفواتير غير المدفوعة' })}</span>
-                          <span className="text-2xl font-black font-mono text-cyan-400">
-                            {orders.filter(o => o.status !== 'Paid').length} {tText({ am: 'ትዕዛዞች', en: 'orders', or: 'ajaja', ti: 'ትእዛዛት', sid: 'hajajubba', fr: 'commandes', de: 'Bestellungen', it: 'ordini', zh: '笔订单', ar: 'طلبات' })}
+                          <span className="text-[9px] text-white/40 uppercase font-mono block">
+                            {tText({
+                              am: 'ያልተከፈሉ ሂሳቦች',
+                              en: 'Active Unpaid Bills',
+                              or: 'Kaffaltii Hin Kaffalamin',
+                              ti: 'ዘይተኸፈሉ ሕሳባት',
+                              sid: 'Baatantinni Biiro',
+                              fr: 'Factures impayées',
+                              de: 'Offene Rechnungen',
+                              it: 'Conti non pagati',
+                              zh: '未结账单',
+                              ar: 'الفواتير غير المدفوعة',
+                            })}
+                          </span>
+                          <span className="text-2xl font-black font-mono text-cyan-400 tabular-nums">
+                            {unsettledBills.length}{' '}
+                            {tText({
+                              am: 'ትዕዛዞች',
+                              en: 'orders',
+                              or: 'ajaja',
+                              ti: 'ትእዛዛት',
+                              sid: 'hajajubba',
+                              fr: 'commandes',
+                              de: 'Bestellungen',
+                              it: 'ordini',
+                              zh: '笔订单',
+                              ar: 'طلبات',
+                            })}
+                          </span>
+                          <span className="text-[10px] font-mono text-amber-400 block mt-0.5">
+                            💵 {cashRequestOrders.length} የካሽ ጥያቄ (Cash req)
                           </span>
                         </div>
                         <span className="text-2xl">📝</span>
                       </div>
-                      
+
                       <div className="bg-emerald-950/20 border border-emerald-500/20 p-4 rounded-xl flex justify-between items-center shadow-md">
                         <div>
-                          <span className="text-[9px] text-white/40 uppercase font-mono block">{tText({ am: 'የፈረቃ ጥሬ ገንዘብ ሽያጭ', en: 'Shift Cash Sales', or: 'Gurgurtaa Kaashii', ti: 'ናይ እብረት ጥረ ገንዘብ', sid: 'Kaashete Hirro', fr: 'Ventes espèces (poste)', de: 'Schicht-Barumsatz', it: 'Incasso turno', zh: '本班现金销售', ar: 'مبيعات الوردية النقدية' })}</span>
-                          <span className="text-2xl font-black font-mono text-emerald-400">
-                            {orders.filter(o => o.status === 'Paid' || o.id.startsWith('manual-cash')).reduce((sum, o) => {
-                              const orderTotal = o.items ? o.items.reduce((s, it) => s + (it.qty * (it.price || 0)), 0) : 0;
-                              return sum + orderTotal;
-                            }, 0) + 1200} {currency}
+                          <span className="text-[9px] text-white/40 uppercase font-mono block">
+                            {tText({
+                              am: 'የዛሬ ጥሬ ገንዘብ ሽያጭ',
+                              en: "Today's Cash Sales",
+                              or: 'Gurgurtaa Kaashii Har’aa',
+                              ti: 'ናይ ሎሚ ጥረ ገንዘብ',
+                              sid: 'Techo Kaashete Hirro',
+                              fr: 'Ventes espèces (jour)',
+                              de: 'Heutiger Barumsatz',
+                              it: 'Incasso contanti oggi',
+                              zh: '今日现金销售',
+                              ar: 'مبيعات اليوم النقدية',
+                            })}
+                          </span>
+                          <span className="text-2xl font-black font-mono text-emerald-400 tabular-nums">
+                            {todayCashSales.toLocaleString()} {currency}
+                          </span>
+                          <span className="text-[10px] font-mono text-sky-300 block mt-0.5">
+                            💳 ባንክ/ቻፓ: {todayDigitalSales.toLocaleString()} {currency}
                           </span>
                         </div>
                         <span className="text-2xl text-emerald-400">💰</span>
                       </div>
 
-                      <div className="bg-[#1A1813] border border-yellow-500/20 p-4 rounded-xl flex justify-between items-center shadow-md">
-                        <div>
-                          <span className="text-[9px] text-white/40 uppercase font-mono block">{tText({ am: 'ካፒታል (መነሻ ገንዘብ)', en: 'Cash Float', or: 'Kaappitaala Kaashii', ti: 'መበገሲ ገንዘብ', sid: 'Umi Kaashe', fr: 'Fond de caisse', de: 'Kassenbestand', it: 'Fondo cassa', zh: '备用金', ar: 'رأس المال النقدي' })}</span>
-                          <span className="text-2xl font-black font-mono text-yellow-500">
-                            5,000.00 {currency}
+                      <div className="bg-[#1A1813] border border-yellow-500/25 p-4 rounded-xl flex flex-col justify-between shadow-md gap-1.5">
+                        <div className="flex justify-between items-center">
+                          <span className="text-[9px] text-white/40 uppercase font-mono">
+                            {tText({
+                              am: 'መነሻ ካፒታል (Float)',
+                              en: 'Opening Cash Float',
+                              or: 'Kaappitaala Kaashii',
+                              ti: 'መበገሲ ገንዘብ',
+                              sid: 'Umi Kaashe',
+                              fr: 'Fond de caisse',
+                              de: 'Anfangsbestand',
+                              it: 'Fondo cassa',
+                              zh: '初始备用金',
+                              ar: 'رصيد الصندوق الافتتاحي',
+                            })}
                           </span>
+                          <span className="text-base">🔓</span>
                         </div>
-                        <span className="text-2xl">🔒</span>
+                        <div className="flex items-center gap-1.5">
+                          <input
+                            type="number"
+                            min={0}
+                            value={cashierStartingFloat}
+                            onChange={(e) => {
+                              const raw = Math.max(0, Number(e.target.value) || 0);
+                              setCashierStartingFloat(raw);
+                              try {
+                                localStorage.setItem('papyrus_cashier_float', String(raw));
+                              } catch {
+                                // ignore storage failure
+                              }
+                            }}
+                            aria-label="Opening Cash Float"
+                            className="w-full bg-black/60 border border-yellow-500/35 rounded-lg px-2.5 py-1 text-lg font-black font-mono text-yellow-400 tabular-nums outline-none focus:border-yellow-400"
+                          />
+                          <span className="text-xs font-mono font-bold text-yellow-500/80 shrink-0">{currency}</span>
+                        </div>
+                        <span className="text-[10px] font-mono text-white/55">
+                          ካዝና ድምር: <strong className="text-cyan-300">{expectedDrawerCash.toLocaleString()} {currency}</strong>
+                        </span>
                       </div>
+                    </div>
+
+                    {/* 💵 INCOMING CASH PAYMENT REQUESTS FROM MENU */}
+                    <div className="bg-[#141109] border border-amber-500/35 p-5 rounded-2xl space-y-4">
+                      <div className="flex flex-wrap justify-between items-center gap-2 border-b border-amber-500/15 pb-3">
+                        <div>
+                          <span className="text-[9px] text-amber-400 font-mono tracking-widest uppercase block font-black">
+                            MENU CASHIER DESK QUEUE
+                          </span>
+                          <h3 className="text-sm font-black uppercase text-white flex items-center gap-2">
+                            <span>💵 ከሜኑ የመጡ የካሽ መክፈያ ጥያቄዎች (Cash Payment Requests)</span>
+                          </h3>
+                        </div>
+                        <span className="font-mono text-[10px] bg-amber-500/15 text-amber-300 border border-amber-500/35 px-2.5 py-1 rounded font-black uppercase tabular-nums">
+                          {cashRequestOrders.length} Pending Cash
+                        </span>
+                      </div>
+
+                      {cashRequestOrders.length === 0 ? (
+                        <div className="text-center py-6 border border-dashed border-amber-500/20 rounded-xl text-white/40 text-xs">
+                          በአሁኑ ሰዓት ከሜኑ የመጣ በመጠባበቅ ላይ ያለ የካሽ መክፈያ ጥያቄ የለም። / No pending cash requests from the menu.
+                        </div>
+                      ) : (
+                        <div className="space-y-3">
+                          {cashRequestOrders.map((ord) => {
+                            const billTotal = getOrderGrandTotal(ord);
+                            const isSettlingThis = cashierActiveSettleOrderId === `req-${ord.id}`;
+                            const enteredSettleAmt =
+                              isSettlingThis && cashierSettleTenderedInput.trim() !== ''
+                                ? Number(cashierSettleTenderedInput)
+                                : ord.cashTenderedAmount;
+                            const computedChange =
+                              typeof enteredSettleAmt === 'number' && !Number.isNaN(enteredSettleAmt)
+                                ? enteredSettleAmt - billTotal
+                                : null;
+
+                            return (
+                              <div
+                                key={`cashreq-card-${ord.id}`}
+                                className="bg-black/60 border border-amber-500/30 p-4 rounded-xl space-y-3"
+                              >
+                                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
+                                  <div className="space-y-1 flex-1">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <span className="text-xs font-mono font-black text-white">{ord.id}</span>
+                                      {ord.cashPaymentCode && (
+                                        <span className="text-[10px] font-mono font-black px-2 py-0.5 rounded bg-amber-500 text-black">
+                                          🎟️ {ord.cashPaymentCode}
+                                        </span>
+                                      )}
+                                      <span
+                                        className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded border ${
+                                          ord.cashPayMode === 'waiter_or_delivery'
+                                            ? 'bg-sky-500/15 text-sky-300 border-sky-500/30'
+                                            : 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                                        }`}
+                                      >
+                                        {ord.cashPayMode === 'waiter_or_delivery'
+                                          ? '🛵 ለአስተናጋጅ / ዴሊቨሪ'
+                                          : '🏪 በካሸር መክፈያ (Cashier Desk)'}
+                                      </span>
+                                      <span className="text-xs font-bold text-cyan-300 font-mono">
+                                        🍽️ {ord.location}
+                                      </span>
+                                      {ord.cashRequestedAt && (
+                                        <span className="text-[10px] font-mono text-white/45">
+                                          🕒 {ord.cashRequestedAt}
+                                        </span>
+                                      )}
+                                    </div>
+
+                                    <p className="text-xs text-white/80">
+                                      {ord.items.map((it) => `${it.qty}× ${it.name}`).join(', ')}
+                                    </p>
+
+                                    {ord.cashTenderedAmount !== undefined && (
+                                      <p className="text-[11px] font-mono text-amber-300">
+                                        💵 የደንበኛ ኖት: <strong>{ord.cashTenderedAmount} {currency}</strong> · መልስ:{' '}
+                                        <strong>{ord.cashChangeAmount ?? Math.max(0, ord.cashTenderedAmount - billTotal)} {currency}</strong>
+                                      </p>
+                                    )}
+                                    {ord.receiptComment && (
+                                      <p className="text-[11px] text-white/60 italic">📝 "{ord.receiptComment}"</p>
+                                    )}
+                                  </div>
+
+                                  <div className="flex flex-col items-start md:items-end gap-2 shrink-0 w-full md:w-auto">
+                                    <div className="text-left md:text-right">
+                                      <span className="text-[9px] text-white/45 font-mono uppercase block">
+                                        የሚከፈል ሂሳብ (Amount Due)
+                                      </span>
+                                      <span className="text-lg font-black text-amber-400 font-mono tabular-nums">
+                                        {billTotal.toFixed(2)} {currency}
+                                      </span>
+                                    </div>
+
+                                    <div className="flex flex-wrap gap-2 w-full sm:w-auto">
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          if (isSettlingThis) {
+                                            setCashierActiveSettleOrderId(null);
+                                            setCashierSettleTenderedInput('');
+                                          } else {
+                                            setCashierActiveSettleOrderId(`req-${ord.id}`);
+                                            setCashierSettleTenderedInput(
+                                              String(ord.cashTenderedAmount ?? billTotal)
+                                            );
+                                          }
+                                        }}
+                                        className="flex-1 sm:flex-none bg-amber-400 hover:bg-amber-300 text-black text-[10.5px] font-black uppercase px-3 py-2 rounded-lg cursor-pointer transition-colors font-mono"
+                                      >
+                                        {isSettlingThis ? '✕ ዝጋ' : '💵 ካሽ ተቀበል & ዝጋ'}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          downloadOrderReceiptPdf(ord, {
+                                            cashierName: activeCashierName,
+                                            serviceChargeRate,
+                                            vatRate,
+                                            hotline: contactHotline1,
+                                            address: contactAddress,
+                                          });
+                                          setReceiptDownloadedId(ord.id);
+                                          setTimeout(() => setReceiptDownloadedId(null), 2200);
+                                        }}
+                                        className="bg-white/10 hover:bg-white/20 text-white text-[10.5px] font-black uppercase px-3 py-2 rounded-lg cursor-pointer transition-colors font-mono flex items-center gap-1"
+                                      >
+                                        <Printer className="w-3.5 h-3.5" />
+                                        <span>{receiptDownloadedId === ord.id ? '✓ PDF' : 'Bill'}</span>
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          resolveOrderAssistanceCalls(ord.id, activeCashierName, ['cash_request']);
+                                          showAppToast(`✓ የጥያቄ ማንቂያ (${ord.id}) ተቀባይነት አግኝቷል።`);
+                                        }}
+                                        className="bg-zinc-800 hover:bg-zinc-700 text-white/80 text-[10.5px] font-bold uppercase px-2.5 py-2 rounded-lg cursor-pointer font-mono"
+                                        title="Acknowledge Request Alert"
+                                      >
+                                        ✓ Ack
+                                      </button>
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {isSettlingThis && (
+                                  <div className="bg-amber-950/35 border border-amber-500/35 p-3 rounded-xl flex flex-col sm:flex-row items-stretch sm:items-end gap-3">
+                                    <div className="flex-1">
+                                      <label className="text-[10px] font-mono text-amber-200 block uppercase mb-1">
+                                        ከደንበኛው የተቀበሉት ብር (Cash Received in {currency})
+                                      </label>
+                                      <input
+                                        type="number"
+                                        min={0}
+                                        value={cashierSettleTenderedInput}
+                                        onChange={(e) => setCashierSettleTenderedInput(e.target.value)}
+                                        className="w-full bg-black border border-amber-500/40 rounded-lg px-3 py-2 text-sm font-mono font-black text-white outline-none focus:border-amber-300"
+                                      />
+                                    </div>
+                                    <div className="px-3 py-2 rounded-lg bg-black/50 border border-white/10 text-xs font-mono">
+                                      <span className="text-white/50 block text-[9px] uppercase">መልስ (Change Due)</span>
+                                      <span
+                                        className={`font-black text-sm ${
+                                          computedChange !== null && computedChange < 0
+                                            ? 'text-red-400'
+                                            : 'text-emerald-400'
+                                        }`}
+                                      >
+                                        {computedChange !== null ? `${computedChange.toFixed(2)} ${currency}` : '—'}
+                                      </span>
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const settled = handleCashierConfirmCashPayment(
+                                          ord.id,
+                                          cashierSettleTenderedInput
+                                        );
+                                        if (settled) {
+                                          downloadOrderReceiptPdf(settled, {
+                                            cashierName: activeCashierName,
+                                            serviceChargeRate,
+                                            vatRate,
+                                            hotline: contactHotline1,
+                                            address: contactAddress,
+                                          });
+                                        }
+                                      }}
+                                      className="bg-emerald-500 hover:bg-emerald-400 text-black font-black text-xs uppercase px-4 py-2.5 rounded-lg cursor-pointer font-mono"
+                                    >
+                                      ✅ አረጋግጥ &amp; ደረሰኝ አትም
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
 
                     {/* 💵 CASHIER QUICK POS & ORDER GENERATOR */}
                     <div className="bg-[#0b141d] border border-cyan-500/20 p-5 rounded-2xl space-y-4">
-                      <div className="flex justify-between items-center border-b border-white/5 pb-2">
+                      <div className="flex flex-wrap justify-between items-center gap-2 border-b border-white/5 pb-2">
                         <div>
-                          <span className="text-[9px] text-[#00f5ff] font-mono tracking-widest uppercase block font-black">CASHIER DIRECT CASH DESK SYSTEM</span>
-                          <h3 className="text-sm font-black uppercase text-white/95">🛒 የካሸር ፈጣን እቃዎች መሸጫ እና እዘዝ (Cashier POS Station)</h3>
+                          <span className="text-[9px] text-[#00f5ff] font-mono tracking-widest uppercase block font-black">
+                            CASHIER DIRECT POS TERMINAL
+                          </span>
+                          <h3 className="text-sm font-black uppercase text-white/95">
+                            🛒 የካሸር ፈጣን እቃዎች መሸጫ እና እዘዝ (Cashier POS Station)
+                          </h3>
                         </div>
-                        <span className="font-mono text-[9px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded font-black uppercase">
-                          POS LIVE ACTIVE
-                        </span>
+                        <div className="flex items-center gap-2">
+                          {cashierLastPosOrder && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                downloadOrderReceiptPdf(cashierLastPosOrder, {
+                                  cashierName: activeCashierName,
+                                  serviceChargeRate,
+                                  vatRate,
+                                  hotline: contactHotline1,
+                                  address: contactAddress,
+                                })
+                              }
+                              className="bg-[#f4c22b] hover:bg-yellow-400 text-black text-[10px] font-mono font-black px-2.5 py-1 rounded flex items-center gap-1 cursor-pointer"
+                            >
+                              <Printer className="w-3 h-3" />
+                              <span>Print {cashierLastPosOrder.id}</span>
+                            </button>
+                          )}
+                          <span className="font-mono text-[9px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded font-black uppercase">
+                            POS LIVE ACTIVE
+                          </span>
+                        </div>
                       </div>
 
                       <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
                         {/* 1. Item Selection List Section (7 cols) */}
                         <div className="md:col-span-7 bg-[#10151f] p-3 border border-white/5 space-y-3 rounded-lg">
-                          <div className="flex justify-between items-center bg-black/40 p-1.5 rounded gap-1 overflow-x-auto no-scrollbar">
-                            {['food', 'drinks', 'traditional', 'room'].map(posCat => (
+                          <input
+                            type="text"
+                            value={cashierPosSearch}
+                            onChange={(e) => setCashierPosSearch(e.target.value)}
+                            placeholder="🔍 ምግብ ወይም መጠጥ ይፈልጉ (Search POS items)..."
+                            className="w-full bg-black/50 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white outline-none focus:border-[#00f5ff]"
+                          />
+
+                          <div className="flex items-center bg-black/40 p-1.5 rounded gap-1 overflow-x-auto no-scrollbar">
+                            {categories.map((cat) => (
                               <button
-                                key={posCat}
+                                key={cat.id}
                                 type="button"
-                                onClick={() => setCashierActivePosCat(posCat)}
-                                className={`flex-1 py-1 px-2.5 rounded text-[10px] font-black uppercase font-sans cursor-pointer transition-all ${
-                                  cashierActivePosCat === posCat
+                                onClick={() => {
+                                  setCashierActivePosCat(cat.id);
+                                  setCashierPosSearch('');
+                                }}
+                                className={`shrink-0 py-1 px-2.5 rounded text-[10px] font-black uppercase font-sans cursor-pointer transition-all ${
+                                  resolvedPosCat === cat.id && !posSearchLower
                                     ? 'bg-[#00f5ff] text-black font-black'
                                     : 'bg-white/5 text-white/60 hover:text-white hover:bg-white/10'
                                 }`}
                               >
-                                {posCat === 'traditional' ? 'ባህላዊ (Cultural)' : posCat.toUpperCase()}
+                                {cat.icon} {cat.label}
                               </button>
                             ))}
                           </div>
 
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-[260px] overflow-y-auto pr-1">
-                            {menuItems
-                              .filter(item => item.cat === cashierActivePosCat && item.available)
-                              .map(item => (
-                                <button
-                                  key={item.id}
-                                  type="button"
-                                  onClick={() => {
-                                    setCashierCart(prev => {
-                                      const existing = prev.find(i => i.id === item.id);
-                                      if (existing) {
-                                        return prev.map(i => i.id === item.id ? { ...i, qty: i.qty + 1 } : i);
-                                      } else {
-                                        return [...prev, { id: item.id, name: item.nameEn || item.nameAm, price: item.price, qty: 1 }];
-                                      }
-                                    });
-                                  }}
-                                  className="p-2.5 bg-black/30 hover:bg-[#00f5ff]/10 border border-white/5 hover:border-[#00f5ff]/30 text-left rounded-lg transition-all flex flex-col justify-between h-20 group text-xs font-sans cursor-pointer"
-                                >
-                                  <div className="font-bold text-white group-hover:text-[#00f5ff] transition-colors truncate w-full">
-                                    {item.nameAm} <span className="text-[10px] text-white/50 block font-normal">{item.nameEn}</span>
-                                  </div>
-                                  <div className="flex justify-between items-end w-full">
-                                    <span className="font-mono text-[10.5px] font-black text-emerald-400">{item.price} {currency}</span>
-                                    <span className="text-[9px] bg-[#00f5ff]/10 text-[#00f5ff] font-bold px-1.5 py-0.5 rounded uppercase">➕ {tText({ am: 'ጨምር', en: 'Add', or: 'Dabali', ti: 'ወስኽ', sid: 'Ledi', fr: 'Ajouter', de: 'Hinzufügen', it: 'Aggiungi', zh: '添加', ar: 'إضافة' })}</span>
-                                  </div>
-                                </button>
-                              ))}
+                            {posMenuItems.length === 0 ? (
+                              <div className="col-span-2 text-center py-8 text-white/35 text-xs">
+                                ምንም የሚሸጥ እቃ አልተገኘም። / No matching menu items found.
+                              </div>
+                            ) : (
+                              posMenuItems.map((item) => {
+                                const displayFields = getAccessibleMenuItemFields(item);
+                                return (
+                                  <button
+                                    key={item.id}
+                                    type="button"
+                                    onClick={() => {
+                                      setCashierCart((prev) => {
+                                        const existing = prev.find((i) => i.id === item.id);
+                                        if (existing) {
+                                          return prev.map((i) => (i.id === item.id ? { ...i, qty: i.qty + 1 } : i));
+                                        }
+                                        return [
+                                          ...prev,
+                                          { id: item.id, name: displayFields.name || item.nameEn || item.nameAm, price: item.price, qty: 1 },
+                                        ];
+                                      });
+                                    }}
+                                    className="p-2.5 bg-black/30 hover:bg-[#00f5ff]/10 border border-white/5 hover:border-[#00f5ff]/30 text-left rounded-lg transition-all flex flex-col justify-between h-20 group text-xs font-sans cursor-pointer"
+                                  >
+                                    <div className="font-bold text-white group-hover:text-[#00f5ff] transition-colors truncate w-full">
+                                      {displayFields.name}
+                                      <span className="text-[10px] text-white/45 block font-normal truncate">
+                                        {item.nameAm !== displayFields.name ? item.nameAm : item.nameEn}
+                                      </span>
+                                    </div>
+                                    <div className="flex justify-between items-end w-full">
+                                      <span className="font-mono text-[10.5px] font-black text-emerald-400">
+                                        {item.price} {currency}
+                                      </span>
+                                      <span className="text-[9px] bg-[#00f5ff]/10 text-[#00f5ff] font-bold px-1.5 py-0.5 rounded uppercase">
+                                        ➕{' '}
+                                        {tText({
+                                          am: 'ጨምር',
+                                          en: 'Add',
+                                          or: 'Dabali',
+                                          ti: 'ወስኽ',
+                                          sid: 'Ledi',
+                                          fr: 'Ajouter',
+                                          de: 'Hinzufügen',
+                                          it: 'Aggiungi',
+                                          zh: '添加',
+                                          ar: 'إضافة',
+                                        })}
+                                      </span>
+                                    </div>
+                                  </button>
+                                );
+                              })
+                            )}
                           </div>
                         </div>
 
                         {/* 2. Mini Cart and Order Details Section (5 cols) */}
-                        <div className="md:col-span-5 bg-black/50 border border-[#00f5ff]/15 p-4 rounded-xl flex flex-col justify-between min-h-[300px]">
-                          <div className="space-y-3 flex-1 overflow-y-auto max-h-[220px] pr-1">
-                            <span className="text-[9px] font-mono text-white/40 block border-b border-white/5 pb-1 uppercase font-bold">🛒 CURRENT TRANSACTION SLIP</span>
-                            
+                        <div className="md:col-span-5 bg-black/50 border border-[#00f5ff]/15 p-4 rounded-xl flex flex-col justify-between min-h-[340px]">
+                          <div className="space-y-3 flex-1 overflow-y-auto max-h-[200px] pr-1">
+                            <span className="text-[9px] font-mono text-white/40 block border-b border-white/5 pb-1 uppercase font-bold">
+                              🛒 CURRENT TRANSACTION SLIP
+                            </span>
+
                             {cashierCart.length === 0 ? (
-                              <div className="text-center py-10 text-white/30 text-xs">
+                              <div className="text-center py-8 text-white/30 text-xs">
                                 <span className="text-xl block mb-1">🛒</span>
                                 ምንም እቃ አልተመረጠም (POS Empty)
                               </div>
                             ) : (
                               <div className="space-y-2">
-                                {cashierCart.map(c => (
-                                  <div key={c.id} className="flex justify-between items-center text-xs text-white pb-1.5 border-b border-white/5">
+                                {cashierCart.map((c) => (
+                                  <div
+                                    key={c.id}
+                                    className="flex justify-between items-center text-xs text-white pb-1.5 border-b border-white/5"
+                                  >
                                     <div className="flex-1 truncate pr-2 font-bold">
                                       <span>{c.name}</span>
-                                      <span className="text-[10px] text-emerald-400 font-mono block">{c.price} {currency} × {c.qty}</span>
+                                      <span className="text-[10px] text-emerald-400 font-mono block">
+                                        {c.price} {currency} × {c.qty}
+                                      </span>
                                     </div>
                                     <div className="flex items-center gap-1 shrink-0">
                                       <button
                                         type="button"
                                         onClick={() => {
-                                          setCashierCart(prev => prev.map(i => i.id === c.id ? { ...i, qty: Math.max(1, i.qty - 1) } : i));
+                                          setCashierCart((prev) =>
+                                            prev.map((i) => (i.id === c.id ? { ...i, qty: Math.max(1, i.qty - 1) } : i))
+                                          );
                                         }}
-                                        className="w-5 h-5 bg-white/5 hover:bg-white/10 rounded-full flex items-center justify-center font-bold text-xs"
+                                        className="w-5 h-5 bg-white/5 hover:bg-white/10 rounded-full flex items-center justify-center font-bold text-xs cursor-pointer"
                                       >
                                         -
                                       </button>
@@ -17034,18 +18067,18 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                       <button
                                         type="button"
                                         onClick={() => {
-                                          setCashierCart(prev => prev.map(i => i.id === c.id ? { ...i, qty: i.qty + 1 } : i));
+                                          setCashierCart((prev) =>
+                                            prev.map((i) => (i.id === c.id ? { ...i, qty: i.qty + 1 } : i))
+                                          );
                                         }}
-                                        className="w-5 h-5 bg-white/5 hover:bg-white/10 rounded-full flex items-center justify-center font-bold text-xs"
+                                        className="w-5 h-5 bg-white/5 hover:bg-white/10 rounded-full flex items-center justify-center font-bold text-xs cursor-pointer"
                                       >
                                         +
                                       </button>
                                       <button
                                         type="button"
-                                        onClick={() => {
-                                          setCashierCart(prev => prev.filter(i => i.id !== c.id));
-                                        }}
-                                        className="ml-1 text-red-400 hover:text-red-500 font-bold"
+                                        onClick={() => setCashierCart((prev) => prev.filter((i) => i.id !== c.id))}
+                                        className="ml-1 text-red-400 hover:text-red-500 font-bold cursor-pointer"
                                         title="ይሰርዙ"
                                       >
                                         ❌
@@ -17057,24 +18090,30 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                             )}
                           </div>
 
-                          <div className="border-t border-white/5 pt-3 mt-3 space-y-3">
+                          <div className="border-t border-white/5 pt-3 mt-3 space-y-2.5">
                             <div className="grid grid-cols-2 gap-2">
                               <div>
-                                <label className="text-[9px] font-mono text-white/40 block uppercase">ጠረጴዛ/ክፍል (Table/Room)</label>
+                                <label className="text-[9px] font-mono text-white/40 block uppercase">
+                                  ጠረጴዛ/ክፍል (Table/Room)
+                                </label>
                                 <input
                                   type="text"
                                   value={cashierLocation}
                                   onChange={(e) => setCashierLocation(e.target.value)}
-                                  placeholder="Room 101"
-                                  className="w-full bg-[#181818] border border-white/10 text-white text-xs font-bold p-1 px-2 uppercase my-1 focus:border-[#00f5ff] outline-none"
+                                  placeholder="Walk-In / Room 101"
+                                  className="w-full bg-[#181818] border border-white/10 text-white text-xs font-bold p-1.5 px-2 rounded uppercase my-1 focus:border-[#00f5ff] outline-none"
                                 />
                               </div>
                               <div>
-                                <label className="text-[9px] font-mono text-white/40 block uppercase">የአዘዛዝ አይነት (Order Type)</label>
+                                <label className="text-[9px] font-mono text-white/40 block uppercase">
+                                  የአዘዛዝ አይነት (Order Type)
+                                </label>
                                 <select
                                   value={cashierOrderType}
-                                  onChange={(e) => setCashierOrderType(e.target.value as any)}
-                                  className="w-full bg-[#181818] border border-white/10 text-white text-xs font-bold p-1 px-2 my-1 focus:border-[#00f5ff] outline-none cursor-pointer"
+                                  onChange={(e) =>
+                                    setCashierOrderType(e.target.value as 'Dine-In' | 'Takeaway' | 'Room Service')
+                                  }
+                                  className="w-full bg-[#181818] border border-white/10 text-white text-xs font-bold p-1.5 px-2 rounded my-1 focus:border-[#00f5ff] outline-none cursor-pointer"
                                 >
                                   <option value="Dine-In">Dine-In</option>
                                   <option value="Takeaway">Takeaway</option>
@@ -17083,60 +18122,175 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                               </div>
                             </div>
 
-                            <div className="flex justify-between items-center text-xs border-b border-dashed border-white/10 pb-2 font-mono font-bold">
-                              <span className="text-white/60 uppercase">{tText({ am: 'ጠቅላላ ድምር', en: 'Total Calc', or: 'Ida’ama', ti: 'ጠቕላላ ሕሳብ', sid: 'Xaphooma', fr: 'Total', de: 'Gesamtbetrag', it: 'Totale', zh: '总计', ar: 'الإجمالي' })}:</span>
-                              <span className="text-base text-emerald-400 font-black">
-                                {cashierCart.reduce((sum, item) => sum + (item.qty * item.price), 0)} {currency}
-                              </span>
+                            {/* Payment Method & Tax Toggle */}
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <div className="flex gap-1">
+                                {(['cash', 'bank', 'chapa'] as PaymentMethod[]).map((pm) => (
+                                  <button
+                                    key={`pos-pm-${pm}`}
+                                    type="button"
+                                    onClick={() => setCashierPosPayment(pm)}
+                                    className={`px-2 py-1 rounded text-[10px] font-mono font-black uppercase cursor-pointer border ${
+                                      cashierPosPayment === pm
+                                        ? 'bg-emerald-500 text-black border-emerald-400'
+                                        : 'bg-white/5 text-white/60 border-white/10 hover:text-white'
+                                    }`}
+                                  >
+                                    {pm === 'cash' ? '💵 Cash' : pm === 'bank' ? '🏦 Bank' : '⚡ Chapa'}
+                                  </button>
+                                ))}
+                              </div>
+
+                              <label className="flex items-center gap-1.5 text-[10px] font-mono text-white/70 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={cashierPosIncludeTax}
+                                  onChange={(e) => setCashierPosIncludeTax(e.target.checked)}
+                                  className="accent-cyan-400"
+                                />
+                                <span>Tax/SC ({serviceChargeRate}%+{vatRate}%)</span>
+                              </label>
+                            </div>
+
+                            {cashierPosPayment === 'cash' ? (
+                              <div className="grid grid-cols-2 gap-2">
+                                <div>
+                                  <label className="text-[9px] font-mono text-white/45 block uppercase">
+                                    የተቀበሉት ገንዘብ ({currency})
+                                  </label>
+                                  <input
+                                    type="number"
+                                    min={0}
+                                    value={cashierPosTendered}
+                                    onChange={(e) => setCashierPosTendered(e.target.value)}
+                                    placeholder={String(posGrandTotal)}
+                                    className="w-full bg-[#181818] border border-white/10 rounded px-2 py-1 text-xs font-mono font-bold text-white outline-none focus:border-emerald-400"
+                                  />
+                                </div>
+                                <div className="bg-black/40 border border-white/10 rounded px-2 py-1 flex flex-col justify-center">
+                                  <span className="text-[9px] font-mono text-white/45 uppercase">መልስ (Change)</span>
+                                  <span
+                                    className={`text-xs font-mono font-black ${
+                                      posChangeAmount !== null && posChangeAmount < 0
+                                        ? 'text-red-400'
+                                        : 'text-emerald-400'
+                                    }`}
+                                  >
+                                    {posChangeAmount !== null ? `${posChangeAmount} ${currency}` : `0 ${currency}`}
+                                  </span>
+                                </div>
+                              </div>
+                            ) : (
+                              <div>
+                                <label className="text-[9px] font-mono text-white/45 block uppercase">
+                                  የባንክ / የቻፓ ማጣቀሻ (Ref No.)
+                                </label>
+                                <input
+                                  type="text"
+                                  value={cashierPosBankRef}
+                                  onChange={(e) => setCashierPosBankRef(e.target.value)}
+                                  placeholder="FT250... / Chapa Ref"
+                                  className="w-full bg-[#181818] border border-white/10 rounded px-2 py-1 text-xs font-mono text-white outline-none focus:border-cyan-400"
+                                />
+                              </div>
+                            )}
+
+                            <div className="space-y-1 text-[10px] font-mono border-b border-dashed border-white/10 pb-2">
+                              {cashierPosIncludeTax && posSubtotal > 0 && (
+                                <div className="flex justify-between text-white/50">
+                                  <span>Sub: {posSubtotal} · SC: {posServiceCharge} · VAT: {posVat}</span>
+                                </div>
+                              )}
+                              <div className="flex justify-between items-center text-xs font-bold">
+                                <span className="text-white/60 uppercase">
+                                  {tText({
+                                    am: 'ጠቅላላ ድምር',
+                                    en: 'Total Calc',
+                                    or: 'Ida’ama',
+                                    ti: 'ጠቕላላ ሕሳብ',
+                                    sid: 'Xaphooma',
+                                    fr: 'Total',
+                                    de: 'Gesamtbetrag',
+                                    it: 'Totale',
+                                    zh: '总计',
+                                    ar: 'الإجمالي',
+                                  })}
+                                  :
+                                </span>
+                                <span className="text-base text-emerald-400 font-black tabular-nums">
+                                  {posGrandTotal} {currency}
+                                </span>
+                              </div>
                             </div>
 
                             <button
                               type="button"
                               disabled={cashierCart.length === 0}
                               onClick={() => {
+                                if (cashierPosPayment === 'cash' && parsedPosTendered !== null && parsedPosTendered < posGrandTotal) {
+                                  showAppToast(`⚠️ የተቀበሉት ገንዘብ (${parsedPosTendered} ${currency}) ከሂሳቡ (${posGrandTotal} ${currency}) ማነስ የለበትም!`);
+                                  return;
+                                }
                                 const nowMs = Date.now();
-                                const totalAmount = cashierCart.reduce((sum, item) => sum + (item.qty * item.price), 0);
-                                const timeNow = new Date(nowMs).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
-                                const dateTodayStr = new Date(nowMs).toISOString().split('T')[0];
+                                const timeNow = new Date(nowMs).toLocaleTimeString('en-US', {
+                                  hour12: false,
+                                  hour: '2-digit',
+                                  minute: '2-digit',
+                                });
+                                const dateTodayStr = getLocalTodayIso();
                                 const orderId = '#POS-' + Math.floor(1000 + Math.random() * 9000);
 
                                 const resolvedLocation = cashierLocation.trim() || 'Walk-In';
                                 const assignedWaiterForLoc = getAssignedWaiterForTable(resolvedLocation);
                                 const assignedChefForLoc = getAssignedChefForTable(resolvedLocation);
+                                const mappedOrderType: OrderType =
+                                  cashierOrderType === 'Takeaway' ? 'delivery' : 'dine';
+                                const finalTendered =
+                                  cashierPosPayment === 'cash' ? (parsedPosTendered ?? posGrandTotal) : undefined;
+                                const finalChange =
+                                  finalTendered !== undefined ? Math.max(0, finalTendered - posGrandTotal) : undefined;
 
                                 const newOrder: Order = {
                                   id: orderId,
                                   location: resolvedLocation,
-                                  items: cashierCart.map(i => ({
+                                  items: cashierCart.map((i) => ({
                                     id: i.id,
                                     baseId: i.id,
                                     qty: i.qty,
                                     name: i.name,
                                     price: i.price,
                                   })),
-                                  total: totalAmount,
-                                  serviceCharge: 0,
-                                  vat: 0,
+                                  total: posGrandTotal,
+                                  serviceCharge: posServiceCharge,
+                                  vat: posVat,
                                   tip: 0,
                                   status: 'Paid',
                                   paymentVerified: true,
-                                  cashierName: currentUser?.name || 'Cashier',
+                                  cashierName: activeCashierName,
                                   cookingStatus: 'Pending',
                                   servedByWaiter: false,
                                   checkedByWaiter: false,
-                                  payment: 'cash',
+                                  payment: cashierPosPayment,
+                                  bankRef: cashierPosPayment !== 'cash' ? cashierPosBankRef.trim() || undefined : undefined,
+                                  receiptComment: cashierOrderType !== 'Dine-In' ? cashierOrderType : undefined,
+                                  cashPayMode: cashierPosPayment === 'cash' ? 'cashier_desk' : undefined,
+                                  cashPaymentRequested: false,
+                                  cashTenderedAmount: finalTendered,
+                                  cashChangeAmount: finalChange,
+                                  cashConfirmedAt: cashierPosPayment === 'cash' ? timeNow : undefined,
                                   confirmed: true,
                                   waiter: assignedWaiterForLoc || undefined,
                                   chefName: assignedChefForLoc || undefined,
                                   createdByRole: 'cashier',
-                                  orderType: cashierOrderType,
+                                  orderType: mappedOrderType,
                                   time: timeNow,
                                   date: dateTodayStr,
                                   createdAt: nowMs,
                                   updatedAt: nowMs,
                                 };
 
-                                setOrders(prev => [newOrder, ...prev]);
+                                setOrders((prev) => [newOrder, ...prev]);
+                                setCashierLastPosOrder(newOrder);
                                 addAssistanceCall({
                                   id: 'neword-' + orderId.replace('#', '') + '-' + nowMs,
                                   orderId,
@@ -17147,38 +18301,45 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                   targetRole: 'chef',
                                   targetWaiter: assignedWaiterForLoc || undefined,
                                   createdAt: nowMs,
-                                  message: `🛎️ የካሸር ትዕዛዝ ${orderId} (${resolvedLocation}) ተከፍሎ ወደ ኩሽና ተልኳል! (Paid -> Kitchen)`,
+                                  message: `🛎️ የካሸር ትዕዛዝ ${orderId} (${resolvedLocation}) በ${cashierPosPayment.toUpperCase()} ተከፍሎ ወደ ኩሽና ተልኳል!`,
                                 });
-                                playVoiceAlert(`Direct cash order generated for ${newOrder.location} value ${totalAmount} ${currency} sent to Kitchen.`);
-                                setAccessibleToast(
-                                  `${tText({
-                                    am: '💰 በጥሬ ገንዘብ ክፍያ ተፈጽሟል! ትዕዛዙ ወደ ኩሽና ተልኳል።',
-                                    en: '💰 Cash payment recorded! Order sent to kitchen.',
-                                    or: '💰 Kaffaltiin kaashii galmaa’eera! Ajajni gara kushiinaatti ergameera.',
-                                    ti: '💰 ብጥረ ገንዘብ ክፍሊት ተፈጺሙ! ትእዛዝ ናብ ክሽነ ተላኢኹ።',
-                                    sid: '💰 Kaashete baato borreesamino! Hajajo kushinaho soorramino.',
-                                    fr: '💰 Paiement en espèces enregistré ! Commande envoyée en cuisine.',
-                                    de: '💰 Barzahlung erfasst! Bestellung an die Küche gesendet.',
-                                    it: '💰 Pagamento in contanti registrato! Ordine inviato in cucina.',
-                                    zh: '💰 现金收款已完成！订单已发送至厨房。',
-                                    ar: '💰 تم تسجيل الدفع النقدي وإرسال الطلب للمطبخ.'
-                                  })} (${orderId} · ${totalAmount} ${currency})`
+                                playVoiceAlert(
+                                  `Direct ${cashierPosPayment} order generated for ${newOrder.location} value ${posGrandTotal} ${currency} sent to Kitchen.`
                                 );
-                                setTimeout(() => setAccessibleToast(''), 4500);
+                                showAppToast(
+                                  `${tText({
+                                    am: '💰 ክፍያ ተፈጽሟል! ትዕዛዙ ወደ ኩሽና ተልኳል።',
+                                    en: '💰 Payment recorded! Order sent to kitchen.',
+                                    or: '💰 Kaffaltiin galmaa’eera! Ajajni gara kushiinaatti ergameera.',
+                                    ti: '💰 ክፍሊት ተፈጺሙ! ትእዛዝ ናብ ክሽነ ተላኢኹ።',
+                                    sid: '💰 Baato borreesamino! Hajajo kushinaho soorramino.',
+                                    fr: '💰 Paiement enregistré ! Commande envoyée en cuisine.',
+                                    de: '💰 Zahlung erfasst! Bestellung an die Küche gesendet.',
+                                    it: '💰 Pagamento registrato! Ordine inviato in cucina.',
+                                    zh: '💰 收款已完成！订单已发送至厨房。',
+                                    ar: '💰 تم تسجيل الدفع وإرسال الطلب للمطبخ.',
+                                  })} (${orderId} · ${posGrandTotal} ${currency}${
+                                    finalChange && finalChange > 0 ? ` · መልስ: ${finalChange} ${currency}` : ''
+                                  })`,
+                                  5000
+                                );
                                 setCashierCart([]);
+                                setCashierPosTendered('');
+                                setCashierPosBankRef('');
                                 setCashierLocation('Walk-In');
                               }}
-                              className={`w-full py-2 px-3 text-[10.5px] font-mono font-black uppercase text-center rounded transition-all flex items-center justify-center gap-1.5 focus:outline-none ${
+                              className={`w-full py-2.5 px-3 text-[10.5px] font-mono font-black uppercase text-center rounded transition-all flex items-center justify-center gap-1.5 focus:outline-none ${
                                 cashierCart.length === 0
                                   ? 'bg-zinc-800 text-zinc-500 cursor-not-allowed border border-zinc-700/50'
-                                  : 'bg-emerald-500 hover:bg-emerald-600 text-black cursor-pointer shadow-[3px_3px_0px_#000] active:translate-y-0.5 active:shadow-[1px_1px_0px_#000]'
+                                  : 'bg-emerald-500 hover:bg-emerald-400 text-black cursor-pointer shadow-[3px_3px_0px_#000] active:translate-y-0.5 active:shadow-[1px_1px_0px_#000]'
                               }`}
                             >
-                              💵 በጥሬ ገንዘብ ተቀበል እና እዘዝ (Accept Cash & Place Order)
+                              {cashierPosPayment === 'cash'
+                                ? '💵 በጥሬ ገንዘብ ተቀበል እና እዘዝ (Accept Cash & Order)'
+                                : `✅ በ${cashierPosPayment.toUpperCase()} ተቀበል እና እዘዝ`}
                             </button>
                           </div>
                         </div>
-
                       </div>
                     </div>
 
@@ -17186,243 +18347,208 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                     <div className="bg-[#101010] border border-white/10 p-5 rounded-2xl space-y-4">
                       {/* Shift Selector Banner for Cashier */}
                       <div className="bg-[#181818] border border-cyan-500/30 p-3 rounded-xl flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs font-black text-cyan-400">💵 የካሸር ፈረቃ መክፈያ (Cashier Shift Isolation):</span>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-xs font-black text-cyan-400">
+                            💵 የካሸር ፈረቃ መክፈያ (Cashier Shift Filter):
+                          </span>
                           <select
                             value={selectedCashierShiftStaff}
                             onChange={(e) => setSelectedCashierShiftStaff(e.target.value)}
                             className="bg-black border border-cyan-500 text-cyan-300 text-xs px-2.5 py-1 rounded font-bold outline-none cursor-pointer"
                           >
-                            <option key="cashier-shift-my" value="my_shift">💵 የእኔ ፈረቃ ክፍያዎች ብቻ ({currentUser?.name || 'My Shift'})</option>
-                            <option key="cashier-shift-all" value="all">🌐 የሁሉም ካሸሮች ክፍያ (All Cashier Sales)</option>
-                            {staff.filter(s => (s.role || '').toLowerCase() === 'cashier' || (s.accessPrivilege || '').toLowerCase() === 'cashier').map((s, idx) => (
-                              <option key={`cashier-shift-${s.id || s.name || idx}`} value={s.name}>💵 {s.name}</option>
-                            ))}
+                            <option key="cashier-shift-my" value="my_shift">
+                              💵 የእኔ ፈረቃ ክፍያዎች ብቻ ({activeCashierName})
+                            </option>
+                            <option key="cashier-shift-all" value="all">
+                              🌐 የሁሉም ካሸሮች ክፍያ (All Cashier Sales)
+                            </option>
+                            {staff
+                              .filter(
+                                (s) =>
+                                  (s.role || '').toLowerCase() === 'cashier' ||
+                                  (s.accessPrivilege || '').toLowerCase() === 'cashier'
+                              )
+                              .map((s, idx) => (
+                                <option key={`cashier-shift-${s.name}-${idx}`} value={s.name}>
+                                  💵 {s.name}
+                                </option>
+                              ))}
                           </select>
                         </div>
                         <span className="text-[10px] text-stone-400 font-mono">
-                          {selectedCashierShiftStaff === 'my_shift' ? '🔒 በእርስዎ ፈረቃ የተሰበሰቡ ክፍያዎች ብቻ' : '🌐 የሁሉም ካሸሮች ሂሳብ እየታየ ነው'}
+                          {selectedCashierShiftStaff === 'my_shift'
+                            ? '🔒 በእርስዎ ፈረቃ የተሰበሰቡ ክፍያዎች ብቻ'
+                            : '🌐 የሁሉም ካሸሮች ሂሳብ እየታየ ነው'}
                         </span>
                       </div>
 
-                      <div className="flex justify-between items-center border-b border-white/5 pb-2">
-                        <h3 className="text-xs font-black uppercase text-white/70">
+                      <div className="flex flex-wrap justify-between items-center gap-3 border-b border-white/5 pb-3">
+                        <h3 className="text-xs font-black uppercase text-white/80">
                           📌 ያልተከፈሉ ንቁ ትዕዛዞች እና ክፍሎች (Unsettled Hospitality Bills)
                         </h3>
                         <span className="font-mono text-[9px] bg-cyan-400/10 text-cyan-400 px-2.5 py-0.5 rounded font-black uppercase">
-                          Payment Desk
+                          {filteredUnsettledBills.length} / {unsettledBills.length} Bills
                         </span>
                       </div>
 
-                      {orders.filter(o => o.status !== 'Paid' && o.status !== 'Cancelled').length === 0 ? (
+                      {/* Search & Filter Toolbar */}
+                      <div className="flex flex-col sm:flex-row gap-2">
+                        <input
+                          type="text"
+                          value={cashierSearchQuery}
+                          onChange={(e) => setCashierSearchQuery(e.target.value)}
+                          placeholder="🔍 በትዕዛዝ ቁጥር፣ ጠረጴዛ፣ ካሽ ኮድ ወይም Ref ይፈልጉ..."
+                          className="flex-1 bg-black/60 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white outline-none focus:border-cyan-400"
+                        />
+                        <div className="flex flex-wrap gap-1">
+                          {(
+                            [
+                              { id: 'all', label: 'ሁሉም (All)' },
+                              { id: 'cash_requests', label: '💵 ካሽ ጥያቄ' },
+                              { id: 'cash', label: 'Cash' },
+                              { id: 'bank', label: '🏦 Bank' },
+                              { id: 'chapa', label: '⚡ Chapa' },
+                            ] as const
+                          ).map((tab) => (
+                            <button
+                              key={tab.id}
+                              type="button"
+                              onClick={() => setCashierBillFilter(tab.id)}
+                              className={`px-2.5 py-1 rounded-lg text-[10px] font-mono font-bold cursor-pointer border transition-colors ${
+                                cashierBillFilter === tab.id
+                                  ? 'bg-cyan-500 text-black border-cyan-400'
+                                  : 'bg-black/40 text-white/60 border-white/10 hover:text-white'
+                              }`}
+                            >
+                              {tab.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {filteredUnsettledBills.length === 0 ? (
                         <div className="text-center py-10 border border-dashed border-white/5 rounded-xl text-white/30 text-xs space-y-1">
                           <p className="text-xl">🎉</p>
-                          <p>ያልተከፈለ ምንም ንቁ ትዕዛዝ የለም / All orders have been settled smoothly.</p>
+                          <p>ያልተከፈለ ምንም የሚዛመድ ትዕዛዝ የለም / No matching unsettled bills.</p>
                         </div>
                       ) : (
                         <div className="space-y-3">
-                          {orders.filter(o => o.status !== 'Paid' && o.status !== 'Cancelled').map((ord) => {
-                            const subtotal = ord.items.reduce((s, item) => s + (item.qty * (item.price || 0)), 0);
-                            const billTotal = ord.total > 0 ? ord.total : subtotal;
+                          {filteredUnsettledBills.map((ord) => {
+                            const billTotal = getOrderGrandTotal(ord);
                             const tableWaiter = getAssignedWaiterForTable(ord.location) || ord.waiter;
                             const cookStage = getEffectiveCookingStatus(ord);
+                            const matchedBank = ord.bankId ? bankAccounts.find((b) => b.id === ord.bankId) : null;
+                            const isSettlingInline = cashierActiveSettleOrderId === `bill-${ord.id}`;
+                            const inlineCashVal =
+                              isSettlingInline && cashierSettleTenderedInput.trim() !== ''
+                                ? Number(cashierSettleTenderedInput)
+                                : ord.cashTenderedAmount;
+                            const inlineChange =
+                              typeof inlineCashVal === 'number' && !Number.isNaN(inlineCashVal)
+                                ? inlineCashVal - billTotal
+                                : null;
+
                             return (
-                              <div key={ord.id} className="bg-black/50 border border-white/5 hover:border-cyan-500/30 p-4 rounded-xl flex flex-col md:flex-row justify-between items-start md:items-center gap-4 transition-all">
-                                <div className="space-y-1.5 flex-1">
-                                  <div className="flex flex-wrap items-center gap-2">
-                                    <span className="text-xs font-mono font-black text-white/40">{ord.id}</span>
-                                    <span className="text-xs font-bold text-cyan-400 bg-cyan-950/45 px-2 py-0.5 rounded font-mono uppercase">
-                                      🍽️ {ord.location || "WALK-IN"} {tableWaiter ? `(👤 ${tableWaiter})` : ''}
-                                    </span>
-                                    <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold uppercase ${
-                                      cookStage === 'Served'
-                                        ? 'bg-emerald-950 text-emerald-300 border border-emerald-500/30'
-                                        : cookStage === 'Completed'
-                                          ? 'bg-emerald-950 text-emerald-400 border border-emerald-500/20'
-                                          : 'bg-yellow-950 text-yellow-400'
-                                    }`}>
-                                      {cookStage === 'Served' ? 'DELIVERED BY WAITER ✓' : cookStage}
-                                    </span>
-                                  </div>
-
-                                  <div className="space-y-1 pl-3 border-l-2 border-white/10">
-                                    {ord.items.map((it, idx) => (
-                                      <p key={idx} className="text-xs text-white/80 font-bold">
-                                        {it.qty} × {it.name} <span className="text-white/40 font-mono text-[10px]">({it.price} {currency})</span>
-                                      </p>
-                                    ))}
-                                  </div>
-                                </div>
-
-                                <div className="flex flex-col items-start md:items-end gap-2 shrink-0 w-full md:w-auto">
-                                  <div className="text-left md:text-right">
-                                    <span className="text-[9px] text-white/40 block font-mono uppercase">{tText({ am: 'ጠቅላላ ሂሳብ', en: 'Total Bill', or: 'Ida’ama Biilii', ti: 'ጠቕላላ ሕሳብ', sid: 'Xaphooma Baato', fr: 'Total facture', de: 'Gesamtrechnung', it: 'Totale conto', zh: '账单总额', ar: 'إجمالي الفاتورة' })}:</span>
-                                    <span className="text-base font-black text-emerald-400 font-mono">{billTotal}.00 {currency}</span>
-                                  </div>
-
-                                    <div className="flex flex-wrap gap-2 w-full sm:w-auto mt-1">
-                                      {(ord.status === 'Paid' || ord.status === 'Completed' || ord.cookingStatus === 'Completed' || Boolean(ord.servedByWaiter)) && (
-                                        <button
-                                          type="button"
-                                          onClick={() => {
-                                            downloadOrderReceiptPdf(ord, {
-                                              cashierName: currentUser?.name || 'Cashier Desk',
-                                              serviceChargeRate,
-                                              vatRate,
-                                              hotline: contactHotline1,
-                                              address: contactAddress,
-                                            });
-                                            setReceiptDownloadedId(ord.id);
-                                            setTimeout(() => setReceiptDownloadedId(null), 2200);
-                                          }}
-                                          className="flex-1 sm:flex-none bg-emerald-500 hover:bg-emerald-400 text-black text-[10.5px] font-black uppercase px-3.5 py-2 rounded-lg cursor-pointer transition-colors font-mono flex items-center justify-center gap-1.5"
-                                        >
-                                          <Printer className="w-3.5 h-3.5" />
-                                          <span>{receiptDownloadedId === ord.id ? '✓ PDF Saved' : 'Print Receipt'}</span>
-                                        </button>
+                              <div
+                                key={ord.id}
+                                className="bg-black/50 border border-white/5 hover:border-cyan-500/30 p-4 rounded-xl space-y-3 transition-all"
+                              >
+                                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                                  <div className="space-y-1.5 flex-1">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <span className="text-xs font-mono font-black text-white/60">{ord.id}</span>
+                                      <span className="text-xs font-bold text-cyan-400 bg-cyan-950/45 px-2 py-0.5 rounded font-mono uppercase">
+                                        🍽️ {ord.location || 'WALK-IN'} {tableWaiter ? `(👤 ${tableWaiter})` : ''}
+                                      </span>
+                                      <span
+                                        className={`text-[9px] px-1.5 py-0.5 rounded font-bold uppercase ${
+                                          ord.payment === 'cash'
+                                            ? 'bg-amber-500/20 text-amber-300 border border-amber-500/35'
+                                            : ord.payment === 'bank'
+                                              ? 'bg-sky-500/20 text-sky-300 border border-sky-500/35'
+                                              : 'bg-purple-500/20 text-purple-300 border border-purple-500/35'
+                                        }`}
+                                      >
+                                        {ord.payment.toUpperCase()}
+                                      </span>
+                                      {ord.cashPaymentCode && (
+                                        <span className="text-[9px] px-1.5 py-0.5 rounded font-mono font-black bg-amber-400 text-black">
+                                          {ord.cashPaymentCode}
+                                        </span>
                                       )}
-                                      <button
-                                        onClick={() => setAdjustingOrder(ord)}
-                                        className="flex-1 sm:flex-none bg-sky-500 hover:bg-sky-600 text-black text-[10.5px] font-black uppercase px-3.5 py-2 rounded-lg cursor-pointer transition-colors font-mono"
+                                      <span
+                                        className={`text-[9px] px-1.5 py-0.5 rounded font-bold uppercase ${
+                                          cookStage === 'Served'
+                                            ? 'bg-emerald-950 text-emerald-300 border border-emerald-500/30'
+                                            : cookStage === 'Completed'
+                                              ? 'bg-emerald-950 text-emerald-400 border border-emerald-500/20'
+                                              : 'bg-yellow-950 text-yellow-400'
+                                        }`}
                                       >
-                                        ✏️ ማስተካከያ (Adjust)
-                                      </button>
-                                      <button
-                                        onClick={() => {
-                                          askConfirmAndRun(
-                                            `${ord.location} · ${billTotal} ${currency} — ${tText({
-                                              am: 'ይህን ሂሳብ እንደተከፈለ ለመዝጋት ይፈልጋሉ?',
-                                              en: 'Mark this bill as Paid?',
-                                              or: 'Kaffaltii kana akka kaffalametti cufuu?',
-                                              ti: 'እዚ ሕሳብ ከም ዝተኸፈለ ክዕጾ?',
-                                              sid: 'Kuni baato baataminota gede cufa?',
-                                              fr: 'Marquer cette facture comme payée ?',
-                                              de: 'Diese Rechnung als bezahlt markieren?',
-                                              it: 'Segnare questo conto come pagato?',
-                                              zh: '确认将该账单标记为已付款吗？',
-                                              ar: 'هل تريد إغلاق هذه الفاتورة كمدفوعة؟'
-                                            })}`,
-                                            () => {
-                                              setOrders(prev => prev.map(o => o.id === ord.id ? {
-                                                ...o,
-                                                status: 'Paid',
-                                                paymentVerified: true,
-                                                updatedAt: Date.now(),
-                                                cashierName: currentUser?.name || o.cashierName || 'Cashier',
-                                              } : o));
-                                              playVoiceAlert(`Bill for Table ${ord.location || 'Walk-In'} processed successfully. Settle approval granted.`);
-                                            }
-                                          );
-                                        }}
-                                        className="flex-1 sm:flex-none bg-cyan-500 hover:bg-cyan-600 text-black text-[10.5px] font-black uppercase px-3.5 py-2 rounded-lg cursor-pointer transition-colors font-mono"
-                                      >
-                                        💵 ሂሳብ ዝጋ (Settle Paid)
-                                      </button>
-                                    </div>
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Completed & Paid Orders — PDF Receipt Printing Desk */}
-                    {(() => {
-                      const completedOrders = orders.filter((o) => {
-                        const isCompletedOrder =
-                          o.status === 'Paid' ||
-                          o.status === 'Completed' ||
-                          o.cookingStatus === 'Completed' ||
-                          Boolean(o.servedByWaiter);
-                        if (!isCompletedOrder) return false;
-                        if (selectedCashierShiftStaff === 'all' || selectedCashierShiftStaff === 'my_shift') {
-                          if (selectedCashierShiftStaff === 'my_shift' && o.cashierName && currentUser?.name) {
-                            return o.cashierName.toLowerCase() === currentUser.name.toLowerCase();
-                          }
-                          return true;
-                        }
-                        return (o.cashierName || '').toLowerCase() === selectedCashierShiftStaff.toLowerCase();
-                      });
-
-                      return (
-                        <div className="bg-[#101010] border border-emerald-500/25 p-5 rounded-2xl space-y-4">
-                          <div className="flex flex-wrap justify-between items-center gap-2 border-b border-white/5 pb-3">
-                            <div>
-                              <h3 className="text-xs font-black uppercase text-emerald-400 flex items-center gap-2">
-                                <Printer className="w-4 h-4" />
-                                <span>🧾 የተጠናቀቁ እና የተከፈሉ ትዕዛዞች (Completed Orders &amp; PDF Receipts)</span>
-                              </h3>
-                              <p className="text-[10px] text-white/50 font-mono mt-0.5">
-                                Generate and download a PDF customer receipt for any completed or settled order
-                              </p>
-                            </div>
-                            <span className="font-mono text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2.5 py-1 rounded font-black uppercase tabular-nums">
-                              {completedOrders.length} Completed
-                            </span>
-                          </div>
-
-                          {completedOrders.length === 0 ? (
-                            <div className="text-center py-8 border border-dashed border-white/10 rounded-xl text-white/35 text-xs">
-                              No completed or paid orders yet. Completed &amp; settled bills will appear here for PDF receipt printing.
-                            </div>
-                          ) : (
-                            <div className="space-y-3">
-                              {completedOrders.map((ord) => {
-                                const itemsSubtotal = ord.items.reduce(
-                                  (s, item) => s + (item.qty || 1) * (item.price || 0),
-                                  0
-                                );
-                                const displayTotal = ord.total > 0 ? ord.total : itemsSubtotal;
-                                const isDownloaded = receiptDownloadedId === ord.id;
-
-                                return (
-                                  <div
-                                    key={`completed-${ord.id}`}
-                                    className="bg-black/50 border border-white/10 hover:border-emerald-500/40 p-4 rounded-xl flex flex-col md:flex-row justify-between items-start md:items-center gap-4 transition-all"
-                                  >
-                                    <div className="space-y-1.5 flex-1">
-                                      <div className="flex flex-wrap items-center gap-2">
-                                        <span className="text-xs font-mono font-black text-white">{ord.id}</span>
-                                        <span className="text-xs font-bold text-cyan-400 bg-cyan-950/45 px-2 py-0.5 rounded font-mono uppercase">
-                                          🍽️ {ord.location || 'WALK-IN'}
-                                        </span>
-                                        <span className="text-[9.5px] px-2 py-0.5 rounded font-mono font-black uppercase bg-emerald-950 text-emerald-400 border border-emerald-500/25">
-                                          {ord.status === 'Paid' ? 'PAID' : 'COMPLETED'}
-                                        </span>
-                                        <span className="text-[10px] font-mono text-white/50">
-                                          {String(ord.payment || 'cash').toUpperCase()} · {ord.time || ''}
-                                        </span>
-                                      </div>
-
-                                      <div className="space-y-0.5 pl-3 border-l-2 border-emerald-500/30">
-                                        {ord.items.map((it, idx) => (
-                                          <p key={idx} className="text-xs text-white/80 font-semibold">
-                                            {it.qty} × {it.name}{' '}
-                                            <span className="text-white/40 font-mono text-[10px]">
-                                              ({it.price} {currency})
-                                            </span>
-                                          </p>
-                                        ))}
-                                      </div>
+                                        {cookStage === 'Served'
+                                          ? ord.customerConfirmedReceipt
+                                            ? '🎉 CUSTOMER CONFIRMED'
+                                            : 'DELIVERED BY WAITER ✓'
+                                          : cookStage}
+                                      </span>
                                     </div>
 
-                                    <div className="flex flex-col items-start md:items-end gap-2 shrink-0 w-full md:w-auto">
-                                      <div className="text-left md:text-right">
-                                        <span className="text-[9px] text-white/40 block font-mono uppercase">
-                                          {tText({ am: 'የደረሰኝ ጠቅላላ', en: 'Receipt Total', or: 'Ida’ama Nagahee', ti: 'ድምር ደረሰኝ', sid: 'Risiiti Xaphooma', fr: 'Total reçu', de: 'Belegsumme', it: 'Totale ricevuta', zh: '收据总额', ar: 'إجمالي الإيصال' })}
-                                        </span>
-                                        <span className="text-base font-black text-emerald-400 font-mono tabular-nums">
-                                          {displayTotal.toFixed(2)} {currency}
-                                        </span>
+                                    {(ord.bankRef || matchedBank || ord.receiptScreenshot) && (
+                                      <div className="flex flex-wrap items-center gap-2 text-[10px] font-mono text-sky-300">
+                                        {matchedBank && <span>🏦 {matchedBank.name}</span>}
+                                        {ord.bankRef && <span>Ref: {ord.bankRef}</span>}
+                                        {ord.receiptScreenshot && (
+                                          <button
+                                            type="button"
+                                            onClick={() => setCashierReceiptPreviewUrl(ord.receiptScreenshot || null)}
+                                            className="bg-sky-500/20 hover:bg-sky-500/35 border border-sky-400/40 text-sky-200 px-2 py-0.5 rounded cursor-pointer font-bold"
+                                          >
+                                            🖼️ የባንክ ደረሰኝ እይ (View Screenshot)
+                                          </button>
+                                        )}
                                       </div>
+                                    )}
 
+                                    <div className="space-y-1 pl-3 border-l-2 border-white/10">
+                                      {ord.items.map((it, idx) => (
+                                        <p key={idx} className="text-xs text-white/80 font-bold">
+                                          {it.qty} × {it.name}{' '}
+                                          <span className="text-white/40 font-mono text-[10px]">
+                                            ({it.price} {currency})
+                                          </span>
+                                        </p>
+                                      ))}
+                                    </div>
+                                  </div>
+
+                                  <div className="flex flex-col items-start md:items-end gap-2 shrink-0 w-full md:w-auto">
+                                    <div className="text-left md:text-right">
+                                      <span className="text-[9px] text-white/40 block font-mono uppercase">
+                                        {tText({
+                                          am: 'ጠቅላላ ሂሳብ',
+                                          en: 'Total Bill',
+                                          or: 'Ida’ama Biilii',
+                                          ti: 'ጠቕላላ ሕሳብ',
+                                          sid: 'Xaphooma Baato',
+                                          fr: 'Total facture',
+                                          de: 'Gesamtrechnung',
+                                          it: 'Totale conto',
+                                          zh: '账单总额',
+                                          ar: 'إجمالي الفاتورة',
+                                        })}
+                                        :
+                                      </span>
+                                      <span className="text-base font-black text-emerald-400 font-mono tabular-nums">
+                                        {billTotal.toFixed(2)} {currency}
+                                      </span>
+                                    </div>
+
+                                    <div className="flex flex-wrap gap-1.5 w-full sm:w-auto mt-1">
                                       <button
                                         type="button"
-                                        id={`btn-print-receipt-${ord.id.replace(/[^a-zA-Z0-9_-]/g, '')}`}
                                         onClick={() => {
                                           downloadOrderReceiptPdf(ord, {
-                                            cashierName: currentUser?.name || 'Cashier Desk',
+                                            cashierName: activeCashierName,
                                             serviceChargeRate,
                                             vatRate,
                                             hotline: contactHotline1,
@@ -17431,24 +18557,296 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                           setReceiptDownloadedId(ord.id);
                                           setTimeout(() => setReceiptDownloadedId(null), 2200);
                                         }}
-                                        className={`w-full sm:w-auto text-[11px] font-black uppercase px-4 py-2 rounded-lg cursor-pointer transition-all font-mono flex items-center justify-center gap-2 ${
-                                          isDownloaded
-                                            ? 'bg-emerald-600 text-white'
-                                            : 'bg-[#f4c22b] hover:bg-yellow-400 text-black'
-                                        }`}
+                                        className="bg-emerald-500/20 hover:bg-emerald-500/35 border border-emerald-500/35 text-emerald-300 text-[10px] font-black uppercase px-2.5 py-2 rounded-lg cursor-pointer transition-colors font-mono flex items-center gap-1"
                                       >
                                         <Printer className="w-3.5 h-3.5" />
-                                        <span>{isDownloaded ? '✓ PDF Downloaded' : 'Print Receipt'}</span>
+                                        <span>{receiptDownloadedId === ord.id ? '✓ PDF' : 'Bill/PDF'}</span>
+                                      </button>
+
+                                      <button
+                                        type="button"
+                                        onClick={() => setAdjustingOrder(ord)}
+                                        className="bg-sky-500 hover:bg-sky-600 text-black text-[10px] font-black uppercase px-2.5 py-2 rounded-lg cursor-pointer transition-colors font-mono"
+                                      >
+                                        ✏️ ማስተካከያ
+                                      </button>
+
+                                      {ord.payment === 'cash' ? (
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            if (isSettlingInline) {
+                                              setCashierActiveSettleOrderId(null);
+                                              setCashierSettleTenderedInput('');
+                                            } else {
+                                              setCashierActiveSettleOrderId(`bill-${ord.id}`);
+                                              setCashierSettleTenderedInput(
+                                                String(ord.cashTenderedAmount ?? billTotal)
+                                              );
+                                            }
+                                          }}
+                                          className="bg-cyan-500 hover:bg-cyan-400 text-black text-[10px] font-black uppercase px-3 py-2 rounded-lg cursor-pointer transition-colors font-mono"
+                                        >
+                                          {isSettlingInline ? '✕ ዝጋ' : '💵 በካሽ ዝጋ (Cash Settle)'}
+                                        </button>
+                                      ) : (
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            askConfirmAndRun(
+                                              `${ord.location} · ${billTotal} ${currency} (${ord.payment.toUpperCase()}) — ${tText({
+                                                am: 'ይህን ክፍያ አረጋግጠው ሂሳቡን እንደተከፈለ መዝጋት ይፈልጋሉ?',
+                                                en: 'Verify payment & mark this bill as Paid?',
+                                                or: 'Kaffaltii kana mirkaneessitee akka kaffalametti cufuu?',
+                                                ti: 'እዚ ክፍሊት ኣረጋጊጽካ ክዕጾ?',
+                                                sid: 'Kuni baato buuxxe cufa?',
+                                                fr: 'Vérifier et marquer cette facture comme payée ?',
+                                                de: 'Zahlung prüfen und Rechnung als bezahlt markieren?',
+                                                it: 'Verificare e segnare come pagato?',
+                                                zh: '确认收款并关闭账单吗？',
+                                                ar: 'تأكيد الدفع وإغلاق الفاتورة؟',
+                                              })}`,
+                                              () => {
+                                                const timeNow = new Date().toLocaleTimeString('en-US', {
+                                                  hour12: false,
+                                                  hour: '2-digit',
+                                                  minute: '2-digit',
+                                                });
+                                                setOrders((prev) =>
+                                                  prev.map((o) =>
+                                                    o.id === ord.id
+                                                      ? {
+                                                          ...o,
+                                                          status: 'Paid',
+                                                          paymentVerified: true,
+                                                          cashConfirmedAt: timeNow,
+                                                          updatedAt: Date.now(),
+                                                          cashierName: activeCashierName,
+                                                        }
+                                                      : o
+                                                  )
+                                                );
+                                                resolveOrderAssistanceCalls(ord.id, activeCashierName, ['cash_request']);
+                                                playVoiceAlert(
+                                                  `Bill for ${ord.location || 'Walk-In'} verified and settled.`
+                                                );
+                                              }
+                                            );
+                                          }}
+                                          className="bg-cyan-500 hover:bg-cyan-400 text-black text-[10px] font-black uppercase px-3 py-2 rounded-lg cursor-pointer transition-colors font-mono"
+                                        >
+                                          ✅ አረጋግጥ &amp; ዝጋ
+                                        </button>
+                                      )}
+
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          askConfirmAndRun(
+                                            `⚠️ ${ord.id} (${ord.location}) — ይህን ትዕዛዝ መሰረዝ (Void/Cancel) እርግጠኛ ነዎት?`,
+                                            () => {
+                                              setOrders((prev) =>
+                                                prev.map((o) =>
+                                                  o.id === ord.id
+                                                    ? {
+                                                        ...o,
+                                                        status: 'Cancelled',
+                                                        updatedAt: Date.now(),
+                                                        cashierName: activeCashierName,
+                                                      }
+                                                    : o
+                                                )
+                                              );
+                                              resolveOrderAssistanceCalls(ord.id, activeCashierName);
+                                              showAppToast(`🚫 ትዕዛዝ ${ord.id} ተሰርዟል (Voided)።`);
+                                            }
+                                          );
+                                        }}
+                                        className="bg-red-500/20 hover:bg-red-500/35 border border-red-500/35 text-red-300 text-[10px] font-black uppercase px-2.5 py-2 rounded-lg cursor-pointer font-mono"
+                                        title="Void / Cancel Order"
+                                      >
+                                        🚫 Void
                                       </button>
                                     </div>
                                   </div>
-                                );
-                              })}
-                            </div>
-                          )}
+                                </div>
+
+                                {isSettlingInline && (
+                                  <div className="bg-cyan-950/35 border border-cyan-500/35 p-3 rounded-xl flex flex-col sm:flex-row items-stretch sm:items-end gap-3">
+                                    <div className="flex-1">
+                                      <label className="text-[10px] font-mono text-cyan-200 block uppercase mb-1">
+                                        የተቀበሉት ጥሬ ገንዘብ (Cash Tendered · {currency})
+                                      </label>
+                                      <input
+                                        type="number"
+                                        min={0}
+                                        value={cashierSettleTenderedInput}
+                                        onChange={(e) => setCashierSettleTenderedInput(e.target.value)}
+                                        className="w-full bg-black border border-cyan-500/40 rounded-lg px-3 py-2 text-sm font-mono font-black text-white outline-none focus:border-cyan-300"
+                                      />
+                                    </div>
+                                    <div className="px-3 py-2 rounded-lg bg-black/50 border border-white/10 text-xs font-mono">
+                                      <span className="text-white/50 block text-[9px] uppercase">መልስ (Change Due)</span>
+                                      <span
+                                        className={`font-black text-sm ${
+                                          inlineChange !== null && inlineChange < 0 ? 'text-red-400' : 'text-emerald-400'
+                                        }`}
+                                      >
+                                        {inlineChange !== null ? `${inlineChange.toFixed(2)} ${currency}` : '—'}
+                                      </span>
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleCashierConfirmCashPayment(ord.id, cashierSettleTenderedInput)}
+                                      className="bg-emerald-500 hover:bg-emerald-400 text-black font-black text-xs uppercase px-4 py-2.5 rounded-lg cursor-pointer font-mono"
+                                    >
+                                      💵 ክፍያውን ዝጋ (Mark Cash Paid)
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
                         </div>
-                      );
-                    })()}
+                      )}
+                    </div>
+
+                    {/* Completed & Paid Orders — PDF Receipt Printing Desk */}
+                    <div className="bg-[#101010] border border-emerald-500/25 p-5 rounded-2xl space-y-4">
+                      <div className="flex flex-wrap justify-between items-center gap-2 border-b border-white/5 pb-3">
+                        <div>
+                          <h3 className="text-xs font-black uppercase text-emerald-400 flex items-center gap-2">
+                            <Printer className="w-4 h-4" />
+                            <span>🧾 የተጠናቀቁ እና የተከፈሉ ትዕዛዞች (Completed Orders &amp; PDF Receipts)</span>
+                          </h3>
+                          <p className="text-[10px] text-white/50 font-mono mt-0.5">
+                            Generate and download a PDF customer receipt for any completed or settled order
+                          </p>
+                        </div>
+                        <span className="font-mono text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2.5 py-1 rounded font-black uppercase tabular-nums">
+                          {completedOrders.length} Completed
+                        </span>
+                      </div>
+
+                      {completedOrders.length === 0 ? (
+                        <div className="text-center py-8 border border-dashed border-white/10 rounded-xl text-white/35 text-xs">
+                          No completed or paid orders matching filter yet.
+                        </div>
+                      ) : (
+                        <div className="space-y-3">
+                          {completedOrders.map((ord) => {
+                            const displayTotal = getOrderGrandTotal(ord);
+                            const isDownloaded = receiptDownloadedId === ord.id;
+
+                            return (
+                              <div
+                                key={`completed-${ord.id}`}
+                                className="bg-black/50 border border-white/10 hover:border-emerald-500/40 p-4 rounded-xl flex flex-col md:flex-row justify-between items-start md:items-center gap-4 transition-all"
+                              >
+                                <div className="space-y-1.5 flex-1">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <span className="text-xs font-mono font-black text-white">{ord.id}</span>
+                                    <span className="text-xs font-bold text-cyan-400 bg-cyan-950/45 px-2 py-0.5 rounded font-mono uppercase">
+                                      🍽️ {ord.location || 'WALK-IN'}
+                                    </span>
+                                    <span className="text-[9.5px] px-2 py-0.5 rounded font-mono font-black uppercase bg-emerald-950 text-emerald-400 border border-emerald-500/25">
+                                      {ord.status === 'Paid' ? 'PAID' : 'COMPLETED'}
+                                    </span>
+                                    {ord.cashPaymentCode && (
+                                      <span className="text-[9.5px] px-2 py-0.5 rounded font-mono font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                                        {ord.cashPaymentCode}
+                                      </span>
+                                    )}
+                                    {ord.customerConfirmedReceipt && (
+                                      <span className="text-[9.5px] px-2 py-0.5 rounded font-mono font-black uppercase bg-emerald-500/20 text-emerald-300 border border-emerald-400/40">
+                                        🎉 CUSTOMER CONFIRMED {ord.customerReceivedAt ? `(${ord.customerReceivedAt})` : ''}
+                                      </span>
+                                    )}
+                                    <span className="text-[10px] font-mono text-white/50">
+                                      {String(ord.payment || 'cash').toUpperCase()} · {ord.time || ''}
+                                    </span>
+                                  </div>
+
+                                  {ord.payment === 'cash' && ord.cashTenderedAmount !== undefined && (
+                                    <p className="text-[10px] font-mono text-emerald-300/80">
+                                      💵 የተቀበሉት: {ord.cashTenderedAmount} {currency} · መልስ: {ord.cashChangeAmount || 0} {currency}
+                                    </p>
+                                  )}
+
+                                  <div className="space-y-0.5 pl-3 border-l-2 border-emerald-500/30">
+                                    {ord.items.map((it, idx) => (
+                                      <p key={idx} className="text-xs text-white/80 font-semibold">
+                                        {it.qty} × {it.name}{' '}
+                                        <span className="text-white/40 font-mono text-[10px]">
+                                          ({it.price} {currency})
+                                        </span>
+                                      </p>
+                                    ))}
+                                  </div>
+                                </div>
+
+                                <div className="flex flex-col items-start md:items-end gap-2 shrink-0 w-full md:w-auto">
+                                  <div className="text-left md:text-right">
+                                    <span className="text-[9px] text-white/40 block font-mono uppercase">
+                                      {tText({
+                                        am: 'የደረሰኝ ጠቅላላ',
+                                        en: 'Receipt Total',
+                                        or: 'Ida’ama Nagahee',
+                                        ti: 'ድምር ደረሰኝ',
+                                        sid: 'Risiiti Xaphooma',
+                                        fr: 'Total reçu',
+                                        de: 'Belegsumme',
+                                        it: 'Totale ricevuta',
+                                        zh: '收据总额',
+                                        ar: 'إجمالي الإيصال',
+                                      })}
+                                    </span>
+                                    <span className="text-base font-black text-emerald-400 font-mono tabular-nums">
+                                      {displayTotal.toFixed(2)} {currency}
+                                    </span>
+                                  </div>
+
+                                  <div className="flex items-center gap-2 w-full sm:w-auto">
+                                    {ord.receiptScreenshot && (
+                                      <button
+                                        type="button"
+                                        onClick={() => setCashierReceiptPreviewUrl(ord.receiptScreenshot || null)}
+                                        className="bg-sky-500/20 hover:bg-sky-500/35 border border-sky-400/35 text-sky-300 text-[10px] font-mono font-bold px-2.5 py-2 rounded-lg cursor-pointer"
+                                      >
+                                        🖼️ Proof
+                                      </button>
+                                    )}
+                                    <button
+                                      type="button"
+                                      id={`btn-print-receipt-${ord.id.replace(/[^a-zA-Z0-9_-]/g, '')}`}
+                                      onClick={() => {
+                                        downloadOrderReceiptPdf(ord, {
+                                          cashierName: activeCashierName,
+                                          serviceChargeRate,
+                                          vatRate,
+                                          hotline: contactHotline1,
+                                          address: contactAddress,
+                                        });
+                                        setReceiptDownloadedId(ord.id);
+                                        setTimeout(() => setReceiptDownloadedId(null), 2200);
+                                      }}
+                                      className={`flex-1 sm:flex-none text-[11px] font-black uppercase px-4 py-2 rounded-lg cursor-pointer transition-all font-mono flex items-center justify-center gap-2 ${
+                                        isDownloaded
+                                          ? 'bg-emerald-600 text-white'
+                                          : 'bg-[#f4c22b] hover:bg-yellow-400 text-black'
+                                      }`}
+                                    >
+                                      <Printer className="w-3.5 h-3.5" />
+                                      <span>{isDownloaded ? '✓ PDF Downloaded' : 'Print Receipt'}</span>
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
                   </div>
 
                   {/* Right Column (1 Col wide) for Shift Logs and Register Operations */}
@@ -17464,72 +18862,188 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
 
                       <div className="space-y-3.5 text-xs">
                         <div className="bg-black/40 border border-white/5 p-3 rounded space-y-2">
-                          <p className="font-mono text-[9px] text-white/40 uppercase">{tText({ am: 'የካዝና ወቅታዊ ሒሳብ', en: 'Register Balance Checks', or: 'Madaallii Kaaznaa', ti: 'ናይ ካዝና ሕሳብ', sid: 'Kaazina Kiiro', fr: 'État de la caisse', de: 'Kassenabschluss', it: 'Saldo di cassa', zh: '收银机余额检查', ar: 'فحص رصيد الصندوق' })}</p>
+                          <p className="font-mono text-[9px] text-white/40 uppercase">
+                            {tText({
+                              am: 'የካዝና ወቅታዊ ሒሳብ',
+                              en: 'Live Register Balance Check',
+                              or: 'Madaallii Kaaznaa',
+                              ti: 'ናይ ካዝና ሕሳብ',
+                              sid: 'Kaazina Kiiro',
+                              fr: 'État de la caisse',
+                              de: 'Kassenabschluss',
+                              it: 'Saldo di cassa',
+                              zh: '实时收银余额',
+                              ar: 'رصيد الصندوق المباشر',
+                            })}
+                          </p>
                           <div className="flex justify-between border-b border-white/5 pb-1 font-bold">
-                            <span className="text-white/60">{tText({ am: 'መነሻ ካፒታል', en: 'Starting Float', or: 'Kaappitaala Jalqabaa', ti: 'መበገሲ ካፒታል', sid: 'Umi Kaappitaale', fr: 'Fond initial', de: 'Anfangsbestand', it: 'Fondo iniziale', zh: '起始备用金', ar: 'الرصيد الافتتاحي' })}:</span>
-                            <span className="text-white font-mono">5,000.00 {currency}</span>
+                            <span className="text-white/60">መነሻ ካፒታል (Float):</span>
+                            <span className="text-white font-mono tabular-nums">
+                              {cashierStartingFloat.toFixed(2)} {currency}
+                            </span>
                           </div>
                           <div className="flex justify-between border-b border-white/5 pb-1 font-bold">
-                            <span className="text-white/60">{tText({ am: 'የፈረቃ ካርድ ክፍያዎች', en: 'Shift Card Payments', or: 'Kaffaltii Kaardii', ti: 'ናይ ካርድ ክፍሊታት', sid: 'Kaardete Baato', fr: 'Paiements carte', de: 'Kartenzahlungen', it: 'Pagamenti carta', zh: '刷卡收款', ar: 'مدفوعات البطاقة' })}:</span>
-                            <span className="text-emerald-400 font-mono">1,200.00 {currency}</span>
+                            <span className="text-white/60">የዛሬ ጥሬ ገንዘብ ሽያጭ:</span>
+                            <span className="text-emerald-400 font-mono tabular-nums">
+                              {todayCashSales.toFixed(2)} {currency}
+                            </span>
                           </div>
-                          <div className="flex justify-between font-bold">
-                            <span className="text-white/60">{tText({ am: 'በካዝና ውስጥ ያለ ጥሬ ገንዘብ', en: 'Cash in Register Drawer', or: 'Kaashii Kaaznaa Keessaa', ti: 'ኣብ ካዝና ዘሎ ገንዘብ', sid: 'Kaazinate Kaashe', fr: 'Espèces en caisse', de: 'Bargeld in der Kasse', it: 'Contanti in cassa', zh: '钱箱现金', ar: 'النقد في الدرج' })}:</span>
-                            <span className="text-cyan-400 font-mono">6,200.00 {currency}</span>
+                          <div className="flex justify-between border-b border-white/5 pb-1 font-bold">
+                            <span className="text-white/60">ባንክ / ቴሌብር (Bank):</span>
+                            <span className="text-sky-400 font-mono tabular-nums">
+                              {todayBankSales.toFixed(2)} {currency}
+                            </span>
+                          </div>
+                          <div className="flex justify-between border-b border-white/5 pb-1 font-bold">
+                            <span className="text-white/60">ቻፓ (Chapa Online):</span>
+                            <span className="text-purple-400 font-mono tabular-nums">
+                              {todayChapaSales.toFixed(2)} {currency}
+                            </span>
+                          </div>
+                          <div className="flex justify-between border-b border-white/5 pb-1 font-bold">
+                            <span className="text-white/70">ጠቅላላ የሽያጭ ገቢ:</span>
+                            <span className="text-yellow-400 font-mono tabular-nums">
+                              {totalShiftSales.toFixed(2)} {currency}
+                            </span>
+                          </div>
+                          <div className="flex justify-between font-black pt-0.5">
+                            <span className="text-white/80">በካዝና መኖር ያለበት (Expected Cash):</span>
+                            <span className="text-cyan-400 font-mono tabular-nums">
+                              {expectedDrawerCash.toFixed(2)} {currency}
+                            </span>
                           </div>
                         </div>
 
-                        {/* Shift action buttons */}
-                        <div className="space-y-2">
-                          <button
-                            onClick={() => {
-                              playVoiceAlert(`Receipt register system is checking out shift drawer. Settle successfully closed.`);
-                              setAccessibleToast(
-                                `${tText({
-                                  am: '🖨️ የዕለት ገቢ ሪፖርት ማጠቃለያ ተዘጋጅቶ ወደ ማናጀር ተልኳል!',
-                                  en: '🖨️ Daily shift summary generated and sent to manager!',
-                                  or: '🖨️ Gabaasni galii guyyaa qophaa’ee gara maanaajaraatti ergameera!',
-                                  ti: '🖨️ ጸብጻብ ዕለታዊ እቶት ተዳልዩ ናብ ማናጀር ተላኢኹ!',
-                                  sid: '🖨️ Barru eote rippoorti qixxaabbe maanaajeraho soorramino!',
-                                  fr: '🖨️ Résumé journalier généré et envoyé au gérant !',
-                                  de: '🖨️ Tagesbericht erstellt und an den Manager gesendet!',
-                                  it: '🖨️ Riepilogo giornaliero generato e inviato al manager!',
-                                  zh: '🖨️ 每日班次汇总已生成并发送至经理！',
-                                  ar: '🖨️ تم إعداد ملخص الوردية اليومي وإرساله للمدير!'
-                                })} (6,200.00 ${currency})`
-                              );
-                              setTimeout(() => setAccessibleToast(''), 4500);
-                            }}
-                            className="w-full bg-[#121212] hover:bg-white/10 text-white border border-white/10 font-bold uppercase py-2.5 rounded text-[10px] font-mono cursor-pointer transition-all"
-                          >
-                            📊 {tText({ am: 'ዕለታዊ ሪፖርት አዘጋጅ', en: 'Daily Shift Summary', or: 'Gabaasa Guyyaa', ti: 'ዕለታዊ ጸብጻብ', sid: 'Barru Rippoorte', fr: 'Résumé de poste', de: 'Schichtbericht', it: 'Riepilogo turno', zh: '每日班次汇总', ar: 'ملخص الوردية اليومي' })}
-                          </button>
+                        {/* Actual Counted Cash Reconciliation */}
+                        <div className="bg-black/40 border border-white/10 p-3 rounded-xl space-y-2">
+                          <label className="text-[10px] font-mono text-white/60 uppercase block font-bold">
+                            💵 በእጅ የተቆጠረ ገንዘብ (Actual Counted Cash · {currency})
+                          </label>
+                          <input
+                            type="number"
+                            min={0}
+                            value={cashierActualCounted}
+                            onChange={(e) => setCashierActualCounted(e.target.value)}
+                            placeholder={String(expectedDrawerCash)}
+                            className="w-full bg-black border border-white/15 rounded-lg px-3 py-2 text-sm font-mono font-black text-white outline-none focus:border-cyan-400"
+                          />
+                          {cashVariance !== null && (
+                            <div
+                              className={`text-[11px] font-mono font-bold px-2.5 py-1.5 rounded border flex justify-between ${
+                                cashVariance === 0
+                                  ? 'bg-emerald-500/15 border-emerald-500/35 text-emerald-300'
+                                  : cashVariance > 0
+                                    ? 'bg-sky-500/15 border-sky-500/35 text-sky-300'
+                                    : 'bg-red-500/15 border-red-500/35 text-red-300'
+                              }`}
+                            >
+                              <span>ልዩነት (Variance):</span>
+                              <span>
+                                {cashVariance === 0
+                                  ? '✓ ሙሉ በሙሉ ትክክል (Balanced)'
+                                  : `${cashVariance > 0 ? '+' : ''}${cashVariance.toFixed(2)} ${currency} (${
+                                      cashVariance > 0 ? 'ትርፍ / Over' : 'ጉድለት / Short'
+                                    })`}
+                              </span>
+                            </div>
+                          )}
                         </div>
+
+                        {cashierShiftClosedAt && (
+                          <div className="text-[11px] font-mono bg-emerald-500/15 border border-emerald-500/35 text-emerald-300 px-3 py-2 rounded-lg">
+                            ✅ የሺፍት ሪፖርት በ {cashierShiftClosedAt} ወደ ማናጀር ተልኳል።
+                          </div>
+                        )}
+
+                        {/* Shift action button */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const now = new Date();
+                            const timeStr = now.toLocaleTimeString('en-US', {
+                              hour12: false,
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            });
+                            const countedLine =
+                              parsedCountedCash !== null
+                                ? ` | Counted Cash: ${parsedCountedCash.toFixed(2)} ${currency} (Variance: ${
+                                    cashVariance! >= 0 ? '+' : ''
+                                  }${cashVariance!.toFixed(2)} ${currency})`
+                                : '';
+                            const reportMsg: LeadershipMessage = {
+                              id: 'lm-cashier-' + Date.now(),
+                              target: 'manager',
+                              location: 'Cashier Desk Terminal',
+                              senderName: activeCashierName,
+                              topic: `Cashier Daily Shift Close Report (${todayIso})`,
+                              message: `Cashier: ${activeCashierName} | Opening Float: ${cashierStartingFloat.toFixed(2)} ${currency} | Cash Sales: ${todayCashSales.toFixed(2)} ${currency} | Bank/Telebirr: ${todayBankSales.toFixed(2)} ${currency} | Chapa: ${todayChapaSales.toFixed(2)} ${currency} | Total Sales: ${totalShiftSales.toFixed(2)} ${currency} | Expected Drawer: ${expectedDrawerCash.toFixed(2)} ${currency}${countedLine} | Unsettled Bills Remaining: ${unsettledBills.length}`,
+                              time: timeStr,
+                              date: todayIso,
+                              status: 'Pending',
+                            };
+                            setLeadershipMessages((prev) => [reportMsg, ...prev]);
+                            setCashierShiftClosedAt(timeStr);
+                            playVoiceAlert(
+                              `Daily shift report total ${totalShiftSales} ${currency} sent to manager.`
+                            );
+                            showAppToast(
+                              `🖨️ የዕለት ገቢ ሪፖርት (${totalShiftSales.toLocaleString()} ${currency}) ወደ ስራ አስኪያጅ ተልኳል!`,
+                              5000
+                            );
+                          }}
+                          className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-black uppercase py-2.5 rounded-lg text-[10.5px] font-mono cursor-pointer transition-all"
+                        >
+                          📊 የዕለት ሺፍት ሪፖርት ለማናጀር ላክ (Close &amp; Submit)
+                        </button>
                       </div>
                     </div>
 
-                    {/* Active Guest Assistance Quick-View */}
+                    {/* Active Cashier Requests & Guest Assistance Calls */}
                     <div className="bg-[#101010] border border-white/10 p-5 rounded-2xl space-y-4">
                       <div className="flex justify-between items-center border-b border-white/5 pb-2">
                         <h3 className="text-xs font-black uppercase text-white/70">
-                          🛎️ የእንግዶች የመጥሪያ ሁኔታ (Active Room Calls)
+                          🛎️ የካሽ ጥያቄዎች እና የእንግዶች ጥሪ (Cashier Alerts)
                         </h3>
-                        <span className="font-mono text-[9px] bg-red-500/10 text-red-400 px-2.5 py-0.5 rounded font-black uppercase">
-                          Monitoring
+                        <span className="font-mono text-[9px] bg-red-500/10 text-red-400 px-2.5 py-0.5 rounded font-black uppercase tabular-nums">
+                          {cashierActiveAlerts.length} Active
                         </span>
                       </div>
 
-                      {deduplicateAssistanceCalls(assistanceCalls).filter(c => c.active && c.type !== 'new_order').length === 0 ? (
-                        <p className="text-center py-6 text-white/30 text-xs">ምንም ገባሪ ጥሪ የለም። / No active calls.</p>
+                      {cashierActiveAlerts.length === 0 ? (
+                        <p className="text-center py-6 text-white/30 text-xs">
+                          ምንም ገባሪ የካሽ ጥያቄ ወይም ጥሪ የለም። / No active cashier alerts.
+                        </p>
                       ) : (
                         <div className="space-y-2">
-                          {deduplicateAssistanceCalls(assistanceCalls).filter(c => c.active && c.type !== 'new_order').map(call => (
-                            <div key={call.id} className="bg-black/50 border border-white/5 p-3 flex justify-between items-center rounded-lg">
-                              <div>
-                                <p className="font-black text-xs text-white font-mono uppercase">{call.location}</p>
-                                <p className="text-[9px] text-[#00f5ff] font-mono">ደወል: {call.time}</p>
+                          {cashierActiveAlerts.map((call) => (
+                            <div
+                              key={call.id}
+                              className={`border p-3 flex justify-between items-start gap-2 rounded-lg ${
+                                call.type === 'cash_request'
+                                  ? 'bg-amber-950/30 border-amber-500/35'
+                                  : 'bg-black/50 border-white/10'
+                              }`}
+                            >
+                              <div className="space-y-0.5 min-w-0 flex-1">
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span className="text-xs">{call.type === 'cash_request' ? '💵' : '📢'}</span>
+                                  <p className="font-black text-xs text-white font-mono uppercase truncate">
+                                    {call.location}
+                                  </p>
+                                  <span className="text-[9px] text-[#00f5ff] font-mono">🕒 {call.time}</span>
+                                </div>
+                                {call.message && (
+                                  <p className="text-[10.5px] text-white/75 leading-snug">{call.message}</p>
+                                )}
                               </div>
-                              <span className="w-2 h-2 rounded-full bg-red-400 animate-ping"></span>
+                              <button
+                                type="button"
+                                onClick={() => markAssistanceCallInactive(call.id)}
+                                className="shrink-0 bg-emerald-500/20 hover:bg-emerald-500 text-emerald-300 hover:text-black border border-emerald-500/40 px-2 py-1 rounded text-[10px] font-mono font-black cursor-pointer transition-colors"
+                              >
+                                ✔ Ack
+                              </button>
                             </div>
                           ))}
                         </div>
@@ -17538,8 +19052,39 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                   </div>
                 </div>
 
+                {/* Bank / Telebirr Receipt Screenshot Lightbox Modal */}
+                {cashierReceiptPreviewUrl && (
+                  <div
+                    className="fixed inset-0 z-[120] bg-black/85 backdrop-blur-sm flex items-center justify-center p-4"
+                    onClick={() => setCashierReceiptPreviewUrl(null)}
+                  >
+                    <div
+                      className="bg-[#121212] border border-white/15 rounded-2xl max-w-lg w-full p-4 space-y-3"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <div className="flex justify-between items-center border-b border-white/10 pb-2">
+                        <span className="text-xs font-mono font-black text-white uppercase">
+                          🖼️ የባንክ / ቴሌብር ደረሰኝ ማረጋገጫ (Payment Proof)
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setCashierReceiptPreviewUrl(null)}
+                          className="px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-white text-xs font-bold cursor-pointer"
+                        >
+                          ✕ Close
+                        </button>
+                      </div>
+                      <img
+                        src={cashierReceiptPreviewUrl}
+                        alt="Payment Receipt Proof"
+                        className="w-full max-h-[70vh] object-contain rounded-xl bg-black"
+                      />
+                    </div>
+                  </div>
+                )}
               </motion.div>
-            )}
+              );
+            })()}
 
             {/* VIEW_8: GUARD PORTAL */}
             {activeRole === 'guard' && (
@@ -18227,7 +19772,10 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                     <button
                                       type="button"
                                       onClick={() => {
-                                        alert(`📄 የፓርኪንግና የመውጫ ማረጋገጫ ቲኬት (Gate Exit Pass):\n\n• የእንግዳ ስም: ${v.name}\n• የተሽከርካሪ አይነት: ${v.vehicleType === 'motorcycle' ? '🏍️ ሞተር / ባጃጅ' : v.vehicleType === 'walk' ? '🚶 እግርኛ' : '🚗 መኪና'}\n• የፓርኪንግ ካርድ #: ${v.ticketTagNumber || 'TAG-#101'}\n• የመኪና/ሞተር ሰሌዳ: ${v.carPlate || 'N/A'}\n• ስልክ: ${v.phone || 'N/A'}\n• የገባበት ሰዓት: ${v.timeIn}\n• የወጣበት ሰዓት: ${v.timeOut || 'N/A'}\n• ያረጋገጠው ጥበቃ: ${v.verifiedByGuard || 'Guard Gate'}\n• ሁኔታ: ✅ 2ቱ ካርዶች ተመሳስለው በሰላም ተሸኝቷል (Verified Exit)`);
+                                        showAppToast(
+                                          `📄 የመውጫ ቲኬት: ${v.name} · ${v.ticketTagNumber || 'TAG-#101'} · ሰሌዳ ${v.carPlate || 'N/A'} · ገባ ${v.timeIn} · ወጣ ${v.timeOut || 'N/A'} · ✅ Verified Exit (${v.verifiedByGuard || 'Guard Gate'})`,
+                                          7000
+                                        );
                                       }}
                                       className="px-3 py-1.5 bg-white/10 hover:bg-white/20 text-yellow-300 border border-yellow-400/30 rounded text-[9px] font-mono uppercase tracking-wider cursor-pointer"
                                     >
@@ -18389,6 +19937,8 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
           );
         }}
         onRefresh={handleRefreshLiveOrders}
+        onConfirmOrderReceived={handleCustomerConfirmOrderReceived}
+        onRequestCashierPayment={handleGuestRequestCashierPayment}
       />
 
       {/* PRINTABLE STAFF CERTIFICATE OVERLAY */}
@@ -18840,14 +20390,26 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
         );
       })()}
 
-      {/* GLOBAL NON-BLOCKING TOAST FOR STAFF PORTALS */}
-      {accessibleToast && activeRole !== 'customer' && (
+      {/* GLOBAL NON-BLOCKING TOAST FOR CUSTOMER & STAFF PORTALS */}
+      {accessibleToast && (
         <div
           role="status"
           aria-live="polite"
-          className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[120] max-w-md w-[90%] rounded-xl bg-[#065F46] text-white border-2 border-[#6EE7B7] px-4 py-3 text-xs font-black text-center shadow-2xl"
+          className={`fixed bottom-5 left-1/2 -translate-x-1/2 z-[9998] max-w-md w-[92%] rounded-xl px-4 py-3 text-xs font-black text-center shadow-2xl border-2 flex items-center justify-between gap-3 ${
+            accessibleToast.startsWith('⚠️') || accessibleToast.startsWith('❌') || accessibleToast.startsWith('🔒') || accessibleToast.startsWith('🛑')
+              ? 'bg-[#7F1D1D] text-white border-[#FCA5A5]'
+              : 'bg-[#065F46] text-white border-[#6EE7B7]'
+          }`}
         >
-          {accessibleToast}
+          <span className="flex-1 text-left leading-snug">{accessibleToast}</span>
+          <button
+            type="button"
+            onClick={() => setAccessibleToast('')}
+            className="shrink-0 w-6 h-6 rounded-full bg-black/25 hover:bg-black/45 text-white text-[11px] font-bold flex items-center justify-center cursor-pointer"
+            aria-label="Close notification"
+          >
+            ✕
+          </button>
         </div>
       )}
 

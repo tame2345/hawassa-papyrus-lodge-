@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { Order, RoomBooking, Expense } from '../types';
 import { useLanguage } from '../context/LanguageContext';
 import { AppLang } from '../i18n/translations';
+import { getLocalTodayIso, normalizeRecordDateToIso } from '../utils/orderQueue';
 
 interface AdminRevenueReportsProps {
   orders: Order[];
@@ -57,6 +58,22 @@ export default function AdminRevenueReports({
   const [selectedMetric, setSelectedMetric] = useState<'all' | 'revenue' | 'expenses' | 'net'>('all');
   const [hoveredPoint, setHoveredPoint] = useState<number | null>(null);
 
+  const todayIso = getLocalTodayIso();
+  const currentMonthKey = todayIso.substring(0, 7);
+  const currentYearStr = todayIso.substring(0, 4);
+
+  // Determine active chart year dynamically (prefer current year if data exists, else latest record year)
+  const availableYears = Array.from(
+    new Set([
+      ...orders.map(x => normalizeRecordDateToIso(x.date).substring(0, 4)).filter(Boolean),
+      ...roomBookings.map(x => normalizeRecordDateToIso(x.checkInDate).substring(0, 4)).filter(Boolean),
+      ...expenses.map(x => normalizeRecordDateToIso(x.date).substring(0, 4)).filter(Boolean),
+    ])
+  ).sort((a, b) => b.localeCompare(a));
+  const chartYear = availableYears.includes(currentYearStr)
+    ? currentYearStr
+    : (availableYears[0] || currentYearStr);
+
   // Filter lists based on timeframe
   const getFilteredData = () => {
     let o = [...orders];
@@ -65,19 +82,18 @@ export default function AdminRevenueReports({
 
     if (activeTimeframe === 'q1') {
       const q1Months = ['01', '02', '03'];
-      o = o.filter(x => q1Months.includes((x.date || '').substring(5, 7)));
-      b = b.filter(x => q1Months.includes((x.checkInDate || '').substring(5, 7)));
-      e = e.filter(x => q1Months.includes((x.date || '').substring(5, 7)));
+      o = o.filter(x => q1Months.includes(normalizeRecordDateToIso(x.date).substring(5, 7)));
+      b = b.filter(x => q1Months.includes(normalizeRecordDateToIso(x.checkInDate).substring(5, 7)));
+      e = e.filter(x => q1Months.includes(normalizeRecordDateToIso(x.date).substring(5, 7)));
     } else if (activeTimeframe === 'q2') {
       const q2Months = ['04', '05', '06'];
-      o = o.filter(x => q2Months.includes((x.date || '').substring(5, 7)));
-      b = b.filter(x => q2Months.includes((x.checkInDate || '').substring(5, 7)));
-      e = e.filter(x => q2Months.includes((x.date || '').substring(5, 7)));
+      o = o.filter(x => q2Months.includes(normalizeRecordDateToIso(x.date).substring(5, 7)));
+      b = b.filter(x => q2Months.includes(normalizeRecordDateToIso(x.checkInDate).substring(5, 7)));
+      e = e.filter(x => q2Months.includes(normalizeRecordDateToIso(x.date).substring(5, 7)));
     } else if (activeTimeframe === 'this-month') {
-      const currentMonth = '06'; // Native template baseline is June (2026-06)
-      o = o.filter(x => (x.date || '').substring(5, 7) === currentMonth);
-      b = b.filter(x => (x.checkInDate || '').substring(5, 7) === currentMonth);
-      e = e.filter(x => (x.date || '').substring(5, 7) === currentMonth);
+      o = o.filter(x => normalizeRecordDateToIso(x.date).substring(0, 7) === currentMonthKey);
+      b = b.filter(x => normalizeRecordDateToIso(x.checkInDate).substring(0, 7) === currentMonthKey);
+      e = e.filter(x => normalizeRecordDateToIso(x.date).substring(0, 7) === currentMonthKey);
     }
 
     return { o, b, e };
@@ -93,15 +109,15 @@ export default function AdminRevenueReports({
   const netProfit = combinedRevenue - totalExpenseVal;
   const totalActivities = filteredO.length + filteredB.length;
 
-  // Compile monthly timeline stats for the SVG chart (using filtered range or full calendar)
+  // Compile monthly timeline stats for the SVG chart (using dynamic chartYear)
   const compileMonthlyStats = () => {
     const months = ['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12'];
 
     return months.map(num => {
-      const mKey = `2026-${num}`;
-      const mOrders = orders.filter(x => (x.date || '2026-06-07').substring(0, 7) === mKey);
-      const mBookings = roomBookings.filter(x => (x.checkInDate || '2026-06-07').substring(0, 7) === mKey);
-      const mExpenses = expenses.filter(x => (x.date || '2026-06-07').substring(0, 7) === mKey);
+      const mKey = `${chartYear}-${num}`;
+      const mOrders = orders.filter(x => normalizeRecordDateToIso(x.date).substring(0, 7) === mKey);
+      const mBookings = roomBookings.filter(x => normalizeRecordDateToIso(x.checkInDate).substring(0, 7) === mKey);
+      const mExpenses = expenses.filter(x => normalizeRecordDateToIso(x.date).substring(0, 7) === mKey);
 
       const oSales = mOrders.reduce((sum, ord) => sum + ord.total, 0);
       const rSales = mBookings.reduce((sum, bk) => sum + (bk.pricePerNight || 0), 0);
@@ -169,16 +185,18 @@ export default function AdminRevenueReports({
     return `${lineD} L ${lastPoint.x} ${svgHeight - paddingY} L ${firstPoint.x} ${svgHeight - paddingY} Z`;
   };
 
-  // Calculate percentages for Revenue Sources (Direct vs Bank)
+  // Calculate percentages for Revenue Sources (Cash vs Bank vs Chapa)
   const totalSalesFromO = filteredO.reduce((sum, ord) => sum + ord.total, 0);
   const cashPayments = filteredO.filter(x => x.payment === 'cash').reduce((sum, ord) => sum + ord.total, 0);
   const bankPayments = filteredO.filter(x => x.payment === 'bank').reduce((sum, ord) => sum + ord.total, 0);
+  const chapaPayments = filteredO.filter(x => x.payment === 'chapa').reduce((sum, ord) => sum + ord.total, 0);
 
-  const cashPct = totalSalesFromO > 0 ? Math.round((cashPayments / totalSalesFromO) * 100) : 40;
-  const bankPct = totalSalesFromO > 0 ? Math.round((bankPayments / totalSalesFromO) * 100) : 60;
-  
-  const roomSharePct = combinedRevenue > 0 ? Math.round((totalRoomSales / combinedRevenue) * 100) : 45;
-  const foodSharePct = combinedRevenue > 0 ? Math.round((totalOrderSales / combinedRevenue) * 100) : 55;
+  const cashPct = totalSalesFromO > 0 ? Math.round((cashPayments / totalSalesFromO) * 100) : 0;
+  const bankPct = totalSalesFromO > 0 ? Math.round((bankPayments / totalSalesFromO) * 100) : 0;
+  const chapaPct = totalSalesFromO > 0 ? Math.round((chapaPayments / totalSalesFromO) * 100) : 0;
+
+  const roomSharePct = combinedRevenue > 0 ? Math.round((totalRoomSales / combinedRevenue) * 100) : 0;
+  const foodSharePct = combinedRevenue > 0 ? Math.round((totalOrderSales / combinedRevenue) * 100) : 0;
 
   return (
     <div dir={isRtl ? 'rtl' : 'ltr'} className="space-y-6">
@@ -269,7 +287,7 @@ export default function AdminRevenueReports({
 
           <div className="hero-subglass border px-3.5 py-1.5 rounded-xl text-[10px] font-mono text-white flex items-center gap-2">
             <span>📅</span>
-            <span className="font-black text-[#f4c22b]">JUN 2025 - JUN 2026</span>
+            <span className="font-black text-[#f4c22b]">{chartYear} · {todayIso}</span>
           </div>
         </div>
       </div>
@@ -744,7 +762,7 @@ export default function AdminRevenueReports({
                   className="bg-black/90 border border-white/10 p-3 rounded-xl shadow-2xl z-20 min-w-[130px] font-mono text-[10px] space-y-1.5 text-left select-none pointer-events-none"
                 >
                   <p className="text-[#C1FF00] font-black uppercase text-center border-b border-white/10 pb-1 mb-1">
-                    🌙 {pData.label} 2026
+                    🌙 {pData.label} {chartYear}
                   </p>
                   <div className="flex justify-between items-center gap-4">
                     <span className="text-stone-400">
@@ -836,6 +854,17 @@ export default function AdminRevenueReports({
                 </div>
                 <div className="w-full h-2 bg-black rounded-full overflow-hidden">
                   <div className="h-full bg-gradient-to-r from-blue-600 to-sky-400" style={{ width: `${bankPct}%` }} />
+                </div>
+              </div>
+
+              {/* Source 2b: Chapa Online Payments */}
+              <div className="space-y-1">
+                <div className="flex justify-between items-center text-[10px] font-mono">
+                  <span className="text-stone-300 font-bold">⚡ {tText({ am: 'በቻፓ (Chapa)', or: 'Chapa', ti: 'ብቻፓ (Chapa)', sid: 'Chapa', en: 'Chapa Payments', fr: 'Chapa', de: 'Chapa', it: 'Chapa', zh: 'Chapa 支付', ar: 'تشابا' })}</span>
+                  <span className="text-purple-400 font-black">{chapaPct}% ({chapaPayments.toLocaleString()} {currency})</span>
+                </div>
+                <div className="w-full h-2 bg-black rounded-full overflow-hidden">
+                  <div className="h-full bg-gradient-to-r from-purple-600 to-fuchsia-400" style={{ width: `${chapaPct}%` }} />
                 </div>
               </div>
 
@@ -1453,9 +1482,9 @@ export default function AdminRevenueReports({
           {/* 1. DAILY VIEW */}
           {ledgerFilterTab === 'daily' && (() => {
             const allDatesSet = new Set<string>();
-            orders.forEach(x => allDatesSet.add(x.date || '2026-06-07'));
-            roomBookings.forEach(x => allDatesSet.add(x.checkInDate || '2026-06-07'));
-            expenses.forEach(x => allDatesSet.add(x.date || '2026-06-07'));
+            orders.forEach(x => allDatesSet.add(normalizeRecordDateToIso(x.date) || todayIso));
+            roomBookings.forEach(x => allDatesSet.add(normalizeRecordDateToIso(x.checkInDate) || todayIso));
+            expenses.forEach(x => allDatesSet.add(normalizeRecordDateToIso(x.date) || todayIso));
 
             const sortedDates = Array.from(allDatesSet).sort((a, b) => b.localeCompare(a));
 
@@ -1482,9 +1511,9 @@ export default function AdminRevenueReports({
               <div className="space-y-6">
                 {sortedDates.map(dateKey => {
                   const dayDetails = getAmharicDayOfDate(dateKey);
-                  const dailyOrders = orders.filter(x => (x.date || '2026-06-07') === dateKey);
-                  const dailyBookings = roomBookings.filter(x => (x.checkInDate || '2026-06-07') === dateKey);
-                  const dailyExpenses = expenses.filter(x => (x.date || '2026-06-07') === dateKey);
+                  const dailyOrders = orders.filter(x => (normalizeRecordDateToIso(x.date) || todayIso) === dateKey);
+                  const dailyBookings = roomBookings.filter(x => (normalizeRecordDateToIso(x.checkInDate) || todayIso) === dateKey);
+                  const dailyExpenses = expenses.filter(x => (normalizeRecordDateToIso(x.date) || todayIso) === dateKey);
 
                   const orderSum = dailyOrders.reduce((sum, ord) => sum + ord.total, 0);
                   const bookingSum = dailyBookings.reduce((sum, bk) => sum + (bk.pricePerNight || 0), 0);
@@ -1494,6 +1523,7 @@ export default function AdminRevenueReports({
 
                   const cashSum = dailyOrders.filter(x => x.payment === 'cash').reduce((sum, ord) => sum + ord.total, 0);
                   const bankSum = dailyOrders.filter(x => x.payment === 'bank').reduce((sum, ord) => sum + ord.total, 0);
+                  const chapaSum = dailyOrders.filter(x => x.payment === 'chapa').reduce((sum, ord) => sum + ord.total, 0);
 
                   return (
                     <div key={dateKey} className="bg-black/40 border border-white/5 rounded-2xl p-5 space-y-4">
@@ -1534,8 +1564,8 @@ export default function AdminRevenueReports({
                         </div>
                       </div>
 
-                      {/* Cash vs Bank */}
-                      <div className="grid grid-cols-2 gap-3 text-[9px] font-mono uppercase bg-white/2">
+                      {/* Cash vs Bank vs Chapa */}
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-[9px] font-mono uppercase bg-white/2">
                         <div className="bg-black/50 p-2 border border-white/5 rounded-lg flex justify-between items-center">
                           <span className="text-stone-400">
                             💵 {tText({ am: 'በጥሬ ገንዘብ', or: 'Maallaqa Callaa', ti: 'ብጥረ ገንዘብ', sid: 'Angaani', en: 'Cash Total', fr: 'Total Espèces', de: 'Bar Gesamt', it: 'Totale Contanti', zh: '现金总计', ar: 'إجمالي النقد' })}:
@@ -1547,6 +1577,12 @@ export default function AdminRevenueReports({
                             💳 {tText({ am: 'በባንክ የተላከ', or: 'Baankiidhaan', ti: 'ብባንኪ ዝተላእከ', sid: 'Baanketenni', en: 'Bank Total', fr: 'Total Banque', de: 'Bank Gesamt', it: 'Totale Banca', zh: '银行转账总计', ar: 'إجمالي التحويل البنكي' })}:
                           </span>
                           <span className="font-black text-[#C1FF00]">{bankSum.toLocaleString()} {currency}</span>
+                        </div>
+                        <div className="bg-black/50 p-2 border border-white/5 rounded-lg flex justify-between items-center">
+                          <span className="text-stone-400">
+                            ⚡ {tText({ am: 'በቻፓ (Chapa)', or: 'Chapa', ti: 'ብቻፓ (Chapa)', sid: 'Chapa', en: 'Chapa Total', fr: 'Total Chapa', de: 'Chapa Gesamt', it: 'Totale Chapa', zh: 'Chapa 总计', ar: 'إجمالي تشابا' })}:
+                          </span>
+                          <span className="font-black text-purple-300">{chapaSum.toLocaleString()} {currency}</span>
                         </div>
                       </div>
 
@@ -1595,6 +1631,10 @@ export default function AdminRevenueReports({
                                       {ord.payment === 'cash' ? (
                                         <span className="text-emerald-400 font-bold bg-emerald-950/20 px-1.5 py-0.5 border border-emerald-900/30 rounded text-[9px]">
                                           💵 {tText({ am: 'ጥሬ ገንዘብ', or: 'MAALLAQA', ti: 'ጥረ ገንዘብ', sid: 'ANGAANI', en: 'CASH', fr: 'ESPÈCES', de: 'BAR', it: 'CONTANTI', zh: '现金', ar: 'نقداً' })}
+                                        </span>
+                                      ) : ord.payment === 'chapa' ? (
+                                        <span className="text-purple-300 font-bold bg-purple-950/30 px-1.5 py-0.5 border border-purple-700/40 rounded text-[9px]">
+                                          ⚡ CHAPA
                                         </span>
                                       ) : (
                                         <div className="space-y-1">
@@ -1808,9 +1848,9 @@ export default function AdminRevenueReports({
           {/* 2. MONTHLY VIEW */}
           {ledgerFilterTab === 'monthly' && (() => {
             const allMonthsSet = new Set<string>();
-            orders.forEach(x => allMonthsSet.add((x.date || '2026-06-07').substring(0, 7)));
-            roomBookings.forEach(x => allMonthsSet.add((x.checkInDate || '2026-06-07').substring(0, 7)));
-            expenses.forEach(x => allMonthsSet.add((x.date || '2026-06-07').substring(0, 7)));
+            orders.forEach(x => allMonthsSet.add((normalizeRecordDateToIso(x.date) || todayIso).substring(0, 7)));
+            roomBookings.forEach(x => allMonthsSet.add((normalizeRecordDateToIso(x.checkInDate) || todayIso).substring(0, 7)));
+            expenses.forEach(x => allMonthsSet.add((normalizeRecordDateToIso(x.date) || todayIso).substring(0, 7)));
 
             const sortedMonths = Array.from(allMonthsSet).sort((a, b) => b.localeCompare(a));
 
@@ -1839,9 +1879,9 @@ export default function AdminRevenueReports({
                   const mParts = mKey.split('-');
                   const mName = MONTH_LABELS[mParts[1]]?.[appLang] || MONTH_LABELS[mParts[1]]?.en || mParts[1];
 
-                  const mOrders = orders.filter(x => (x.date || '2026-06-07').substring(0, 7) === mKey);
-                  const mBookings = roomBookings.filter(x => (x.checkInDate || '2026-06-07').substring(0, 7) === mKey);
-                  const mExpenses = expenses.filter(x => (x.date || '2026-06-07').substring(0, 7) === mKey);
+                  const mOrders = orders.filter(x => (normalizeRecordDateToIso(x.date) || todayIso).substring(0, 7) === mKey);
+                  const mBookings = roomBookings.filter(x => (normalizeRecordDateToIso(x.checkInDate) || todayIso).substring(0, 7) === mKey);
+                  const mExpenses = expenses.filter(x => (normalizeRecordDateToIso(x.date) || todayIso).substring(0, 7) === mKey);
 
                   const mOrderSales = mOrders.reduce((sum, ord) => sum + ord.total, 0);
                   const mBookingSales = mBookings.reduce((sum, bk) => sum + (bk.pricePerNight || 0), 0);
@@ -1902,7 +1942,7 @@ export default function AdminRevenueReports({
           {ledgerFilterTab === 'yearly' && (() => {
             const groupedByYear: { [key: string]: Order[] } = {};
             orders.forEach(ord => {
-              const d = ord.date || '2026-06-07';
+              const d = normalizeRecordDateToIso(ord.date) || todayIso;
               const y = d.substring(0, 4);
               if (!groupedByYear[y]) groupedByYear[y] = [];
               groupedByYear[y].push(ord);
@@ -1936,6 +1976,7 @@ export default function AdminRevenueReports({
                   const yTotal = yearOrders.reduce((sum, ord) => sum + ord.total, 0);
                   const yCash = yearOrders.filter(x => x.payment === 'cash').reduce((sum, ord) => sum + ord.total, 0);
                   const yBank = yearOrders.filter(x => x.payment === 'bank').reduce((sum, ord) => sum + ord.total, 0);
+                  const yChapa = yearOrders.filter(x => x.payment === 'chapa').reduce((sum, ord) => sum + ord.total, 0);
 
                   return (
                     <div key={yKey} className="bg-black/50 p-5 rounded-2xl border border-white/5 space-y-4">
@@ -1944,7 +1985,7 @@ export default function AdminRevenueReports({
                           🎄 {yKey} — {tText({ am: 'ዓመታዊ የሽያጭ ሪፖርት', or: 'Gabaasa Gurgurtaa Waggaa', ti: 'ዓመታዊ ጸብጻብ መሸጣ', sid: 'Diru Hirro Rippoorte', en: 'Yearly Report', fr: 'Rapport Annuel', de: 'Jahresbericht', it: 'Report Annuale', zh: '年度销售报告', ar: 'التقرير السنوي للمبيعات' })}
                         </h4>
                       </div>
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                         <div className="bg-white/5 p-3 border border-white/5 rounded-xl">
                           <span className="text-[9px] text-stone-400 block font-bold">{tText({ am: 'በእጅ የተቀበሉት (ጥሬ ገንዘብ)', or: 'GALII MAALLAQA CALLAA', ti: 'ብጥረ ገንዘብ ዝተኣከበ', sid: 'ANGAANNI EO', en: 'CASH REVENUE', fr: 'REVENUS ESPÈCES', de: 'BARUMSATZ', it: 'RICAVI CONTANTI', zh: '现金收入', ar: 'إيرادات النقد' })}</span>
                           <span className="font-bold text-white text-sm mt-1 block font-mono">{yCash.toLocaleString()} {currency}</span>
@@ -1952,6 +1993,10 @@ export default function AdminRevenueReports({
                         <div className="bg-white/5 p-3 border border-white/5 rounded-xl">
                           <span className="text-[9px] text-stone-400 block font-bold">{tText({ am: 'በባንክ የተቀበሉት', or: 'GALII BAANKII', ti: 'ብባንኪ ዝተኣከበ', sid: 'BAANKETENNI EO', en: 'BANK REVENUE', fr: 'REVENUS BANQUE', de: 'BANKUMSATZ', it: 'RICAVI BANCA', zh: '银行转账收入', ar: 'إيرادات البنك' })}</span>
                           <span className="font-bold text-white text-sm mt-1 block font-mono">{yBank.toLocaleString()} {currency}</span>
+                        </div>
+                        <div className="bg-white/5 p-3 border border-white/5 rounded-xl">
+                          <span className="text-[9px] text-purple-300 block font-bold">{tText({ am: 'በቻፓ (Chapa)', or: 'CHAPA', ti: 'ብቻፓ (Chapa)', sid: 'CHAPA', en: 'CHAPA REVENUE', fr: 'REVENUS CHAPA', de: 'CHAPA-UMSATZ', it: 'RICAVI CHAPA', zh: 'Chapa 收入', ar: 'إيرادات تشابا' })}</span>
+                          <span className="font-bold text-purple-200 text-sm mt-1 block font-mono">{yChapa.toLocaleString()} {currency}</span>
                         </div>
                         <div className="bg-[#C1FF00]/10 p-3 border border-[#C1FF00]/20 rounded-xl">
                           <span className="text-[9px] text-[#C1FF00]/70 block font-bold">{tText({ am: 'አጠቃላይ ዓመታዊ ሽያጭ', or: 'GURGURTAA WALIIGALAA WAGGAA', ti: 'ጠቕላላ ዓመታዊ መሸጣ', sid: 'XAPHOOMU DIRU HIRRO', en: 'ANNUAL REVENUES', fr: 'REVENUS ANNUELS', de: 'JAHRESUMSATZ', it: 'RICAVI ANNUALI', zh: '年度总销售额', ar: 'إجمالي الإيرادات السنوية' })}</span>
