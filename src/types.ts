@@ -17,7 +17,7 @@ export interface MenuItem {
   customizable?: boolean;
 }
 
-export type StaffRole = 'waiter' | 'chef' | 'admin' | 'manager' | 'receptionist' | string;
+export type StaffRole = 'waiter' | 'chef' | 'admin' | 'manager' | 'receptionist' | 'cashier' | 'guard' | 'delivery' | string;
 
 export interface StaffMember {
   name: string;
@@ -30,10 +30,37 @@ export interface StaffMember {
   info?: string;
   education?: string;
   certificatePhoto?: string;
-  accessPrivilege?: 'waiter' | 'chef' | 'admin' | 'manager' | 'receptionist' | 'cashier' | 'none' | string;
+  accessPrivilege?: 'waiter' | 'chef' | 'admin' | 'manager' | 'receptionist' | 'cashier' | 'guard' | 'delivery' | 'none' | string;
   username?: string;
   password?: string;
   securityAnswer?: string;
+  vehicleType?: string;
+  plateNumber?: string;
+  deliveryZone?: string;
+}
+
+export interface DeliveryDriverState {
+  staffName: string;
+  status: 'available' | 'on_delivery' | 'offline';
+  activeOrderId?: string;
+  completedTrips?: number;
+  lastReturnedAt?: string;
+  updatedAt?: number;
+}
+
+export interface DeliveryPartnerCompany {
+  id: string;
+  nameAm: string;
+  nameEn: string;
+  serviceType: 'Food & Express' | 'Moto Courier' | 'City & Lodge Logistics' | 'On-Demand Ride & Parcel' | string;
+  coverageCities: string;
+  phone: string;
+  whatsapp?: string;
+  webhookOrPortalUrl?: string;
+  baseFeeBirr: number;
+  commissionPercent: number;
+  active: boolean;
+  notes?: string;
 }
 
 export interface GuestIdDetail {
@@ -53,6 +80,9 @@ export interface RoomBooking {
   checkOutDate?: string;
   status: 'Active' | 'Checked Out' | string;
   pricePerNight?: number;
+  nights?: number;
+  paidAmount?: number;
+  paymentStatus?: 'Paid' | 'Pending' | 'Partial';
   notes?: string;
   receptionistName?: string;
   checkedOutByStaff?: string;
@@ -68,6 +98,7 @@ export interface BankAccount {
 export type OrderStatus = 'Pending' | 'Preparing' | 'Completed' | 'Paid' | 'Cancelled';
 export type OrderType = 'dine' | 'delivery';
 export type PaymentMethod = 'cash' | 'bank' | 'chapa';
+export type DeliveryTrackingStage = 'Waiting Driver' | 'Assigned' | 'Picked Up' | 'Arrived' | 'Delivered';
 
 export interface OrderItem {
   id: string;
@@ -100,6 +131,25 @@ export interface Order {
   orderType: OrderType;
   deliveryPhone?: string;
   deliveryAddress?: string;
+  deliveryDriverName?: string;
+  deliveryDriverPhone?: string;
+  deliveryVehicleInfo?: string;
+  deliveryStatus?: DeliveryTrackingStage;
+  deliveryPinCode?: string;
+  deliveryAssignedAt?: string;
+  deliveryPickedUpAt?: string;
+  deliveryArrivedAt?: string;
+  deliveryDeliveredAt?: string;
+  deliveryReturnedAt?: string;
+  deliveryProofPhoto?: string;
+  deliveryVerifiedByPin?: boolean;
+  deliveryCashCollected?: boolean;
+  deliveryMode?: 'internal' | 'partner';
+  deliveryPartnerId?: string;
+  deliveryPartnerName?: string;
+  deliveryPartnerPhone?: string;
+  deliveryPartnerTrackingCode?: string;
+  deliveryPartnerFee?: number;
   time: string;
   date?: string;
   createdAt?: number;
@@ -125,15 +175,76 @@ export interface AssistanceCall {
   location: string;
   time: string;
   active: boolean;
-  type?: 'call' | 'pickup' | 'new_order' | 'cash_request';
+  type?: 'call' | 'pickup' | 'new_order' | 'cash_request' | 'room_booking' | 'table_booking';
   message?: string;
   targetWaiter?: string;
-  targetRole?: 'waiter' | 'chef' | 'cashier' | 'manager' | 'admin' | 'support';
+  targetRole?: 'waiter' | 'chef' | 'cashier' | 'manager' | 'admin' | 'support' | 'delivery' | 'receptionist';
   reason?: string;
   handledBy?: string;
   orderId?: string;
   createdAt?: number;
   repeatCount?: number;
+}
+
+export interface OnlineRoomBooking {
+  id: string;
+  roomType: string;
+  preferredRoomNumber?: string;
+  assignedRoomNumber?: string;
+  checkInDate: string;
+  checkOutDate: string;
+  nights: number;
+  guestCount: number;
+  guestName: string;
+  guestPhone: string;
+  guestEmail?: string;
+  notes?: string;
+  pricePerNight: number;
+  totalAmount: number;
+  paymentMethod: 'pay_on_arrival' | 'bank' | 'chapa';
+  paymentStatus: 'Pending' | 'Paid';
+  bankId?: string;
+  bankRef?: string;
+  receiptScreenshot?: string;
+  status: 'Pending' | 'Confirmed' | 'Checked In' | 'Cancelled';
+  linkedBookingId?: string;
+  confirmedByStaff?: string;
+  time: string;
+  date: string;
+  createdAt: number;
+  updatedAt?: number;
+}
+
+export type TableSeatingZone = 'Main Dining' | 'Lakeview Terrace' | 'Garden Gazebo' | 'VIP Lounge';
+
+export interface OnlineTableReservation {
+  id: string;
+  guestName: string;
+  guestPhone: string;
+  partySize: number;
+  reservationDate: string;
+  reservationTime: string;
+  seatingZone: TableSeatingZone | string;
+  assignedTable?: string;
+  specialRequests?: string;
+  bookingMode: 'table_only' | 'table_and_food';
+  preOrderItems: OrderItem[];
+  preOrderSubtotal: number;
+  serviceCharge: number;
+  vat: number;
+  totalAmount: number;
+  paymentMethod: 'pay_on_arrival' | 'bank' | 'chapa';
+  paymentStatus: 'Pending' | 'Paid';
+  bankId?: string;
+  bankRef?: string;
+  receiptScreenshot?: string;
+  status: 'Pending' | 'Confirmed' | 'In Kitchen' | 'Seated' | 'Completed' | 'Cancelled';
+  linkedOrderId?: string;
+  confirmedByStaff?: string;
+  time: string;
+  date: string;
+  createdAt: number;
+  updatedAt?: number;
 }
 
 export interface LeadershipContacts {

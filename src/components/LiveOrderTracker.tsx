@@ -26,7 +26,15 @@ import {
   ArrowRight,
   ListOrdered,
   Sparkles,
+  Camera,
+  Upload,
+  Truck,
+  KeyRound,
+  ShieldCheck,
+  Phone,
+  MapPin,
 } from 'lucide-react';
+import { processAndUploadReceiptImage } from '../utils/imageUpload';
 import { useLanguage } from '../context/LanguageContext';
 
 interface LiveOrderTrackerProps {
@@ -35,6 +43,7 @@ interface LiveOrderTrackerProps {
   onClose?: () => void;
   orders: Order[];
   guestLocation: string;
+  guestPhone?: string;
   trackedOrderIds: string[];
   highlightedOrderId?: string | null;
   appLang: string;
@@ -50,6 +59,7 @@ interface LiveOrderTrackerProps {
     cashPayMode: 'cashier_desk' | 'waiter_or_delivery',
     tenderedAmount?: number
   ) => void;
+  onUploadOrderReceipt?: (orderId: string, receiptUrl: string, bankRef?: string) => void;
 }
 
 export default function LiveOrderTracker({
@@ -58,6 +68,7 @@ export default function LiveOrderTracker({
   onClose,
   orders,
   guestLocation,
+  guestPhone = '',
   trackedOrderIds,
   highlightedOrderId,
   appLang: _propAppLang,
@@ -69,11 +80,14 @@ export default function LiveOrderTracker({
   onOpenFullModal,
   onConfirmOrderReceived,
   onRequestCashierPayment,
+  onUploadOrderReceipt,
 }: LiveOrderTrackerProps) {
   const { t, tText, currency, isRtl } = useLanguage();
   const [lookupQuery, setLookupQuery] = useState('');
   const [showLiveBoard, setShowLiveBoard] = useState(mode === 'modal');
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [uploadingReceiptOrderId, setUploadingReceiptOrderId] = useState<string | null>(null);
+  const [receiptRefDrafts, setReceiptRefDrafts] = useState<Record<string, string>>({});
   const [lastUpdatedLabel, setLastUpdatedLabel] = useState(() =>
     new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
   );
@@ -148,17 +162,24 @@ export default function LiveOrderTracker({
       });
     }
 
-    // Default: orders matching guestLocation OR placed in this session/device (`trackedOrderIds`)
+    // Default: orders matching guestLocation OR guestPhone OR placed in this session/device (`trackedOrderIds`)
     // Keep Paid/Completed/Served orders visible so guest sees final Waiter Checked & Delivered step
+    const cleanPhone = guestPhone.replace(/\D/g, '');
     return orders.filter((o) => {
       const stage = getEffectiveCookingStatus(o);
       if (stage === 'Inactive') return false;
       const isHighlighted = highlightedOrderId && o.id === highlightedOrderId;
       const isTrackedId = trackedOrderIds.includes(o.id);
       const isSameLocation = cleanLoc !== '' && o.location.trim().toLowerCase() === cleanLoc;
-      return isTrackedId || isSameLocation || isHighlighted;
+      const orderPhoneDigits = (o.deliveryPhone || '').replace(/\D/g, '');
+      const isSamePhone =
+        o.orderType === 'delivery' &&
+        cleanPhone.length >= 6 &&
+        orderPhoneDigits.length >= 6 &&
+        (orderPhoneDigits === cleanPhone || orderPhoneDigits.endsWith(cleanPhone.slice(-8)));
+      return isTrackedId || isSameLocation || isSamePhone || isHighlighted;
     });
-  }, [orders, lookupQuery, guestLocation, trackedOrderIds, highlightedOrderId]);
+  }, [orders, lookupQuery, guestLocation, guestPhone, trackedOrderIds, highlightedOrderId]);
 
   const handleManualRefresh = async () => {
     if (!onRefresh) return;
@@ -709,6 +730,220 @@ export default function LiveOrderTracker({
             </div>
           )}
 
+          {/* Delivery Courier Live Tracking & Secret PIN Trust Card */}
+          {ord.orderType === 'delivery' && (() => {
+            const dStage = ord.deliveryStatus || 'Waiting Driver';
+            const dSteps = [
+              { id: 'Waiting Driver', label: tText({ am: 'አድራሽ በመጠበቅ', en: 'Waiting Driver', or: 'Geejjibaa Eeguu', ti: 'ኣብጻሒ ይጽበ', sid: 'Iillisha Agarre', fr: 'Attente livreur', de: 'Wartet', it: 'Attesa', zh: '待接单', ar: 'بانتظار السائق' }) },
+              { id: 'Assigned', label: tText({ am: 'ተመድቧል', en: 'Assigned', or: 'Ramadame', ti: 'ተመዲቡ', sid: 'Dooramino', fr: 'Assigné', de: 'Zugewiesen', it: 'Assegnato', zh: '已指派', ar: 'تم التعيين' }) },
+              { id: 'Picked Up', label: tText({ am: 'በመንገድ ላይ', en: 'On Way', or: 'Karaa Irra', ti: 'ኣብ መገዲ', sid: 'Doogote Aana', fr: 'En route', de: 'Unterwegs', it: 'In viaggio', zh: '配送中', ar: 'في الطريق' }) },
+              { id: 'Arrived', label: tText({ am: 'ደርሷል', en: 'Arrived', or: 'Gaheera', ti: 'በጺሑ', sid: 'Iillino', fr: 'Arrivé', de: 'Angekommen', it: 'Arrivato', zh: '已到达', ar: 'وصل' }) },
+              { id: 'Delivered', label: tText({ am: 'ተረክቧል ✓', en: 'Delivered ✓', or: 'Kenneera ✓', ti: 'ተረኪቡ ✓', sid: 'Aadhino ✓', fr: 'Livré ✓', de: 'Geliefert ✓', it: 'Consegnato ✓', zh: '已送达 ✓', ar: 'تم التسليم ✓' }) },
+            ];
+            const dRankMap: Record<string, number> = {
+              'Waiting Driver': 0,
+              Assigned: 1,
+              'Picked Up': 2,
+              Arrived: 3,
+              Delivered: 4,
+            };
+            const dIdx = dRankMap[dStage] ?? 0;
+
+            return (
+              <div className="bg-[#FFFDF9] border-2 border-[#f4c22b] rounded-2xl p-3.5 sm:p-4 space-y-3 text-stone-900">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <Truck className="w-4 h-4 text-[#b21f1f] shrink-0" />
+                    <span className="text-xs font-black text-[#b21f1f] uppercase tracking-wide">
+                      🛵 {tText({
+                        am: 'የዴሊቨሪ ጉዞ እና የእምነት ማረጋገጫ',
+                        en: 'Live Courier & Verified Handover',
+                        or: 'Hordoffii Deelivarii Kallattii',
+                        ti: 'ቀጥታ ክትትል ዴሊቨሪ',
+                        sid: 'Laayivi Iillishshu Harunsa',
+                        fr: 'Suivi Livreur & Remise Sécurisée',
+                        de: 'Live-Lieferverfolgung & PIN',
+                        it: 'Tracciamento Corriere & PIN',
+                        zh: '骑手实时配送与核验',
+                        ar: 'تتبع السائق والتسليم الموثق',
+                      })}
+                    </span>
+                  </div>
+                  <span className="text-[10px] font-mono font-black bg-[#b21f1f] text-white px-2.5 py-0.5 rounded-full">
+                    {dStage}
+                  </span>
+                </div>
+
+                {/* 5-step delivery bar */}
+                <div className="grid grid-cols-5 gap-1">
+                  {dSteps.map((st, idx) => {
+                    const reached = dIdx >= idx;
+                    const active = dIdx === idx && dStage !== 'Delivered';
+                    return (
+                      <div key={st.id} className="space-y-1">
+                        <div className={`h-1.5 rounded-full ${reached ? (dStage === 'Delivered' ? 'bg-emerald-600' : 'bg-[#b21f1f]') : 'bg-stone-200'} ${active ? 'animate-pulse' : ''}`} />
+                        <span className={`block text-[9px] text-center font-bold truncate ${reached ? 'text-stone-900' : 'text-stone-400'}`}>
+                          {st.label}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Secret Handover PIN + Assigned Driver Details */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  {ord.deliveryPinCode && (
+                    <div className="bg-[#7A1212] text-white rounded-xl p-3 border border-[#F4C22B] flex items-center justify-between gap-2">
+                      <div className="space-y-0.5">
+                        <span className="text-[9px] font-mono uppercase text-[#F4C22B] font-black flex items-center gap-1">
+                          <KeyRound className="w-3 h-3" />
+                          {tText({
+                            am: 'ሚስጥራዊ የርክክብ ኮድ (PIN)',
+                            en: 'YOUR SECRET HANDOVER PIN',
+                            or: 'KOODII PIN RAAKKABII',
+                            ti: 'ሚስጥራዊ PIN መረከቢ',
+                            sid: 'MAXXAARE PIN KOODE',
+                            fr: 'CODE PIN DE REMISE',
+                            de: 'ÜBERGABE-PIN',
+                            it: 'PIN DI CONSEGNA',
+                            zh: '交付验证码 (PIN)',
+                            ar: 'رمز التسليم السري',
+                          })}
+                        </span>
+                        <span className="text-[10px] text-white/85 block leading-tight">
+                          {tText({
+                            am: 'ምግቡ ሲደርስ ለአድራሹ ብቻ ይስጡ',
+                            en: 'Give to driver ONLY on arrival',
+                            or: 'Yeroo gahu qofa geejjibsiisaaf laadhaa',
+                            ti: 'ምስ በጽሐ ጥራይ ንኣብጻሒ ሃቡ',
+                            sid: 'Iilliro calla uyitto',
+                            fr: 'À donner au livreur à l’arrivée',
+                            de: 'Erst bei Ankunft nennen',
+                            it: 'Condividi solo all’arrivo',
+                            zh: '仅在收餐时向骑手出示',
+                            ar: 'أعطه للسائق عند الوصول فقط',
+                          })}
+                        </span>
+                      </div>
+                      <span className="font-mono text-2xl font-black tracking-widest text-[#F4C22B] bg-black/35 px-3 py-1 rounded-lg border border-[#F4C22B]/50 tabular-nums">
+                        {ord.deliveryPinCode}
+                      </span>
+                    </div>
+                  )}
+
+                  <div className="bg-white border border-stone-200 rounded-xl p-3 flex flex-col justify-between gap-1 text-xs">
+                    {ord.deliveryMode === 'partner' && ord.deliveryPartnerName ? (
+                      <>
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-black text-sky-900">🤝 {ord.deliveryPartnerName}</span>
+                          {ord.deliveryPartnerPhone && (
+                            <a
+                              href={`tel:${ord.deliveryPartnerPhone}`}
+                              className="inline-flex items-center gap-1 bg-sky-50 hover:bg-sky-100 text-sky-900 border border-sky-200 px-2 py-0.5 rounded-lg text-[10px] font-mono font-black"
+                            >
+                              <Phone className="w-3 h-3" /> {ord.deliveryPartnerPhone}
+                            </a>
+                          )}
+                        </div>
+                        <span className="text-[10px] font-mono text-stone-600">
+                          Ethiopian Partner Dispatch · Code:{' '}
+                          <strong className="text-[#b21f1f]">{ord.deliveryPartnerTrackingCode || ord.id}</strong>
+                          {typeof ord.deliveryPartnerFee === 'number' ? ` · Fee: ${ord.deliveryPartnerFee} ${currency}` : ''}
+                        </span>
+                      </>
+                    ) : ord.deliveryDriverName ? (
+                      <>
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-black text-stone-900">🛵 {ord.deliveryDriverName}</span>
+                          {ord.deliveryDriverPhone && (
+                            <a
+                              href={`tel:${ord.deliveryDriverPhone}`}
+                              className="inline-flex items-center gap-1 bg-sky-50 hover:bg-sky-100 text-sky-900 border border-sky-200 px-2 py-0.5 rounded-lg text-[10px] font-mono font-black"
+                            >
+                              <Phone className="w-3 h-3" /> {ord.deliveryDriverPhone}
+                            </a>
+                          )}
+                        </div>
+                        <span className="text-[10px] font-mono text-stone-600">
+                          {ord.deliveryVehicleInfo || 'Hawassa Papyrus Courier'}
+                        </span>
+                      </>
+                    ) : (
+                      <div className="text-[11px] font-semibold text-stone-600 flex items-center gap-1.5">
+                        <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                        <span>
+                          {tText({
+                            am: 'ዝግጁ የሆነ የዴሊቨሪ ሰራተኛ በመመደብ ላይ ነው...',
+                            en: 'Assigning an available Papyrus courier...',
+                            or: 'Geejjibsiisaa qophaa’aa ramadaa jira...',
+                            ti: 'ድሉው ኣብጻሒ ይምደብ ኣሎ...',
+                            sid: 'Iillishanchu dooramanni no...',
+                            fr: 'Attribution d’un livreur disponible...',
+                            de: 'Kurier wird zugewiesen...',
+                            it: 'Assegnazione fattorino in corso...',
+                            zh: '正在指派空闲骑手...',
+                            ar: 'جاري تعيين سائق توصيل متاح...',
+                          })}
+                        </span>
+                      </div>
+                    )}
+                    {ord.deliveryAddress && (
+                      <span className="text-[10px] text-stone-500 flex items-center gap-1 truncate">
+                        <MapPin className="w-3 h-3 shrink-0 text-[#b21f1f]" /> {ord.deliveryAddress}
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Proof of Delivery & Organization Trust Badge */}
+                {dStage === 'Delivered' && (
+                  <div className="bg-emerald-50 border border-emerald-300 rounded-xl p-3 flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      {ord.deliveryProofPhoto && (
+                        <img
+                          src={ord.deliveryProofPhoto}
+                          alt="Proof of delivery"
+                          className="w-12 h-12 rounded-lg object-cover border border-emerald-400 shrink-0"
+                          referrerPolicy="no-referrer"
+                        />
+                      )}
+                      <div className="text-xs min-w-0">
+                        <p className="font-black text-emerald-900 flex items-center gap-1">
+                          <ShieldCheck className="w-4 h-4 shrink-0" />
+                          {tText({
+                            am: '✓ በPIN እና በፎቶ ተረጋግጦ ደርሷል!',
+                            en: '✓ Delivered & Verified by PIN & Photo!',
+                            or: '✓ PIN fi Suuraan Mirkanaa’ee Gahe!',
+                            ti: '✓ ብPINን ስእልን ተረጋጊጹ በጺሑ!',
+                            sid: '✓ PIN-nna Suurunni Buuxame Iillino!',
+                            fr: '✓ Livré et vérifié par PIN & photo !',
+                            de: '✓ Geliefert & per PIN + Foto bestätigt!',
+                            it: '✓ Consegnato e verificato con PIN e foto!',
+                            zh: '✓ 已通过 PIN 码与拍照双重核验送达！',
+                            ar: '✓ تم التوصيل والتحقق بالرمز والصورة!',
+                          })}
+                        </p>
+                        <p className="text-[10px] font-mono text-emerald-800">
+                          {ord.deliveryDeliveredAt ? `Time: ${ord.deliveryDeliveredAt}` : ''}
+                          {ord.deliveryReturnedAt ? ` · Courier returned to lodge (${ord.deliveryReturnedAt})` : ''}
+                        </p>
+                      </div>
+                    </div>
+                    {!ord.customerConfirmedReceipt && onConfirmOrderReceived && (
+                      <button
+                        type="button"
+                        onClick={() => onConfirmOrderReceived(ord.id)}
+                        className="bg-emerald-700 hover:bg-emerald-800 text-white font-black text-xs px-3.5 py-2 rounded-xl shadow-sm cursor-pointer"
+                      >
+                        ✅ ደርሶኛል (Confirm Received)
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
           {/* Expandable Order Items & Edit/Cancel */}
           <AnimatePresence initial={false}>
             {isExpanded && (
@@ -897,6 +1132,176 @@ export default function LiveOrderTracker({
                                 ar: '💵 طلب الدفع نقداً في الصندوق',
                               })}
                         </button>
+                      </div>
+                    )}
+
+                    {/* Customer Receipt Screenshot Upload / Camera Proof for Cashier Verification */}
+                    {onUploadOrderReceipt && (
+                      <div className="pt-2.5 mt-1 border-t border-stone-200/80 space-y-2">
+                        <div className="flex flex-wrap items-center justify-between gap-1.5">
+                          <span className="text-[11px] font-black text-stone-800">
+                            📸 {tText({
+                              am: 'የክፍያ ደረሰኝ ፎቶ ለካሸር ማረጋገጫ ይላኩ',
+                              en: 'Upload Receipt Screenshot for Cashier Verification',
+                              or: 'Suuraa Nagahee Kaffaltii Kaasheeraaf Ergi',
+                              ti: 'ስእሊ ደረሰኝ ክፍሊት ንካሸር መረጋገጺ ስደድ',
+                              sid: 'Rasiitete Suura Kaasheeraho Buuxote Soyi',
+                              fr: 'Envoyer la capture du reçu pour vérification en caisse',
+                              de: 'Beleg-Screenshot zur Kassenprüfung hochladen',
+                              it: 'Carica screenshot ricevuta per verifica in cassa',
+                              zh: '上传付款凭证截图供收银台核验',
+                              ar: 'ارفع صورة إيصال الدفع للتحقق من الكاشير',
+                            })}
+                          </span>
+                          {ord.receiptScreenshot && (
+                            <span className="text-[10px] font-mono font-black bg-emerald-700 text-white px-2 py-0.5 rounded-md">
+                              ✓ {tText({
+                                am: 'ተልኳል',
+                                en: 'Receipt Attached',
+                                or: 'Ergameera',
+                                ti: 'ተላኢኹ',
+                                sid: 'Soyinoonni',
+                                fr: 'Reçu joint',
+                                de: 'Angehängt',
+                                it: 'Allegata',
+                                zh: '已上传',
+                                ar: 'تم الإرفاق',
+                              })}
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="flex flex-col sm:flex-row gap-2">
+                          <input
+                            type="text"
+                            value={receiptRefDrafts[ord.id] ?? ord.bankRef ?? ''}
+                            onChange={(e) =>
+                              setReceiptRefDrafts((prev) => ({ ...prev, [ord.id]: e.target.value }))
+                            }
+                            placeholder={tText({
+                              am: 'Ref / የደረሰኝ ቁጥር (ከተፈለገ)...',
+                              en: 'Transaction / Receipt Ref (optional)...',
+                              or: 'Lakkoofsa Ref (yoo jiraate)...',
+                              ti: 'ቁጽሪ Ref (ኣማራጺ)...',
+                              sid: 'Ref Kiiro (hasiisiro)...',
+                              fr: 'Référence (optionnel)...',
+                              de: 'Referenznummer (optional)...',
+                              it: 'Riferimento (opzionale)...',
+                              zh: '交易参考号（可选）...',
+                              ar: 'رقم المرجع (اختياري)...',
+                            })}
+                            className="flex-1 bg-white border border-stone-300 text-stone-900 font-mono text-xs px-2.5 py-2 rounded-xl outline-none focus:border-emerald-600"
+                          />
+
+                          <div className="grid grid-cols-2 gap-2 shrink-0">
+                            <label className="bg-[#b21f1f] hover:bg-[#8c1414] text-white text-[11px] font-black px-3 py-2 rounded-xl cursor-pointer flex items-center justify-center gap-1.5 transition-colors shadow-xs">
+                              <Camera className="w-3.5 h-3.5 shrink-0" />
+                              <span>
+                                {uploadingReceiptOrderId === ord.id
+                                  ? '...'
+                                  : tText({
+                                      am: 'ካሜራ',
+                                      en: 'Camera',
+                                      or: 'Kaameraa',
+                                      ti: 'ካሜራ',
+                                      sid: 'Kaameera',
+                                      fr: 'Caméra',
+                                      de: 'Kamera',
+                                      it: 'Fotocamera',
+                                      zh: '拍照',
+                                      ar: 'كاميرا',
+                                    })}
+                              </span>
+                              <input
+                                type="file"
+                                accept="image/*"
+                                capture="environment"
+                                disabled={uploadingReceiptOrderId === ord.id}
+                                onChange={async (e) => {
+                                  const file = e.target.files?.[0];
+                                  if (!file) return;
+                                  setUploadingReceiptOrderId(ord.id);
+                                  try {
+                                    const processedUrl = await processAndUploadReceiptImage(file);
+                                    onUploadOrderReceipt(ord.id, processedUrl, receiptRefDrafts[ord.id]?.trim() || undefined);
+                                  } finally {
+                                    setUploadingReceiptOrderId(null);
+                                    e.target.value = '';
+                                  }
+                                }}
+                                className="hidden"
+                              />
+                            </label>
+
+                            <label className="bg-white hover:bg-stone-100 text-stone-800 border border-stone-300 text-[11px] font-black px-3 py-2 rounded-xl cursor-pointer flex items-center justify-center gap-1.5 transition-colors">
+                              <Upload className="w-3.5 h-3.5 shrink-0" />
+                              <span>
+                                {uploadingReceiptOrderId === ord.id
+                                  ? '...'
+                                  : tText({
+                                      am: 'ፎቶ ጫን',
+                                      en: 'Upload',
+                                      or: 'Fe’i',
+                                      ti: 'ጽዓን',
+                                      sid: 'Fea',
+                                      fr: 'Importer',
+                                      de: 'Hochladen',
+                                      it: 'Carica',
+                                      zh: '上传',
+                                      ar: 'رفع',
+                                    })}
+                              </span>
+                              <input
+                                type="file"
+                                accept="image/*"
+                                disabled={uploadingReceiptOrderId === ord.id}
+                                onChange={async (e) => {
+                                  const file = e.target.files?.[0];
+                                  if (!file) return;
+                                  setUploadingReceiptOrderId(ord.id);
+                                  try {
+                                    const processedUrl = await processAndUploadReceiptImage(file);
+                                    onUploadOrderReceipt(ord.id, processedUrl, receiptRefDrafts[ord.id]?.trim() || undefined);
+                                  } finally {
+                                    setUploadingReceiptOrderId(null);
+                                    e.target.value = '';
+                                  }
+                                }}
+                                className="hidden"
+                              />
+                            </label>
+                          </div>
+                        </div>
+
+                        {ord.receiptScreenshot && (
+                          <div className="bg-white border border-emerald-200 rounded-xl p-2 flex items-center gap-3">
+                            <img
+                              src={ord.receiptScreenshot}
+                              alt="Uploaded receipt proof"
+                              className="w-16 h-16 object-cover rounded-lg border border-stone-200 shrink-0"
+                              referrerPolicy="no-referrer"
+                            />
+                            <div className="text-[11px] text-stone-700 space-y-0.5 min-w-0">
+                              <p className="font-black text-emerald-800">
+                                {tText({
+                                  am: '🖼️ የደረሰኝ ፎቶ ለካሸር ማረጋገጫ ቀርቧል',
+                                  en: '🖼️ Receipt screenshot submitted for Cashier verification',
+                                  or: '🖼️ Suuraan nagahee kaasheeraaf dhiyaateera',
+                                  ti: '🖼️ ስእሊ ደረሰኝ ንካሸር መረጋገጺ ቀሪቡ',
+                                  sid: '🖼️ Rasiitete suuri kaasheeraho shiqino',
+                                  fr: '🖼️ Capture transmise au caissier pour vérification',
+                                  de: '🖼️ Beleg an die Kasse zur Prüfung übermittelt',
+                                  it: '🖼️ Screenshot inviato alla cassa per la verifica',
+                                  zh: '🖼️ 收据截图已提交至收银台等待核验',
+                                  ar: '🖼️ تم إرسال صورة الإيصال إلى الكاشير للتحقق',
+                                })}
+                              </p>
+                              {ord.bankRef && (
+                                <p className="font-mono text-[10px] text-stone-500 truncate">Ref: {ord.bankRef}</p>
+                              )}
+                            </div>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>

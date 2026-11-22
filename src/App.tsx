@@ -10,7 +10,7 @@ import {
   Bell, ShoppingCart, CheckCircle2, Printer, Share2, LogOut, 
   MapPin, Sparkles, Phone, Map, RefreshCw, AlertCircle, Unlock, 
   Lock, Send, Check, Heart, ExternalLink, Shield, Facebook, Instagram, Youtube, Globe,
-  Search, ArrowRight, ArrowLeft, Eye, EyeOff, KeyRound, ShoppingBag, Menu, X, Volume2, VolumeX, Mic, MicOff, Loader2
+  Search, ArrowRight, ArrowLeft, Eye, EyeOff, KeyRound, ShoppingBag, Menu, X, Volume2, VolumeX, Mic, MicOff, Loader2, Camera, Upload, Truck
 } from 'lucide-react';
 import {
   PapyrusChefClocheCrest,
@@ -21,8 +21,8 @@ import {
   PapyrusCardCulinaryAccents,
 } from './components/PapyrusEntryDecor';
 
-import { MenuItem, StaffMember, BankAccount, Order, OrderStatus, OrderType, PaymentMethod, OrderItem, AssistanceCall, Feedback, PromoBanner, AttendanceRecord, BonusRecord, RoomBooking, Expense, VisitorLog, LeadershipContacts, LeadershipMessage, ShiftAssignment, StockAlertLogEntry, StockAlertSettings, QrPrintLogEntry } from './types';
-import { INITIAL_MENU_ITEMS, INITIAL_STAFF, INITIAL_BANKS, PROMO_BANNERS } from './data';
+import { MenuItem, StaffMember, BankAccount, Order, OrderStatus, OrderType, PaymentMethod, OrderItem, AssistanceCall, Feedback, PromoBanner, AttendanceRecord, BonusRecord, RoomBooking, Expense, VisitorLog, LeadershipContacts, LeadershipMessage, ShiftAssignment, StockAlertLogEntry, StockAlertSettings, QrPrintLogEntry, DeliveryDriverState, DeliveryPartnerCompany, OnlineRoomBooking, OnlineTableReservation } from './types';
+import { INITIAL_MENU_ITEMS, INITIAL_STAFF, INITIAL_BANKS, PROMO_BANNERS, DEFAULT_ETHIOPIAN_DELIVERY_PARTNERS } from './data';
 
 import SidebarRail from './components/SidebarRail';
 import FooterTicker from './components/FooterTicker';
@@ -37,10 +37,15 @@ import { GuestConciergeModal } from './components/GuestConciergeModal';
 import { LeadershipInboxPanel } from './components/LeadershipInboxPanel';
 import ShiftManagementModule from './components/ShiftManagementModule';
 import ManagerStockAlertPanel from './components/ManagerStockAlertPanel';
+import ManagerDeliveryPanel from './components/ManagerDeliveryPanel';
+import DeliveryDriverPortal from './components/DeliveryDriverPortal';
+import OnlineBookingModal from './components/OnlineBookingModal';
+import StaffOnlineBookingsPanel from './components/StaffOnlineBookingsPanel';
 import HeroDemo from './components/ui/demo';
 import AdminRevenueReports from './components/AdminRevenueReports';
 import MenuAudioAccessibilityBar from './components/MenuAudioAccessibilityBar';
 import { SupabaseLogin } from './components/SupabaseLogin';
+import { compressImageFile, processAndUploadReceiptImage, uploadCompressedImageSmart } from './utils/imageUpload';
 import { useLanguage } from './context/LanguageContext';
 import { LanguageSelector } from './components/LanguageSelector';
 import {
@@ -120,6 +125,23 @@ const sanitizeLogoUrl = (url: string | null | undefined): string => {
     return DEFAULT_LOGO;
   }
   return url;
+};
+
+const DEFAULT_BUILTIN_ROLES = ['waiter', 'chef', 'delivery', 'admin', 'manager', 'receptionist', 'cashier', 'guard'];
+
+const mergeBuiltInRoles = (incoming: unknown, includeNone = false): string[] => {
+  const base = includeNone ? [...DEFAULT_BUILTIN_ROLES, 'none'] : [...DEFAULT_BUILTIN_ROLES];
+  if (!Array.isArray(incoming)) return base;
+  const seen = new Set<string>();
+  const ordered: string[] = [];
+  for (const r of [...base, ...incoming.map((x) => String(x || '').trim().toLowerCase())]) {
+    if (!r || seen.has(r)) continue;
+    if (includeNone && r === 'none') continue;
+    seen.add(r);
+    ordered.push(r);
+  }
+  if (includeNone) ordered.push('none');
+  return ordered;
 };
 
 const FALLBACK_GALLERY_ITEMS = [
@@ -204,6 +226,7 @@ export default function App() {
         else if (s.role === 'waiter') updated.username = 'waiter';
         else if (s.role === 'cashier') updated.username = 'cashier';
         else if (s.role === 'receptionist') updated.username = 'receptionist';
+        else if (s.role === 'delivery') updated.username = 'delivery';
         else if (s.role === 'guard') updated.username = 'guard';
         else updated.username = s.name.toLowerCase().replace(/\s+/g, '_');
       }
@@ -237,10 +260,16 @@ export default function App() {
   const [cashierPosBankRef, setCashierPosBankRef] = useState('');
   const [cashierLastPosOrder, setCashierLastPosOrder] = useState<Order | null>(null);
   const [cashierSearchQuery, setCashierSearchQuery] = useState('');
-  const [cashierBillFilter, setCashierBillFilter] = useState<'all' | 'cash_requests' | 'cash' | 'bank' | 'chapa'>('all');
+  const [cashierBillFilter, setCashierBillFilter] = useState<'all' | 'cash_requests' | 'cash' | 'bank' | 'chapa' | 'with_receipt'>('all');
   const [cashierActiveSettleOrderId, setCashierActiveSettleOrderId] = useState<string | null>(null);
   const [cashierSettleTenderedInput, setCashierSettleTenderedInput] = useState('');
   const [cashierReceiptPreviewUrl, setCashierReceiptPreviewUrl] = useState<string | null>(null);
+  const [cashierReceiptPreviewOrder, setCashierReceiptPreviewOrder] = useState<Order | null>(null);
+  const [cashierCompletedReceiptOnly, setCashierCompletedReceiptOnly] = useState<boolean>(false);
+  const [cashierUploadingOrderId, setCashierUploadingOrderId] = useState<string | null>(null);
+  const [cashierSettleReceiptUrl, setCashierSettleReceiptUrl] = useState<string>('');
+  const [cashierPosReceiptUrl, setCashierPosReceiptUrl] = useState<string>('');
+  const [cashierUploadingPosReceipt, setCashierUploadingPosReceipt] = useState<boolean>(false);
   const [cashierStartingFloat, setCashierStartingFloat] = useState<number>(() => {
     try {
       const saved = localStorage.getItem('papyrus_cashier_float');
@@ -325,6 +354,8 @@ export default function App() {
       orderType: 'delivery',
       deliveryPhone: '0912345678',
       deliveryAddress: 'Lakeside Main Rd',
+      deliveryStatus: 'Waiting Driver',
+      deliveryPinCode: '4829',
       time: '11:22',
       date: '2026-06-07'
     }
@@ -425,6 +456,81 @@ export default function App() {
     }, 350);
   };
 
+  const stripLargeDataUrisForCache = (val: any): any => {
+    if (typeof val === 'string') {
+      if (val.startsWith('data:image/') && val.length > 24000) return '';
+      return val;
+    }
+    if (Array.isArray(val)) return val.map(stripLargeDataUrisForCache);
+    if (val && typeof val === 'object') {
+      const out: Record<string, any> = {};
+      for (const [k, v] of Object.entries(val)) {
+        out[k] = stripLargeDataUrisForCache(v);
+      }
+      return out;
+    }
+    return val;
+  };
+
+  const writeSafeLocalCache = (key: string, value: any) => {
+    try {
+      if (localStorage.getItem('papyrus_cache_enabled') === 'false') return;
+      const fullCache = JSON.parse(localStorage.getItem('papyrus_settings_cache') || '{}');
+      fullCache[key] = value;
+      try {
+        localStorage.setItem('papyrus_settings_cache', JSON.stringify(fullCache));
+        localStorage.setItem('papyrus_cache_last_sync', new Date().toISOString());
+      } catch {
+        const preservedImageKeys = new Set(['logoUrl', 'menu', 'promos', 'delivery_partner_companies']);
+        const compacted: Record<string, any> = {};
+        for (const [ck, cv] of Object.entries(fullCache)) {
+          compacted[ck] = preservedImageKeys.has(ck) ? cv : stripLargeDataUrisForCache(cv);
+        }
+        try {
+          localStorage.setItem('papyrus_settings_cache', JSON.stringify(compacted));
+          localStorage.setItem('papyrus_cache_last_sync', new Date().toISOString());
+        } catch {
+          // Quota full even after stripping secondary data URIs; trim large historical logs but keep menu, logo & partners intact
+          const minimal: Record<string, any> = {};
+          for (const keepKey of ['logoUrl', 'menu', 'staff', 'custom_roles', 'custom_privileges', 'banks', 'categories', 'delivery_partner_companies']) {
+            if (fullCache[keepKey] !== undefined) minimal[keepKey] = fullCache[keepKey];
+          }
+          if (Array.isArray(compacted.orders?.list)) {
+            minimal.orders = { list: compacted.orders.list.slice(0, 60) };
+          }
+          try {
+            localStorage.setItem('papyrus_settings_cache', JSON.stringify(minimal));
+          } catch {}
+        }
+      }
+    } catch (e) {
+      console.warn('Error writing local cache:', e);
+    }
+  };
+
+  const writeBulkSafeLocalCache = (settingsObj: Record<string, any>) => {
+    try {
+      if (localStorage.getItem('papyrus_cache_enabled') === 'false') return;
+      try {
+        localStorage.setItem('papyrus_settings_cache', JSON.stringify(settingsObj));
+        localStorage.setItem('papyrus_cache_last_sync', new Date().toISOString());
+      } catch {
+        const preservedImageKeys = new Set(['logoUrl', 'menu', 'promos', 'delivery_partner_companies']);
+        const compacted: Record<string, any> = {};
+        for (const [ck, cv] of Object.entries(settingsObj)) {
+          compacted[ck] = preservedImageKeys.has(ck) ? cv : stripLargeDataUrisForCache(cv);
+        }
+        if (Array.isArray(compacted.orders?.list) && compacted.orders.list.length > 100) {
+          compacted.orders = { list: compacted.orders.list.slice(0, 100) };
+        }
+        try {
+          localStorage.setItem('papyrus_settings_cache', JSON.stringify(compacted));
+          localStorage.setItem('papyrus_cache_last_sync', new Date().toISOString());
+        } catch {}
+      }
+    } catch {}
+  };
+
   // Sync state helper with explicit error checking + instant cross-tab broadcast
   const syncKeyToCloud = async (key: string, value: any) => {
     const isEchoFromRemote = Boolean(remoteSyncSkipRef.current[key]);
@@ -432,17 +538,8 @@ export default function App() {
       remoteSyncSkipRef.current[key] = false;
     }
 
-    // Write to local cache first if enabled, for instant UI responsiveness
-    try {
-      if (localStorage.getItem('papyrus_cache_enabled') !== 'false') {
-        const fullCache = JSON.parse(localStorage.getItem('papyrus_settings_cache') || '{}');
-        fullCache[key] = value;
-        localStorage.setItem('papyrus_settings_cache', JSON.stringify(fullCache));
-        localStorage.setItem('papyrus_cache_last_sync', new Date().toISOString());
-      }
-    } catch (e) {
-      console.warn('Error writing local cache:', e);
-    }
+    // Write to local cache first if enabled, using quota-safe writer
+    writeSafeLocalCache(key, value);
 
     if (isEchoFromRemote) return;
 
@@ -472,7 +569,7 @@ export default function App() {
 
   // APP STATES
   const [adjustingOrder, setAdjustingOrder] = useState<Order | null>(null);
-  const [activeRole, setActiveRole] = useState<'entry' | 'customer' | 'waiter' | 'chef' | 'admin' | 'manager' | 'receptionist' | 'cashier' | 'guard' | 'shader_demo' | 'vault'>(() => {
+  const [activeRole, setActiveRole] = useState<string>(() => {
     try {
       const stored = sessionStorage.getItem('supabase_bypassed_current_user');
       if (stored) {
@@ -500,8 +597,11 @@ export default function App() {
   });
   const [activeAdminTab, setActiveAdminTab] = useState<'sales' | 'staff_audit' | 'staff' | 'menu' | 'banks' | 'qrprint' | 'promo' | 'lodgeinfo' | 'reception' | 'branding' | 'gallery' | 'table_assignment' | 'leadership'>('sales');
   const [ledgerFilterTab, setLedgerFilterTab] = useState<'daily' | 'monthly' | 'yearly'>('daily');
-  const [managerTab, setManagerTab] = useState<'bono' | 'attendance' | 'sales_review' | 'vault' | 'menu_availability' | 'table_assignment' | 'leadership' | 'cleaner' | 'cache'>('bono');
+  const [managerTab, setManagerTab] = useState<'bono' | 'attendance' | 'sales_review' | 'vault' | 'menu_availability' | 'table_assignment' | 'delivery' | 'online_bookings' | 'leadership' | 'cleaner' | 'cache'>('bono');
   const [conciergeModalTab, setConciergeModalTab] = useState<'waiter' | 'leadership' | null>(null);
+  const [onlineBookingModalTab, setOnlineBookingModalTab] = useState<'room' | 'table_food' | 'my_bookings' | null>(null);
+  const [onlineRoomBookings, setOnlineRoomBookings] = useState<OnlineRoomBooking[]>([]);
+  const [onlineTableReservations, setOnlineTableReservations] = useState<OnlineTableReservation[]>([]);
   const [leadershipContacts, setLeadershipContacts] = useState<LeadershipContacts>({
     managerName: 'ኪያ ማሞ (Manager)',
     managerPhone: '+251 919 629 347',
@@ -535,6 +635,22 @@ export default function App() {
   const [managerWaiterCallLocation, setManagerWaiterCallLocation] = useState('Table 01');
   const [managerWaiterCallNote, setManagerWaiterCallNote] = useState('');
   const [managerWaiterCallFeedback, setManagerWaiterCallFeedback] = useState<string | null>(null);
+  const [deliveryDriverStates, setDeliveryDriverStates] = useState<DeliveryDriverState[]>([
+    { staffName: 'ብሩክ ታደሰ (Delivery)', status: 'available', completedTrips: 0, updatedAt: Date.now() },
+  ]);
+  const [deliveryPartners, setDeliveryPartners] = useState<DeliveryPartnerCompany[]>(DEFAULT_ETHIOPIAN_DELIVERY_PARTNERS);
+  const [isUploadingMedia, setIsUploadingMedia] = useState<boolean>(false);
+  const [managerReceiptPreviewUrl, setManagerReceiptPreviewUrl] = useState<string | null>(null);
+  const [managerReceiptPreviewOrder, setManagerReceiptPreviewOrder] = useState<Order | null>(null);
+  const [managerLedgerDate, setManagerLedgerDate] = useState<string>(() => getLocalTodayIso());
+  const [managerLedgerAllDates, setManagerLedgerAllDates] = useState<boolean>(false);
+  const [managerLedgerSearch, setManagerLedgerSearch] = useState<string>('');
+  const [managerAttSearch, setManagerAttSearch] = useState<string>('');
+  const [managerAttRoleFilter, setManagerAttRoleFilter] = useState<string>('all');
+  const [managerExpTitle, setManagerExpTitle] = useState<string>('');
+  const [managerExpAmount, setManagerExpAmount] = useState<string>('');
+  const [managerExpCategory, setManagerExpCategory] = useState<string>('ማቴሪያል ግዢ (Kitchen Supply)');
+  const [managerExpNotes, setManagerExpNotes] = useState<string>('');
   const [isCacheEnabled, setIsCacheEnabled] = useState<boolean>(() => {
     try {
       return localStorage.getItem('papyrus_cache_enabled') !== 'false';
@@ -549,9 +665,13 @@ export default function App() {
   // RECEPTION / BEDROOM BOOKINGS STATE
   const [bookingGuestCount, setBookingGuestCount] = useState<number>(1);
   const [guestIdsState, setGuestIdsState] = useState<{ fullName: string, idNumber: string, idPhotoUrl?: string }[]>([{ fullName: '', idNumber: '', idPhotoUrl: '' }]);
+  const [receptionSearch, setReceptionSearch] = useState<string>('');
+  const [receptionFilterStatus, setReceptionFilterStatus] = useState<'Active' | 'Checked Out' | 'all'>('Active');
+  const [receptionPreviewIdPhoto, setReceptionPreviewIdPhoto] = useState<{ url: string; guestName: string; roomNumber: string } | null>(null);
+  const [receptionRoomDraft, setReceptionRoomDraft] = useState<string>('');
   
   // MODALS
-  const [loginModalRole, setLoginModalRole] = useState<'waiter' | 'chef' | 'admin' | 'manager' | 'receptionist' | 'cashier' | 'guard' | ''>('');
+  const [loginModalRole, setLoginModalRole] = useState<string>('');
   const [isCartOpen, setIsCartOpen] = useState(false);
 
   // GUARD PORTAL STATE VARIABLES
@@ -582,7 +702,7 @@ export default function App() {
   const [staffAuditEndDate, setStaffAuditEndDate] = useState<string>(() => new Date().toLocaleDateString('en-CA'));
 
   // UNIFIED PORTAL LOGIN STATE
-  const [unifiedRole, setUnifiedRole] = useState<'waiter' | 'chef' | 'admin' | 'manager' | 'receptionist' | 'cashier' | 'guard'>('waiter');
+  const [unifiedRole, setUnifiedRole] = useState<string>('waiter');
   const [unifiedUsername, setUnifiedUsername] = useState('');
   const [unifiedPassword, setUnifiedPassword] = useState('');
   const [unifiedPin, setUnifiedPin] = useState('');
@@ -598,7 +718,7 @@ export default function App() {
   const [signupPassword, setSignupPassword] = useState('');
   const [signupConfirmPassword, setSignupConfirmPassword] = useState('');
   const [signupPin, setSignupPin] = useState('');
-  const [signupRole, setSignupRole] = useState<'waiter' | 'chef' | 'receptionist' | 'cashier' | 'guard' | 'manager' | 'admin'>('waiter');
+  const [signupRole, setSignupRole] = useState<string>('waiter');
   const [signupSecurityAnswer, setSignupSecurityAnswer] = useState('');
   const [signupSuccessMessage, setSignupSuccessMessage] = useState('');
   const [showSignupPassword, setShowSignupPassword] = useState(false);
@@ -2069,7 +2189,68 @@ export default function App() {
     );
   };
 
-  const handleCashierConfirmCashPayment = (orderId: string, tenderedAmountInput?: string): Order | null => {
+  const handleGuestUploadOrderReceipt = (orderId: string, receiptUrl: string, bankRef?: string) => {
+    const targetOrder = orders.find((o) => o.id === orderId);
+    if (!targetOrder) return;
+
+    const nowMs = Date.now();
+    const timeNow = new Date(nowMs).toLocaleTimeString('en-US', {
+      hour12: false,
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+
+    setOrders((prev) =>
+      prev.map((o) =>
+        o.id === orderId
+          ? {
+              ...o,
+              receiptScreenshot: receiptUrl,
+              bankRef: bankRef || o.bankRef,
+              cashRequestedAt: o.cashRequestedAt || timeNow,
+              updatedAt: nowMs,
+            }
+          : o
+      )
+    );
+
+    addAssistanceCall({
+      id: `cashreq-proof-${orderId.replace('#', '')}-${nowMs}`,
+      orderId,
+      location: targetOrder.location,
+      time: timeNow,
+      active: true,
+      type: 'cash_request',
+      targetRole: 'cashier',
+      reason: 'Customer Receipt Screenshot Uploaded',
+      createdAt: nowMs,
+      message: `🖼️ የደረሰኝ ፎቶ ማረጋገጫ ደርሷል ${orderId} (${targetOrder.location}) — ${targetOrder.total} ${currency}${
+        bankRef ? ` · Ref: ${bankRef}` : ''
+      }`,
+    });
+
+    showAppToast(
+      tText({
+        am: `🖼️ የደረሰኝ ፎቶ ለካሸር (${orderId}) በተሳካ ሁኔታ ተልኳል!`,
+        en: `🖼️ Receipt screenshot uploaded & sent to Cashier for ${orderId} verification!`,
+        or: `🖼️ Suuraan nagahee (${orderId}) mirkaneessuuf gara kaasheeraatti ergameera!`,
+        ti: `🖼️ ስእሊ ደረሰኝ ንካሸር (${orderId}) ብዓወት ተላኢኹ!`,
+        sid: `🖼️ Rasiitete suuri (${orderId}) kaasheeraho soyinoonni!`,
+        fr: `🖼️ Capture du reçu envoyée au caissier pour vérification (${orderId}) !`,
+        de: `🖼️ Beleg-Screenshot an die Kasse gesendet (${orderId})!`,
+        it: `🖼️ Screenshot ricevuta inviato alla cassa per verifica (${orderId})!`,
+        zh: `🖼️ 收据截图已成功发送至收银台（${orderId}）等待核验！`,
+        ar: `🖼️ تم رفع صورة الإيصال وإرسالها للكاشير للتحقق (${orderId})!`,
+      }),
+      4500
+    );
+  };
+
+  const handleCashierConfirmCashPayment = (
+    orderId: string,
+    tenderedAmountInput?: string,
+    receiptPhotoUrl?: string
+  ): Order | null => {
     const targetOrder = orders.find((o) => o.id === orderId);
     if (!targetOrder) return null;
 
@@ -2108,12 +2289,14 @@ export default function App() {
     const finalTendered = parsedTender ?? billTotal;
     const finalChange = Math.max(0, finalTendered - billTotal);
     const cashierActor = currentUser?.name || 'Cashier';
+    const pairedReceiptUrl = (receiptPhotoUrl || '').trim() || targetOrder.receiptScreenshot;
 
     const updatedOrder: Order = {
       ...targetOrder,
       total: billTotal,
       status: 'Paid',
       paymentVerified: true,
+      receiptScreenshot: pairedReceiptUrl,
       cashPaymentRequested: targetOrder.cashPaymentRequested ?? (targetOrder.payment === 'cash'),
       cashTenderedAmount: finalTendered,
       cashChangeAmount: finalChange,
@@ -2126,11 +2309,12 @@ export default function App() {
     resolveOrderAssistanceCalls(orderId, cashierActor, ['cash_request']);
     setCashierActiveSettleOrderId(null);
     setCashierSettleTenderedInput('');
+    setCashierSettleReceiptUrl('');
     playVoiceAlert(`Cash payment of ${billTotal} ${currency} confirmed for ${targetOrder.location}.`);
     showAppToast(
       `💵 ክፍያ ተረጋግጧል! ${orderId} (${targetOrder.location}) — ${billTotal} ${currency}${
         finalChange > 0 ? ` · መልስ/Change: ${finalChange} ${currency}` : ''
-      }`,
+      }${pairedReceiptUrl ? ' · 🖼️ ደረሰኝ ተያይዟል' : ''}`,
       5000
     );
     return updatedOrder;
@@ -2246,8 +2430,44 @@ export default function App() {
   useEffect(() => { setReceptionAssistanceEnInput(receptionAssistanceEn); }, [receptionAssistanceEn]);
   useEffect(() => { setReceptionEmergencyInput(receptionEmergency); }, [receptionEmergency]);
 
-  // CUSTOMIZER STATES
+  // CUSTOMIZER & INTEGRATED CUSTOMER DELIVERY STATES
   const [guestLocation, setGuestLocation] = useState('Room 101');
+  const [customerOrderMode, setCustomerOrderMode] = useState<OrderType>(() => {
+    try {
+      return localStorage.getItem('papyrus_customer_order_mode') === 'delivery' ? 'delivery' : 'dine';
+    } catch {
+      return 'dine';
+    }
+  });
+  const [customerDeliveryPhone, setCustomerDeliveryPhone] = useState<string>(() => {
+    try {
+      return localStorage.getItem('papyrus_customer_delivery_phone') || '';
+    } catch {
+      return '';
+    }
+  });
+  const [customerDeliveryAddress, setCustomerDeliveryAddress] = useState<string>(() => {
+    try {
+      return localStorage.getItem('papyrus_customer_delivery_address') || '';
+    } catch {
+      return '';
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem('papyrus_customer_order_mode', customerOrderMode);
+    } catch {}
+  }, [customerOrderMode]);
+  useEffect(() => {
+    try {
+      localStorage.setItem('papyrus_customer_delivery_phone', customerDeliveryPhone);
+    } catch {}
+  }, [customerDeliveryPhone]);
+  useEffect(() => {
+    try {
+      localStorage.setItem('papyrus_customer_delivery_address', customerDeliveryAddress);
+    } catch {}
+  }, [customerDeliveryAddress]);
   const [customModifiers, setCustomModifiers] = useState<{ [key: string]: { qaria: string; injera: string; dabo: number; qty: number; customInstructions: string; mayo?: boolean; kocho?: boolean } }>({});
   const [expandedOrders, setExpandedOrders] = useState<{[key: string]: boolean}>({});
   const [isLiveTrackerOpen, setIsLiveTrackerOpen] = useState(false);
@@ -2271,7 +2491,14 @@ export default function App() {
 
   const handleRefreshLiveOrders = async () => {
     try {
-      const [{ data: ordersRes, error: ordersErr }, { data: callsRes, error: callsErr }] = await Promise.all([
+      const [
+        { data: ordersRes, error: ordersErr },
+        { data: callsRes, error: callsErr },
+        { data: driversRes, error: driversErr },
+        { data: partnersRes, error: partnersErr },
+        { data: onlineRoomsRes, error: onlineRoomsErr },
+        { data: onlineTablesRes, error: onlineTablesErr },
+      ] = await Promise.all([
         supabase
           .from('system_settings')
           .select('value')
@@ -2282,12 +2509,48 @@ export default function App() {
           .select('value')
           .eq('key', 'assistanceCalls')
           .maybeSingle(),
+        supabase
+          .from('system_settings')
+          .select('value')
+          .eq('key', 'delivery_driver_states')
+          .maybeSingle(),
+        supabase
+          .from('system_settings')
+          .select('value')
+          .eq('key', 'delivery_partner_companies')
+          .maybeSingle(),
+        supabase
+          .from('system_settings')
+          .select('value')
+          .eq('key', 'online_room_bookings')
+          .maybeSingle(),
+        supabase
+          .from('system_settings')
+          .select('value')
+          .eq('key', 'online_table_reservations')
+          .maybeSingle(),
       ]);
       if (!ordersErr && ordersRes?.value && Array.isArray(ordersRes.value.list)) {
         applyRemoteOrders(ordersRes.value.list);
       }
       if (!callsErr && callsRes?.value && Array.isArray(callsRes.value.list)) {
         applyRemoteAssistanceCalls(callsRes.value.list);
+      }
+      if (!driversErr && driversRes?.value && Array.isArray(driversRes.value.list)) {
+        remoteSyncSkipRef.current['delivery_driver_states'] = true;
+        setDeliveryDriverStates(driversRes.value.list);
+      }
+      if (!partnersErr && partnersRes?.value && Array.isArray(partnersRes.value.list)) {
+        remoteSyncSkipRef.current['delivery_partner_companies'] = true;
+        setDeliveryPartners(partnersRes.value.list);
+      }
+      if (!onlineRoomsErr && onlineRoomsRes?.value && Array.isArray(onlineRoomsRes.value.list)) {
+        remoteSyncSkipRef.current['online_room_bookings'] = true;
+        setOnlineRoomBookings(onlineRoomsRes.value.list);
+      }
+      if (!onlineTablesErr && onlineTablesRes?.value && Array.isArray(onlineTablesRes.value.list)) {
+        remoteSyncSkipRef.current['online_table_reservations'] = true;
+        setOnlineTableReservations(onlineTablesRes.value.list);
       }
     } catch (err) {
       console.warn('Live orders refresh failed:', err);
@@ -2313,45 +2576,18 @@ export default function App() {
 
   const processFileWithCompression = (file: File, callback: (url: string) => void) => {
     if (file.type.startsWith('image/')) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const img = new Image();
-        img.onload = () => {
-          // Downscale to max dimensions of 600px for storage friendliness
-          const maxDimension = 600;
-          let width = img.width;
-          let height = img.height;
-          if (width > maxDimension || height > maxDimension) {
-            if (width > height) {
-              height = Math.round((height * maxDimension) / width);
-              width = maxDimension;
-            } else {
-              width = Math.round((width * maxDimension) / height);
-              height = maxDimension;
+      compressImageFile(file, 720)
+        .then((compressed) => callback(compressed))
+        .catch(() => {
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            if (typeof reader.result === 'string') {
+              callback(reader.result);
             }
-          }
-
-          const canvas = document.createElement('canvas');
-          canvas.width = width;
-          canvas.height = height;
-          const ctx = canvas.getContext('2d');
-          if (ctx) {
-            ctx.drawImage(img, 0, 0, width, height);
-            // High compression quality (0.7) produces extremely lightweight image (15KB - 40KB)
-            const compressedBase64 = canvas.toDataURL('image/jpeg', 0.7);
-            callback(compressedBase64);
-          } else {
-            callback(reader.result as string);
-          }
-        };
-        img.onerror = () => {
-          callback(reader.result as string);
-        };
-        img.src = reader.result as string;
-      };
-      reader.readAsDataURL(file);
+          };
+          reader.readAsDataURL(file);
+        });
     } else {
-      // Non-image files or fallback
       const reader = new FileReader();
       reader.onloadend = () => {
         if (typeof reader.result === 'string') {
@@ -2363,8 +2599,34 @@ export default function App() {
   };
 
   const readMediaFile = async (e: React.ChangeEvent<HTMLInputElement>, callback: (url: string) => void) => {
-    const file = e.target.files?.[0];
+    const inputEl = e.target;
+    const file = inputEl.files?.[0];
     if (!file) return;
+
+    if (file.type.startsWith('image/')) {
+      setIsUploadingMedia(true);
+      try {
+        const { url, storageMode } = await uploadCompressedImageSmart(file, 'menu', 720);
+        callback(url);
+        if (storageMode === 'cloud') {
+          showAppToast('☁️ ምስሉ በቋሚነት ወደ Cloud Storage ተቀምጧል — UPDATE / SAVE ይጫኑ!');
+        } else {
+          showAppToast('🖼️ ምስሉ ተጭኗል — ለማስቀመጥ SAVE / UPDATE ይጫኑ!');
+        }
+      } catch (err) {
+        console.warn('Smart image upload failed, using compressed fallback:', err);
+        processFileWithCompression(file, (base64) => {
+          callback(base64);
+          showAppToast('🖼️ ምስሉ ተጭኗል — ለማስቀመጥ SAVE / UPDATE ይጫኑ!');
+        });
+      } finally {
+        setIsUploadingMedia(false);
+        try {
+          inputEl.value = '';
+        } catch {}
+      }
+      return;
+    }
 
     const sanitizeFileName = (name: string): string => {
       const dotIndex = name.lastIndexOf('.');
@@ -2379,55 +2641,25 @@ export default function App() {
     };
 
     const cleanName = sanitizeFileName(file.name);
-    let folder = 'images';
-    if (file.type.startsWith('video/')) {
-      folder = 'videos';
-    } else if (file.type.startsWith('audio/')) {
-      folder = 'audio';
-    }
-
+    const folder = file.type.startsWith('video/') ? 'videos' : file.type.startsWith('audio/') ? 'audio' : 'images';
     const fileName = `${folder}/${Date.now()}_${cleanName}`;
 
     try {
-      console.log(`Uploading ${file.name} to Supabase Storage path: ${fileName}...`);
-      
-      // Proactively try to create the 'lodge-media' bucket if it doesn't exist
-      try {
-        await supabase.storage.createBucket('lodge-media', { public: true });
-      } catch (bucketErr) {
-        console.log("Storage bucket check/creation note:", bucketErr);
-      }
-      
-      const { data, error } = await supabase.storage
+      const { error } = await supabase.storage
         .from('lodge-media')
-        .upload(fileName, file, {
-          cacheControl: '3600',
-          upsert: true
-        });
-
+        .upload(fileName, file, { cacheControl: '31536000', upsert: true });
       if (error) {
-        console.warn("Storage upload failed, falling back to compressed local base64:", error);
-        processFileWithCompression(file, (base64) => {
-          callback(base64);
-        });
+        processFileWithCompression(file, callback);
         return;
       }
-
-      const { data: { publicUrl } } = supabase.storage
-        .from('lodge-media')
-        .getPublicUrl(fileName);
-
-      if (!publicUrl) {
-        throw new Error("Could not retrieve public URL for uploaded file.");
-      }
-
-      console.log("Uploaded successfully. Public URL:", publicUrl);
+      const { data: { publicUrl } } = supabase.storage.from('lodge-media').getPublicUrl(fileName);
       callback(publicUrl);
-    } catch (err: any) {
-      console.warn("Storage upload exception, falling back to compressed local base64:", err);
-      processFileWithCompression(file, (base64) => {
-        callback(base64);
-      });
+    } catch {
+      processFileWithCompression(file, callback);
+    } finally {
+      try {
+        inputEl.value = '';
+      } catch {}
     }
   };
 
@@ -2503,8 +2735,8 @@ export default function App() {
               if (cachedData.chapa.active !== undefined) setChapaActive(cachedData.chapa.active);
               if (cachedData.chapa.mode !== undefined) setChapaMode(cachedData.chapa.mode);
             }
-            if (Array.isArray(cachedData.custom_roles?.list)) setCustomRoles(cachedData.custom_roles.list);
-            if (Array.isArray(cachedData.custom_privileges?.list)) setCustomPrivileges(cachedData.custom_privileges.list);
+            if (Array.isArray(cachedData.custom_roles?.list)) setCustomRoles(mergeBuiltInRoles(cachedData.custom_roles.list, false));
+            if (Array.isArray(cachedData.custom_privileges?.list)) setCustomPrivileges(mergeBuiltInRoles(cachedData.custom_privileges.list, true));
             if (Array.isArray(cachedData.pending_attendance?.list)) setPendingAttendanceRequests(cachedData.pending_attendance.list);
             if (cachedData.leadership_contacts) setLeadershipContacts((prev) => ({ ...prev, ...cachedData.leadership_contacts }));
             if (Array.isArray(cachedData.leadership_messages?.list)) setLeadershipMessages(cachedData.leadership_messages.list);
@@ -2513,6 +2745,10 @@ export default function App() {
               if (cachedData.stock_alerts.settings) setStockAlertSettings((prev) => ({ ...prev, ...cachedData.stock_alerts.settings }));
             }
             if (Array.isArray(cachedData.qr_print_logs?.list)) setQrPrintLogs(cachedData.qr_print_logs.list);
+            if (Array.isArray(cachedData.delivery_driver_states?.list)) setDeliveryDriverStates(cachedData.delivery_driver_states.list);
+            if (Array.isArray(cachedData.delivery_partner_companies?.list)) setDeliveryPartners(cachedData.delivery_partner_companies.list);
+            if (Array.isArray(cachedData.online_room_bookings?.list)) setOnlineRoomBookings(cachedData.online_room_bookings.list);
+            if (Array.isArray(cachedData.online_table_reservations?.list)) setOnlineTableReservations(cachedData.online_table_reservations.list);
             if (cachedData.hero_title_am?.text !== undefined) setHeroTitleAm(cachedData.hero_title_am.text);
             if (cachedData.hero_title_en?.text !== undefined) setHeroTitleEn(cachedData.hero_title_en.text);
             if (cachedData.hero_subtitle_am?.text !== undefined) setHeroSubtitleAm(cachedData.hero_subtitle_am.text);
@@ -2563,20 +2799,11 @@ export default function App() {
         }
       };
 
-      // Wrapper to fetch key and save to local cache
+      // Wrapper to fetch key and save to local cache (quota-safe)
       const fetchKeyAndCache = async (key: string) => {
         const val = await fetchKey(key);
         if (val !== null) {
-          try {
-            if (localStorage.getItem('papyrus_cache_enabled') !== 'false') {
-              const currentCache = JSON.parse(localStorage.getItem('papyrus_settings_cache') || '{}');
-              currentCache[key] = val;
-              localStorage.setItem('papyrus_settings_cache', JSON.stringify(currentCache));
-              localStorage.setItem('papyrus_cache_last_sync', new Date().toISOString());
-            }
-          } catch (e) {
-            console.warn('Cache write error:', e);
-          }
+          writeSafeLocalCache(key, val);
         }
         return val;
       };
@@ -2625,8 +2852,8 @@ export default function App() {
                 if (s.chapa.mode !== undefined) setChapaMode(s.chapa.mode);
               }
               if (Array.isArray(boot.gallery)) setGalleryItems(boot.gallery);
-              if (s.custom_roles && Array.isArray(s.custom_roles.list)) setCustomRoles(s.custom_roles.list);
-              if (s.custom_privileges && Array.isArray(s.custom_privileges.list)) setCustomPrivileges(s.custom_privileges.list);
+              if (s.custom_roles && Array.isArray(s.custom_roles.list)) setCustomRoles(mergeBuiltInRoles(s.custom_roles.list, false));
+              if (s.custom_privileges && Array.isArray(s.custom_privileges.list)) setCustomPrivileges(mergeBuiltInRoles(s.custom_privileges.list, true));
               if (s.pending_attendance && Array.isArray(s.pending_attendance.list)) setPendingAttendanceRequests(s.pending_attendance.list);
               if (s.leadership_contacts) setLeadershipContacts((prev) => ({ ...prev, ...s.leadership_contacts }));
               if (s.leadership_messages && Array.isArray(s.leadership_messages.list)) setLeadershipMessages(s.leadership_messages.list);
@@ -2635,6 +2862,10 @@ export default function App() {
                 if (s.stock_alerts.settings) setStockAlertSettings((prev) => ({ ...prev, ...s.stock_alerts.settings }));
               }
               if (s.qr_print_logs && Array.isArray(s.qr_print_logs.list)) setQrPrintLogs(s.qr_print_logs.list);
+              if (s.delivery_driver_states && Array.isArray(s.delivery_driver_states.list)) setDeliveryDriverStates(s.delivery_driver_states.list);
+              if (s.delivery_partner_companies && Array.isArray(s.delivery_partner_companies.list)) setDeliveryPartners(s.delivery_partner_companies.list);
+              if (s.online_room_bookings && Array.isArray(s.online_room_bookings.list)) setOnlineRoomBookings(s.online_room_bookings.list);
+              if (s.online_table_reservations && Array.isArray(s.online_table_reservations.list)) setOnlineTableReservations(s.online_table_reservations.list);
               if (s.hero_title_am?.text !== undefined) setHeroTitleAm(s.hero_title_am.text);
               if (s.hero_title_en?.text !== undefined) setHeroTitleEn(s.hero_title_en.text);
               if (s.hero_subtitle_am?.text !== undefined) setHeroSubtitleAm(s.hero_subtitle_am.text);
@@ -2655,12 +2886,7 @@ export default function App() {
               if (s.reception_assistance_en?.text !== undefined) setReceptionAssistanceEn(s.reception_assistance_en.text);
               if (s.reception_emergency?.text !== undefined) setReceptionEmergency(s.reception_emergency.text);
 
-              try {
-                if (localStorage.getItem('papyrus_cache_enabled') !== 'false') {
-                  localStorage.setItem('papyrus_settings_cache', JSON.stringify(s));
-                  localStorage.setItem('papyrus_cache_last_sync', new Date().toISOString());
-                }
-              } catch {}
+              writeBulkSafeLocalCache(s);
 
               cloudHydratedAtRef.current = Date.now();
               setHasLoadedCloudSettings(true);
@@ -2778,10 +3004,10 @@ export default function App() {
 
         // 23. Fetch custom roles, privileges, and pending attendance from system_settings
         const customRolesVal = await fetchKeyAndCache('custom_roles');
-        if (customRolesVal && Array.isArray(customRolesVal.list)) setCustomRoles(customRolesVal.list);
+        if (customRolesVal && Array.isArray(customRolesVal.list)) setCustomRoles(mergeBuiltInRoles(customRolesVal.list, false));
 
         const customPrivsVal = await fetchKeyAndCache('custom_privileges');
-        if (customPrivsVal && Array.isArray(customPrivsVal.list)) setCustomPrivileges(customPrivsVal.list);
+        if (customPrivsVal && Array.isArray(customPrivsVal.list)) setCustomPrivileges(mergeBuiltInRoles(customPrivsVal.list, true));
 
         const pendingAttVal = await fetchKeyAndCache('pending_attendance');
         if (pendingAttVal && Array.isArray(pendingAttVal.list)) setPendingAttendanceRequests(pendingAttVal.list);
@@ -2800,6 +3026,18 @@ export default function App() {
 
         const qrPrintVal = await fetchKeyAndCache('qr_print_logs');
         if (qrPrintVal && Array.isArray(qrPrintVal.list)) setQrPrintLogs(qrPrintVal.list);
+
+        const deliveryDriversVal = await fetchKeyAndCache('delivery_driver_states');
+        if (deliveryDriversVal && Array.isArray(deliveryDriversVal.list)) setDeliveryDriverStates(deliveryDriversVal.list);
+
+        const deliveryPartnersVal = await fetchKeyAndCache('delivery_partner_companies');
+        if (deliveryPartnersVal && Array.isArray(deliveryPartnersVal.list)) setDeliveryPartners(deliveryPartnersVal.list);
+
+        const onlineRoomsVal = await fetchKeyAndCache('online_room_bookings');
+        if (onlineRoomsVal && Array.isArray(onlineRoomsVal.list)) setOnlineRoomBookings(onlineRoomsVal.list);
+
+        const onlineTablesVal = await fetchKeyAndCache('online_table_reservations');
+        if (onlineTablesVal && Array.isArray(onlineTablesVal.list)) setOnlineTableReservations(onlineTablesVal.list);
 
         // Load Hero Title & Contact values
         const hta = await fetchKeyAndCache('hero_title_am');
@@ -2940,10 +3178,10 @@ export default function App() {
                 if (val.mode !== undefined) setChapaMode(val.mode);
                 break;
               case 'custom_roles':
-                if (Array.isArray(val.list)) setCustomRoles(val.list);
+                if (Array.isArray(val.list)) setCustomRoles(mergeBuiltInRoles(val.list, false));
                 break;
               case 'custom_privileges':
-                if (Array.isArray(val.list)) setCustomPrivileges(val.list);
+                if (Array.isArray(val.list)) setCustomPrivileges(mergeBuiltInRoles(val.list, true));
                 break;
               case 'pending_attendance':
                 if (Array.isArray(val.list)) setPendingAttendanceRequests(val.list);
@@ -2960,6 +3198,18 @@ export default function App() {
                 break;
               case 'qr_print_logs':
                 if (Array.isArray(val.list)) setQrPrintLogs(val.list);
+                break;
+              case 'delivery_driver_states':
+                if (Array.isArray(val.list)) setDeliveryDriverStates(val.list);
+                break;
+              case 'delivery_partner_companies':
+                if (Array.isArray(val.list)) setDeliveryPartners(val.list);
+                break;
+              case 'online_room_bookings':
+                if (Array.isArray(val.list)) setOnlineRoomBookings(val.list);
+                break;
+              case 'online_table_reservations':
+                if (Array.isArray(val.list)) setOnlineTableReservations(val.list);
                 break;
               case 'hero_title_am':
                 if (val.text !== undefined) setHeroTitleAm(val.text);
@@ -3085,6 +3335,24 @@ export default function App() {
       } else if (key === 'menu' && Array.isArray(val.items)) {
         remoteSyncSkipRef.current['menu'] = true;
         setMenuItems(val.items);
+      } else if (key === 'delivery_driver_states' && Array.isArray(val.list)) {
+        remoteSyncSkipRef.current['delivery_driver_states'] = true;
+        setDeliveryDriverStates(val.list);
+      } else if (key === 'delivery_partner_companies' && Array.isArray(val.list)) {
+        remoteSyncSkipRef.current['delivery_partner_companies'] = true;
+        setDeliveryPartners(val.list);
+      } else if (key === 'online_room_bookings' && Array.isArray(val.list)) {
+        remoteSyncSkipRef.current['online_room_bookings'] = true;
+        setOnlineRoomBookings(val.list);
+      } else if (key === 'online_table_reservations' && Array.isArray(val.list)) {
+        remoteSyncSkipRef.current['online_table_reservations'] = true;
+        setOnlineTableReservations(val.list);
+      } else if (key === 'custom_roles' && Array.isArray(val.list)) {
+        remoteSyncSkipRef.current['custom_roles'] = true;
+        setCustomRoles(mergeBuiltInRoles(val.list, false));
+      } else if (key === 'custom_privileges' && Array.isArray(val.list)) {
+        remoteSyncSkipRef.current['custom_privileges'] = true;
+        setCustomPrivileges(mergeBuiltInRoles(val.list, true));
       }
     });
     return unsubscribe;
@@ -3097,6 +3365,7 @@ export default function App() {
       activeRole === 'chef' ||
       activeRole === 'waiter' ||
       activeRole === 'cashier' ||
+      activeRole === 'delivery' ||
       activeRole === 'manager' ||
       activeRole === 'admin' ||
       activeRole === 'customer';
@@ -3219,6 +3488,22 @@ export default function App() {
     syncKeyToCloud('qr_print_logs', { list: qrPrintLogs });
   }, [qrPrintLogs, hasLoadedCloudSettings]);
 
+  useEffect(() => {
+    syncKeyToCloud('delivery_driver_states', { list: deliveryDriverStates });
+  }, [deliveryDriverStates, hasLoadedCloudSettings]);
+
+  useEffect(() => {
+    syncKeyToCloud('delivery_partner_companies', { list: deliveryPartners });
+  }, [deliveryPartners, hasLoadedCloudSettings]);
+
+  useEffect(() => {
+    syncKeyToCloud('online_room_bookings', { list: onlineRoomBookings });
+  }, [onlineRoomBookings, hasLoadedCloudSettings]);
+
+  useEffect(() => {
+    syncKeyToCloud('online_table_reservations', { list: onlineTableReservations });
+  }, [onlineTableReservations, hasLoadedCloudSettings]);
+
   // Removed automatic sync to prevent overwriting cloud state with stale/initial local state
 
   useEffect(() => {
@@ -3280,7 +3565,7 @@ export default function App() {
   };
 
   // CUSTOM STAFF ROLES STATE FOR DYNAMIC JOB POSITIONS
-  const [customRoles, setCustomRoles] = useState<string[]>(['waiter', 'chef', 'admin', 'manager', 'receptionist', 'cashier', 'guard']);
+  const [customRoles, setCustomRoles] = useState<string[]>(['waiter', 'chef', 'delivery', 'admin', 'manager', 'receptionist', 'cashier', 'guard']);
 
   const [addStaffRoleSelected, setAddStaffRoleSelected] = useState('waiter');
   const [addStaffAccessSelected, setAddStaffAccessSelected] = useState<string>('waiter');
@@ -3291,7 +3576,7 @@ export default function App() {
   const [editingRoleNewVal, setEditingRoleNewVal] = useState<string>('');
 
   // CUSTOM SYSTEM ACCESS PRIVILEGES STATE
-  const [customPrivileges, setCustomPrivileges] = useState<string[]>(['waiter', 'chef', 'admin', 'manager', 'receptionist', 'cashier', 'guard', 'none']);
+  const [customPrivileges, setCustomPrivileges] = useState<string[]>(['waiter', 'chef', 'delivery', 'admin', 'manager', 'receptionist', 'cashier', 'guard', 'none']);
 
   const [editingPrivilegeName, setEditingPrivilegeName] = useState<string | null>(null);
   const [editingPrivilegeNewVal, setEditingPrivilegeNewVal] = useState<string>('');
@@ -3338,11 +3623,11 @@ export default function App() {
     return () => subscription.unsubscribe();
   }, []);
 
-  // Protect private pages with supabase.auth.getSession(). If no session, redirect to /login
+  // Protect private pages (including custom portals) with supabase.auth.getSession(). If no session, redirect to /login
   useEffect(() => {
     const protectPages = async () => {
-      const privateRoles = ['waiter', 'chef', 'admin', 'manager', 'receptionist', 'cashier', 'guard', 'vault'];
-      if (privateRoles.includes(activeRole)) {
+      const isPublicView = activeRole === 'entry' || activeRole === 'customer' || activeRole === 'shader_demo';
+      if (!isPublicView) {
         const { data: { session } } = await supabase.auth.getSession();
         const bypassed = sessionStorage.getItem('supabase_session_bypassed') === 'true' || currentUser !== null;
         if (!session && !bypassed) {
@@ -3401,29 +3686,59 @@ export default function App() {
         if (data && data.length > 0) {
           const listFromSupabase: StaffMember[] = data.map((item: any) => ({
             name: item.name,
-            role: item.role,
+            role: (item.role || 'waiter').trim().toLowerCase(),
             phone: item.phone || '',
             active: item.status === 'On Duty' || item.status === 'Active' || item.active || false,
             pin: item.pin || '1234',
             photo: item.photo || item.photoUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100',
-            accessPrivilege: item.accessPrivilege || item.role?.toLowerCase() || 'waiter',
+            accessPrivilege: (item.accessPrivilege || item.role || 'waiter').trim().toLowerCase(),
             username: item.username || item.name.toLowerCase().replace(/\s+/g, '_'),
             password: item.password || item.pin || '1234',
             securityAnswer: item.securityAnswer || 'hawassa',
             hireDate: item.hireDate || '',
             info: item.info || '',
             education: item.education || '',
-            certificatePhoto: item.certificatePhoto || ''
+            certificatePhoto: item.certificatePhoto || '',
+            vehicleType: item.vehicleType || undefined,
+            plateNumber: item.plateNumber || undefined,
+            deliveryZone: item.deliveryZone || undefined,
           }));
 
           setStaff((prev) => {
-            const hasChanges = JSON.stringify(prev.map(p => p.name)) !== JSON.stringify(listFromSupabase.map(l => l.name)) ||
-                              JSON.stringify(prev.map(p => p.pin)) !== JSON.stringify(listFromSupabase.map(l => l.pin)) ||
-                              JSON.stringify(prev.map(p => p.username)) !== JSON.stringify(listFromSupabase.map(l => l.username));
-            if (hasChanges) {
-              return listFromSupabase;
+            const byKey = new Map<string, StaffMember>();
+            for (const s of prev) {
+              const key = (s.username || s.name || '').trim().toLowerCase();
+              if (key) byKey.set(key, s);
             }
-            return prev;
+            let changed = false;
+            for (const r of listFromSupabase) {
+              const key = (r.username || r.name || '').trim().toLowerCase();
+              if (!key) continue;
+              const existing = byKey.get(key);
+              if (!existing) {
+                byKey.set(key, r);
+                changed = true;
+              } else {
+                const merged: StaffMember = {
+                  ...existing,
+                  ...r,
+                  vehicleType: r.vehicleType || existing.vehicleType,
+                  plateNumber: r.plateNumber || existing.plateNumber,
+                  deliveryZone: r.deliveryZone || existing.deliveryZone,
+                };
+                if (
+                  existing.role !== merged.role ||
+                  existing.accessPrivilege !== merged.accessPrivilege ||
+                  existing.pin !== merged.pin ||
+                  existing.password !== merged.password ||
+                  existing.username !== merged.username
+                ) {
+                  byKey.set(key, merged);
+                  changed = true;
+                }
+              }
+            }
+            return changed ? Array.from(byKey.values()) : prev;
           });
         } else {
           // Supabase database is empty for this user, seed current local staff to Supabase
@@ -3553,7 +3868,7 @@ export default function App() {
     );
     seenActiveCallIdsRef.current = Array.from(new Set([...seenActiveCallIdsRef.current, ...currentActiveIds]));
 
-    const isStaffRole = ['waiter', 'chef', 'admin', 'manager', 'receptionist', 'cashier', 'guard'].includes(activeRole);
+    const isStaffRole = ['waiter', 'chef', 'delivery', 'admin', 'manager', 'receptionist', 'cashier', 'guard'].includes(activeRole);
     if (newActiveCalls.length === 0 || !isStaffRole) return;
 
     const myName = (currentUser?.name || '').trim().toLowerCase();
@@ -3561,7 +3876,7 @@ export default function App() {
 
     newActiveCalls.forEach(call => {
       if (activeRole === 'waiter') {
-        if (call.type === 'new_order' || call.targetRole === 'chef') return;
+        if (call.type === 'new_order' || call.targetRole === 'chef' || call.targetRole === 'delivery') return;
         const assignedTarget = (call.targetWaiter || getAssignedWaiterForTable(call.location) || '').trim().toLowerCase();
         const shouldAlertThisWaiter = isSup || !assignedTarget || !myName || assignedTarget === myName;
         if (shouldAlertThisWaiter) {
@@ -3574,6 +3889,14 @@ export default function App() {
           } else {
             playWaiterCallAlertSound(call.location, call.targetWaiter, call.reason || call.message);
           }
+        }
+      } else if (activeRole === 'delivery') {
+        if (call.targetRole === 'delivery' || (call.type === 'pickup' && (!call.targetWaiter || call.targetWaiter.toLowerCase() === myName))) {
+          playKitchenReadyForWaiterAlertSound(
+            call.orderId || call.id,
+            call.location,
+            call.targetWaiter || currentUser?.name || 'Delivery Courier'
+          );
         }
       } else if (activeRole === 'chef') {
         // Chef order alerts are handled cleanly by the pending-orders effect above
@@ -3634,12 +3957,30 @@ export default function App() {
         }
 
         triggeredPickupAlertIdsRef.current!.add(pickupId);
+        resolveOrderAssistanceCalls(ord.id, currentUser?.name, ['new_order']);
+
+        if (ord.orderType === 'delivery') {
+          if (ord.deliveryStatus === 'Delivered') return;
+          addAssistanceCall({
+            id: pickupId,
+            orderId: ord.id,
+            location: ord.deliveryAddress || ord.location,
+            time: timeNow,
+            active: true,
+            type: 'pickup',
+            targetRole: 'delivery',
+            targetWaiter: ord.deliveryDriverName || undefined,
+            createdAt: nowMs,
+            message: `🛵 የዴሊቨሪ ምግብ ${ord.id} (${ord.deliveryAddress || ord.location}) ከኩሽና ተዘጋጅቷል! (Delivery Ready for Dispatch)`,
+          });
+          return;
+        }
+
         const resolvedWaiter =
           (!isGenericWaiterLabel(ord.waiter) ? ord.waiter : '') ||
           getAssignedWaiterForTable(ord.location) ||
           undefined;
 
-        resolveOrderAssistanceCalls(ord.id, currentUser?.name, ['new_order']);
         addAssistanceCall({
           id: pickupId,
           orderId: ord.id,
@@ -3910,15 +4251,20 @@ export default function App() {
 
   const handleSuccessLogin = (matchedStaff: StaffMember) => {
     setCurrentUser(matchedStaff);
+    try {
+      sessionStorage.setItem('supabase_session_bypassed', 'true');
+      sessionStorage.setItem('supabase_bypassed_current_user', JSON.stringify(matchedStaff));
+    } catch {}
     setIsStaffAuthModalOpen(false);
-    const privilege = matchedStaff.accessPrivilege || matchedStaff.role;
-    if (privilege === 'waiter') setActiveRole('waiter');
-    if (privilege === 'chef') setActiveRole('chef');
-    if (privilege === 'admin') setActiveRole('admin');
-    if (privilege === 'manager') setActiveRole('manager');
-    if (privilege === 'receptionist') setActiveRole('receptionist');
-    if (privilege === 'cashier') setActiveRole('cashier');
-    if (privilege === 'guard') setActiveRole('guard');
+    const rawPriv = matchedStaff.accessPrivilege && matchedStaff.accessPrivilege.trim().toLowerCase() !== 'none'
+      ? matchedStaff.accessPrivilege
+      : matchedStaff.role;
+    const privilege = (rawPriv || '').trim().toLowerCase();
+    if (!privilege || privilege === 'none') {
+      showAppToast('🔒 ይህ መለያ የሲስተም መዳረሻ ፈቃድ የለውም! እባክዎ አስኪያጅን (Admin) ያነጋግሩ።');
+      return;
+    }
+    setActiveRole(privilege);
   };
 
   const handleUnifiedLoginSubmit = async (e?: React.FormEvent) => {
@@ -3926,21 +4272,23 @@ export default function App() {
     setUnifiedError('');
 
     if (unifiedMethod === 'password') {
-      if (!unifiedUsername.trim() || !unifiedPassword.trim()) {
+      const enteredUserLower = unifiedUsername.trim().toLowerCase();
+      const enteredPass = unifiedPassword.trim();
+      if (!enteredUserLower || !enteredPass) {
         setUnifiedError('እባክዎ መግቢያ ስምና የይለፍ ቃል በትክክል ያስገቡ! (Please enter username/password)');
         return;
       }
 
       // Check local staff credentials first - if match, bypass Supabase to prevent any email confirmation blockages
-      const matchedLocalStaff = staff.find(s => 
-        (s.username?.toLowerCase() === unifiedUsername.trim().toLowerCase() ||
-         s.name.toLowerCase() === unifiedUsername.trim().toLowerCase()) &&
-        s.password === unifiedPassword.trim()
+      const matchedLocalStaff = staff.find(s =>
+        ((s.username || '').trim().toLowerCase() === enteredUserLower ||
+         s.name.trim().toLowerCase() === enteredUserLower) &&
+        ((s.password || s.pin || '').trim() === enteredPass)
       );
 
       if (matchedLocalStaff) {
         sessionStorage.setItem('supabase_session_bypassed', 'true');
-        sessionStorage.setItem('supabase_bypassed_user_email', `${unifiedUsername.trim().toLowerCase()}@papyruslodge.com`);
+        sessionStorage.setItem('supabase_bypassed_user_email', `${enteredUserLower}@papyruslodge.com`);
         sessionStorage.setItem('supabase_bypassed_user_id', 'bypassed-local-uid');
         sessionStorage.setItem('supabase_bypassed_current_user', JSON.stringify(matchedLocalStaff));
         handleSuccessLogin(matchedLocalStaff);
@@ -3955,13 +4303,13 @@ export default function App() {
       // Convert username/email entry to valid Supabase email format
       const targetEmail = unifiedUsername.trim().includes('@') 
         ? unifiedUsername.trim() 
-        : `${unifiedUsername.trim().toLowerCase().replace(/\s+/g, '_')}@papyruslodge.com`;
+        : `${enteredUserLower.replace(/\s+/g, '_')}@papyruslodge.com`;
 
       try {
         // ---- Supabase Sign In with Password ----
         const { data, error } = await supabase.auth.signInWithPassword({
           email: targetEmail,
-          password: unifiedPassword.trim()
+          password: enteredPass
         });
 
         let isBypassed = false;
@@ -4007,8 +4355,8 @@ export default function App() {
 
         // Auto-identify the team member by their custom username & password combination!
         const matched = staff.find(s => 
-          (s.username?.toLowerCase() === unifiedUsername.trim().toLowerCase()) ||
-          (s.name.toLowerCase() === unifiedUsername.trim().toLowerCase())
+          ((s.username || '').trim().toLowerCase() === enteredUserLower) ||
+          (s.name.trim().toLowerCase() === enteredUserLower)
         );
 
         setUnifiedUsername('');
@@ -4016,24 +4364,27 @@ export default function App() {
         setUnifiedError('');
 
         let loggedInStaff = matched;
+        const normalizedUnifiedRole = (unifiedRole || 'waiter').trim().toLowerCase();
         if (matched) {
           handleSuccessLogin(matched);
         } else {
           // Fallback user matching active role
           const genericStaff: StaffMember = {
             name: (data.user?.email || finalUserEmail).split('@')[0] || 'Staff Member',
-            role: unifiedRole,
-            accessPrivilege: unifiedRole,
+            role: normalizedUnifiedRole,
+            accessPrivilege: normalizedUnifiedRole,
             pin: '1234',
             active: true,
             photo: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100',
             phone: '',
-            username: unifiedUsername.trim().toLowerCase(),
-            password: unifiedPassword
+            username: enteredUserLower,
+            password: enteredPass
           };
           loggedInStaff = genericStaff;
+          sessionStorage.setItem('supabase_session_bypassed', 'true');
+          sessionStorage.setItem('supabase_bypassed_current_user', JSON.stringify(genericStaff));
           setCurrentUser(genericStaff);
-          setActiveRole(unifiedRole);
+          setActiveRole(normalizedUnifiedRole);
         }
 
         if (loggedInStaff) {
@@ -4046,15 +4397,17 @@ export default function App() {
         setUnifiedError(err.message || 'እንቅስቃሴው አልተሳካም። (Authentication failed)');
       }
     } else {
-      if (unifiedPin.length !== 4) {
+      const pinTrim = unifiedPin.trim();
+      const targetRoleNorm = (unifiedRole || '').trim().toLowerCase();
+      if (pinTrim.length !== 4) {
         setUnifiedError('እባክዎ ባለ 4 አሃዝ ፒን ያስገቡ። (Please enter a 4-digit PIN)');
         return;
       }
       // Auto-identify by the secure 4-digit PIN and matching selected role (unifiedRole)
-      const matched = staff.find(s => 
-        s.pin === unifiedPin && 
-        ((s.role || '').toLowerCase() === unifiedRole.toLowerCase() || 
-         (s.accessPrivilege || '').toLowerCase() === unifiedRole.toLowerCase())
+      const matched = staff.find(s =>
+        (s.pin || '').trim() === pinTrim &&
+        ((s.role || '').trim().toLowerCase() === targetRoleNorm ||
+         (s.accessPrivilege || '').trim().toLowerCase() === targetRoleNorm)
       );
       if (matched) {
         setUnifiedPin('');
@@ -4064,7 +4417,7 @@ export default function App() {
         setStaffPortalState('welcome');
         window.history.pushState({}, '', '/');
       } else {
-        const pinExistsAnywhere = staff.some(s => s.pin === unifiedPin);
+        const pinExistsAnywhere = staff.some(s => (s.pin || '').trim() === pinTrim);
         if (pinExistsAnywhere) {
           setUnifiedError('የተሳሳተ የፒን ቁጥር ለተመረጠው የስራ ዘርፍ! (Incorrect PIN for the selected division!)');
         } else {
@@ -4129,18 +4482,28 @@ export default function App() {
         return;
       }
 
+      const normalizedSignupRole = (signupRole || 'waiter').trim().toLowerCase();
       const newStaff: StaffMember = {
         name: signupName.trim(),
-        role: signupRole,
-        accessPrivilege: signupRole,
+        role: normalizedSignupRole,
+        accessPrivilege: normalizedSignupRole,
         pin: signupPin.trim(),
-        active: false,
+        active: true,
         photo: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100',
         phone: '',
         username: normUsername,
         password: signupPassword.trim(),
         securityAnswer: signupSecurityAnswer.trim().toLowerCase()
       };
+
+      // Always keep local/cloud-synced staff list updated immediately (prevents missing login on newly registered roles)
+      setStaff(prev => [...prev.filter(s => (s.username || '').trim().toLowerCase() !== normUsername), newStaff]);
+      if (normalizedSignupRole === 'delivery') {
+        setDeliveryDriverStates(prev => [
+          ...prev.filter(d => d.staffName.trim().toLowerCase() !== newStaff.name.toLowerCase()),
+          { staffName: newStaff.name, status: 'available', completedTrips: 0, updatedAt: Date.now() },
+        ]);
+      }
 
       const targetUser = data.user;
       if (targetUser) {
@@ -4155,7 +4518,7 @@ export default function App() {
           role: newStaff.role,
           status: 'Active',
           pin: newStaff.pin,
-          active: false,
+          active: true,
           photo: newStaff.photo,
           accessPrivilege: newStaff.accessPrivilege,
           username: newStaff.username,
@@ -4163,9 +4526,9 @@ export default function App() {
           securityAnswer: newStaff.securityAnswer,
           createdAt: new Date().toISOString()
         };
-        await supabase.from('user_team_members').insert([memberPayload]);
-      } else {
-        setStaff(prev => [...prev, newStaff]);
+        supabase.from('user_team_members').insert([memberPayload]).then(({ error: insErr }) => {
+          if (insErr) console.warn('Supabase user_team_members insert note:', insErr);
+        });
       }
 
       // Bypass email confirmation requirement on sign up
@@ -4178,9 +4541,9 @@ export default function App() {
       sessionStorage.setItem('supabase_bypassed_current_user', JSON.stringify(newStaff));
 
       setCurrentUser(newStaff);
-      setActiveRole(signupRole);
+      setActiveRole(normalizedSignupRole);
 
-      showAppToast(`🎉 ሠራተኛው ${newStaff.name} በስኬት ተመዝግቧል! (Staff user registered successfully via Supabase!)`);
+      showAppToast(`🎉 ሠራተኛው ${newStaff.name} በስኬት ተመዝግቧል! (Staff user registered successfully!)`);
       
       // Clear signup fields
       setSignupName('');
@@ -4200,26 +4563,33 @@ export default function App() {
   };
 
   const handleResetCredentials = async (name: string, pin: string, password?: string, username?: string) => {
+    const cleanName = name.trim().toLowerCase();
+    const targetUsername = (username || name.trim().toLowerCase().replace(/\s+/g, '_')).trim().toLowerCase();
+    const targetPassword = (password || pin).trim();
+
+    setStaff(prev => prev.map(s => s.name.trim().toLowerCase() === cleanName ? { ...s, pin: pin.trim(), password: targetPassword, username: targetUsername } : s));
+    if (currentUser && currentUser.name.trim().toLowerCase() === cleanName) {
+      const updatedCurr = { ...currentUser, pin: pin.trim(), password: targetPassword, username: targetUsername };
+      setCurrentUser(updatedCurr);
+      try {
+        sessionStorage.setItem('supabase_bypassed_current_user', JSON.stringify(updatedCurr));
+      } catch {}
+    }
+
     if (fbUser) {
       try {
         const uid = fbUser.id || fbUser.uid;
-        const targetUsername = username || name.toLowerCase().replace(/\s+/g, '_');
-        const targetPassword = password || pin;
-        const { error } = await supabase.from('user_team_members')
+        await supabase.from('user_team_members')
           .update({
-            pin,
+            pin: pin.trim(),
             password: targetPassword,
             username: targetUsername
           })
           .eq('userId', uid)
           .eq('name', name);
-        if (error) throw error;
-        setStaff(prev => prev.map(s => s.name === name ? { ...s, pin, password: targetPassword, username: targetUsername } : s));
       } catch (e) {
-        console.error("Supabase credentials update failed:", e);
+        console.warn("Supabase credentials update warning:", e);
       }
-    } else {
-      setStaff(prev => prev.map(s => s.name === name ? { ...s, pin, password, username } : s));
     }
   };
 
@@ -4337,7 +4707,7 @@ export default function App() {
   const resolveOrderAssistanceCalls = async (
     orderId: string,
     handledBy?: string,
-    types?: Array<'new_order' | 'pickup' | 'call'>,
+    types?: Array<NonNullable<AssistanceCall['type']>>,
   ) => {
     const bareId = orderId.replace(/^#/, '');
     const matchesOrderCall = (c: AssistanceCall) => {
@@ -5112,7 +5482,8 @@ export default function App() {
     const timeNow = new Date(nowMs).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
     const dateTodayStr = getLocalTodayIso(); // Format: YYYY-MM-DD
 
-    const assignedWaiterForLoc = getAssignedWaiterForTable(details.location);
+    const isDeliveryOrder = details.orderType === 'delivery';
+    const assignedWaiterForLoc = isDeliveryOrder ? undefined : getAssignedWaiterForTable(details.location);
     const assignedChefForLoc = getAssignedChefForTable(details.location);
     const isPaidUpfront = details.payment === 'chapa';
     const isCashOrder = details.payment === 'cash';
@@ -5123,6 +5494,7 @@ export default function App() {
         ? details.cashTenderedAmount
         : undefined;
     const cashChange = cashTendered !== undefined ? Math.max(0, cashTendered - grandTotal) : undefined;
+    const deliveryPinCode = isDeliveryOrder ? String(Math.floor(1000 + Math.random() * 9000)) : undefined;
 
     const newOrder: Order = {
       id: '#O-' + Math.floor(100 + Math.random() * 900),
@@ -5149,12 +5521,16 @@ export default function App() {
       cashChangeAmount: cashChange,
       cashRequestedAt: isCashOrder ? timeNow : undefined,
       confirmed: true,
-      waiter: assignedWaiterForLoc || (currentUser?.role === 'waiter' ? currentUser.name : undefined),
+      waiter: isDeliveryOrder ? undefined : (assignedWaiterForLoc || (currentUser?.role === 'waiter' ? currentUser.name : undefined)),
       chefName: assignedChefForLoc || undefined,
       createdByRole: currentUser?.role || 'customer',
       orderType: details.orderType,
       deliveryPhone: details.phone,
       deliveryAddress: details.address,
+      deliveryStatus: isDeliveryOrder ? 'Waiting Driver' : undefined,
+      deliveryPinCode,
+      deliveryVerifiedByPin: false,
+      deliveryCashCollected: false,
       time: timeNow,
       date: dateTodayStr,
       createdAt: nowMs,
@@ -5166,7 +5542,7 @@ export default function App() {
     setLastPlacedOrderId(newOrder.id);
     setCart([]);
 
-    // Route new order notification cleanly to Kitchen (Chef) without triggering premature pickup alarm
+    // Route new order notification cleanly to Kitchen (Chef) without assigning any waiter on delivery orders
     const orderBuzzerCall: AssistanceCall = {
       id: 'neword-' + newOrder.id.replace('#', '') + '-' + nowMs,
       orderId: newOrder.id,
@@ -5175,14 +5551,14 @@ export default function App() {
       active: true,
       type: 'new_order',
       targetRole: 'chef',
-      targetWaiter: assignedWaiterForLoc || undefined,
+      targetWaiter: isDeliveryOrder ? undefined : (assignedWaiterForLoc || undefined),
       createdAt: nowMs,
       message: `🛎️ አዲስ ትዕዛዝ ${newOrder.id} (${details.location}) ወደ ኩሽና ገብቷል! (${isPaidUpfront ? 'Paid · Chapa' : isCashOrder ? `Cash · ${cashCode}` : details.payment.toUpperCase()})`
     };
     addAssistanceCall(orderBuzzerCall);
 
-    // Notify Cashier Desk in real time whenever guest chooses Cash payment or Cashier Desk request
-    if (isCashOrder) {
+    // Notify Cashier Desk in real time whenever guest chooses Cash payment or attaches a receipt screenshot
+    if (isCashOrder || details.receiptScreenshot) {
       addAssistanceCall({
         id: `cashreq-${newOrder.id.replace('#', '')}-${nowMs}`,
         orderId: newOrder.id,
@@ -5191,11 +5567,13 @@ export default function App() {
         active: true,
         type: 'cash_request',
         targetRole: 'cashier',
-        reason: cashMode === 'cashier_desk' ? 'Cash at Cashier Desk' : 'Cash to Waiter / Delivery',
+        reason: isCashOrder
+          ? (cashMode === 'cashier_desk' ? 'Cash at Cashier Desk' : 'Cash to Waiter / Delivery')
+          : 'Bank Receipt Verification',
         createdAt: nowMs,
-        message: `💵 ${cashMode === 'cashier_desk' ? 'በካሸር መክፈያ ጥያቄ' : 'በጥሬ ገንዘብ ትዕዛዝ'} ${newOrder.id} [${cashCode}] — ${grandTotal} ${currency}${
+        message: `💵 ${isCashOrder ? (cashMode === 'cashier_desk' ? 'በካሸር መክፈያ ጥያቄ' : 'በጥሬ ገንዘብ ትዕዛዝ') : 'የባንክ ደረሰኝ ማረጋገጫ'} ${newOrder.id}${cashCode ? ` [${cashCode}]` : ''} — ${grandTotal} ${currency}${
           cashTendered !== undefined ? ` (ብር: ${cashTendered}, መልስ: ${cashChange || 0})` : ''
-        }`
+        }${details.receiptScreenshot ? ' · 🖼️ ደረሰኝ ተያይዟል' : ''}`
       });
     }
 
@@ -5229,6 +5607,10 @@ export default function App() {
   // ADMIN OPERATIONS
   const handleAddNewMenuItem = (e: React.FormEvent) => {
     e.preventDefault();
+    if (isUploadingMedia) {
+      showAppToast('⏳ ምስሉ ወደ ሰርቨር እየተጫነ ነው፣ እባክዎ ትንሽ ይጠብቁ...');
+      return;
+    }
     const nameAm = (e.currentTarget.querySelector('#add-name-am') as HTMLInputElement).value;
     const nameEn = (e.currentTarget.querySelector('#add-name-en') as HTMLInputElement).value;
     const price = parseFloat((e.currentTarget.querySelector('#add-price') as HTMLInputElement).value);
@@ -5251,10 +5633,12 @@ export default function App() {
       customizable: isCustomizable
     };
 
-    setMenuItems(prev => [...prev, newItem]);
+    const nextMenu = [...menuItems, newItem];
+    setMenuItems(nextMenu);
+    void syncKeyToCloud('menu', { items: nextMenu });
     setAddMenuImage('');
     e.currentTarget.reset();
-    showAppToast('🍽️ አዲስ ምናሌ በተሳካ ሁኔታ ተመዝግቧል! / Menu item saved.');
+    showAppToast('🍽️ አዲስ ምናሌ እና ምስሉ በቋሚነት ተመዝግበዋል! / Menu item saved permanently.');
   };
 
   const handleToggleMenuItemAvailable = (id: string) => {
@@ -5265,7 +5649,7 @@ export default function App() {
     const nextAvailable = !previousAvailable;
     const now = new Date();
     const timeNow = now.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
-    const dateNow = now.toISOString().split('T')[0];
+    const dateNow = getLocalTodayIso();
 
     const fallbackActorByRole: Record<string, string> = {
       chef: 'Kitchen Staff',
@@ -5406,22 +5790,33 @@ export default function App() {
       return;
     }
 
+    const normRole = (addStaffRoleSelected || 'waiter').trim().toLowerCase();
+    const normPriv = ((addStaffAccessSelected && addStaffAccessSelected.trim().toLowerCase() !== 'none') ? addStaffAccessSelected : normRole).trim().toLowerCase();
+    const cleanUsername = (username || name.toLowerCase().replace(/\s+/g, '_')).trim().toLowerCase();
+
     const newStaff: StaffMember = { 
-      name, 
-      role: addStaffRoleSelected, 
-      accessPrivilege: addStaffAccessSelected,
-      pin, 
+      name: name.trim(), 
+      role: normRole, 
+      accessPrivilege: addStaffAccessSelected.trim().toLowerCase() === 'none' ? 'none' : normPriv,
+      pin: pin.trim(), 
       active: false, 
       photo: addStaffPhoto || (e.currentTarget.querySelector('#add-staff-photo-url') as HTMLInputElement)?.value || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100',
-      phone,
+      phone: phone.trim(),
       hireDate,
       info,
       education,
       certificatePhoto: addStaffCertificatePhoto,
-      username,
-      password,
-      securityAnswer
+      username: cleanUsername,
+      password: (password || pin).trim(),
+      securityAnswer: securityAnswer.toLowerCase()
     };
+    setStaff(prev => [...prev, newStaff]);
+    if (normRole === 'delivery' || normPriv === 'delivery') {
+      setDeliveryDriverStates(prev => [
+        ...prev.filter(d => d.staffName.trim().toLowerCase() !== newStaff.name.toLowerCase()),
+        { staffName: newStaff.name, status: 'available', completedTrips: 0, updatedAt: Date.now() },
+      ]);
+    }
     if (fbUser) {
       const uid = fbUser.id || fbUser.uid;
       const memberId = 'st-' + Math.random().toString(36).substr(2, 9);
@@ -5447,12 +5842,9 @@ export default function App() {
         createdAt: new Date().toISOString()
       };
       
-      setStaff(prev => [...prev, newStaff]);
       supabase.from('user_team_members').insert([memberPayload]).then(({ error }) => {
         if (error) console.error("Supabase staff save error:", error);
       });
-    } else {
-      setStaff(prev => [...prev, newStaff]);
     }
     setAddStaffPhoto('');
     setAddStaffCertificatePhoto('');
@@ -5480,22 +5872,456 @@ export default function App() {
     });
   };
 
+  // DELIVERY FLEET & VERIFIED TRUST HANDOVER HANDLERS
+  const handleRegisterDeliveryDriver = (newCourier: StaffMember) => {
+    setStaff((prev) => [...prev, newCourier]);
+    if (fbUser) {
+      const uid = fbUser.id || fbUser.uid;
+      const memberId = 'st-' + Math.random().toString(36).substr(2, 9);
+      supabase
+        .from('user_team_members')
+        .insert([
+          {
+            id: memberId,
+            userId: uid,
+            name: newCourier.name,
+            email: (newCourier.username || newCourier.name.toLowerCase().replace(/\s+/g, '_')) + '@papyruslodge.com',
+            phone: newCourier.phone || '',
+            role: 'delivery',
+            status: 'On Duty',
+            pin: newCourier.pin || '6666',
+            active: true,
+            photo: newCourier.photo || '',
+            accessPrivilege: 'delivery',
+            username: newCourier.username || newCourier.name.toLowerCase().replace(/\s+/g, '_'),
+            password: newCourier.password || newCourier.pin || '6666',
+            securityAnswer: newCourier.securityAnswer || 'hawassa',
+            hireDate: newCourier.hireDate || getLocalTodayIso(),
+            info: newCourier.info || `${newCourier.vehicleType || ''} ${newCourier.plateNumber || ''}`.trim(),
+            createdAt: new Date().toISOString(),
+          },
+        ])
+        .then(({ error }) => {
+          if (error) console.error('Supabase delivery courier save error:', error);
+        });
+    }
+    setDeliveryDriverStates((prev) => [
+      ...prev.filter((d) => d.staffName.toLowerCase() !== newCourier.name.toLowerCase()),
+      { staffName: newCourier.name, status: 'available', completedTrips: 0, updatedAt: Date.now() },
+    ]);
+    showAppToast(`🛵 የዴሊቨሪ አድራሽ ${newCourier.name} በተሳካ ሁኔታ ተመዝግቧል! / Courier registered.`);
+  };
+
+  const handleToggleDriverDuty = (staffName: string, status: DeliveryDriverState['status']) => {
+    const nowMs = Date.now();
+    const timeNow = new Date(nowMs).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
+    setDeliveryDriverStates((prev) => {
+      const existing = prev.find((d) => d.staffName.trim().toLowerCase() === staffName.trim().toLowerCase());
+      if (existing) {
+        return prev.map((d) =>
+          d.staffName.trim().toLowerCase() === staffName.trim().toLowerCase()
+            ? {
+                ...d,
+                status,
+                activeOrderId: status === 'available' ? undefined : d.activeOrderId,
+                lastReturnedAt: status === 'available' ? timeNow : d.lastReturnedAt,
+                updatedAt: nowMs,
+              }
+            : d
+        );
+      }
+      return [...prev, { staffName, status, completedTrips: 0, updatedAt: nowMs }];
+    });
+    showAppToast(
+      status === 'available'
+        ? `🟢 ${staffName} ለዴሊቨሪ ዝግጁ ሆኗል (Ready for Delivery)!`
+        : status === 'offline'
+          ? `🔴 ${staffName} ከስራ ውጪ (Offline) ተደርጓል።`
+          : `🛵 ${staffName} በጉዞ ላይ (On Delivery)!`
+    );
+  };
+
+  const handleAssignDriverToOrder = (orderId: string, driver: StaffMember) => {
+    const targetOrder = orders.find((o) => o.id === orderId);
+    if (!targetOrder) return;
+    const nowMs = Date.now();
+    const timeNow = new Date(nowMs).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
+    const pinCode = targetOrder.deliveryPinCode || String(Math.floor(1000 + Math.random() * 9000));
+    const vehicleStr = [driver.vehicleType, driver.plateNumber].filter(Boolean).join(' · ') || 'Lodge Courier';
+
+    setOrders((prev) =>
+      prev.map((o) =>
+        o.id === orderId
+          ? {
+              ...o,
+              deliveryMode: 'internal',
+              deliveryPartnerId: undefined,
+              deliveryPartnerName: undefined,
+              deliveryPartnerPhone: undefined,
+              deliveryPartnerTrackingCode: undefined,
+              deliveryPartnerFee: undefined,
+              deliveryDriverName: driver.name,
+              deliveryDriverPhone: driver.phone || o.deliveryDriverPhone,
+              deliveryVehicleInfo: vehicleStr,
+              deliveryStatus: 'Assigned',
+              deliveryPinCode: pinCode,
+              deliveryAssignedAt: timeNow,
+              updatedAt: nowMs,
+            }
+          : o
+      )
+    );
+    setDeliveryDriverStates((prev) => {
+      const exists = prev.some((d) => d.staffName.trim().toLowerCase() === driver.name.trim().toLowerCase());
+      if (exists) {
+        return prev.map((d) =>
+          d.staffName.trim().toLowerCase() === driver.name.trim().toLowerCase()
+            ? { ...d, status: 'on_delivery', activeOrderId: orderId, updatedAt: nowMs }
+            : d
+        );
+      }
+      return [...prev, { staffName: driver.name, status: 'on_delivery', activeOrderId: orderId, completedTrips: 0, updatedAt: nowMs }];
+    });
+    addAssistanceCall({
+      id: `delivassign-${orderId.replace('#', '')}-${nowMs}`,
+      orderId,
+      location: targetOrder.deliveryAddress || targetOrder.location,
+      time: timeNow,
+      active: true,
+      type: 'pickup',
+      targetRole: 'delivery',
+      targetWaiter: driver.name,
+      createdAt: nowMs,
+      message: `🛵 ${driver.name} — የዴሊቨሪ ትዕዛዝ ${orderId} (${targetOrder.deliveryAddress || targetOrder.location}) ተመድቦልዎታል!`,
+    });
+    showAppToast(`🛵 ትዕዛዝ ${orderId} ለ ${driver.name} ተመድቧል! PIN: ${pinCode}`);
+  };
+
+  const handleAcceptPickupOrder = (orderId: string) => {
+    const targetOrder = orders.find((o) => o.id === orderId);
+    if (!targetOrder) return;
+    const courierName = currentUser?.name || targetOrder.deliveryDriverName || 'Delivery Courier';
+    const courierPhone = currentUser?.phone || targetOrder.deliveryDriverPhone;
+    const vehicleStr =
+      [currentUser?.vehicleType, currentUser?.plateNumber].filter(Boolean).join(' · ') ||
+      targetOrder.deliveryVehicleInfo ||
+      'Lodge Courier';
+    const nowMs = Date.now();
+    const timeNow = new Date(nowMs).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
+    const pinCode = targetOrder.deliveryPinCode || String(Math.floor(1000 + Math.random() * 9000));
+
+    setOrders((prev) =>
+      prev.map((o) =>
+        o.id === orderId
+          ? {
+              ...o,
+              deliveryDriverName: courierName,
+              deliveryDriverPhone: courierPhone,
+              deliveryVehicleInfo: vehicleStr,
+              deliveryStatus: 'Picked Up',
+              deliveryPinCode: pinCode,
+              deliveryAssignedAt: o.deliveryAssignedAt || timeNow,
+              deliveryPickedUpAt: timeNow,
+              checkedByWaiter: true,
+              updatedAt: nowMs,
+            }
+          : o
+      )
+    );
+    setDeliveryDriverStates((prev) => {
+      const exists = prev.some((d) => d.staffName.trim().toLowerCase() === courierName.trim().toLowerCase());
+      if (exists) {
+        return prev.map((d) =>
+          d.staffName.trim().toLowerCase() === courierName.trim().toLowerCase()
+            ? { ...d, status: 'on_delivery', activeOrderId: orderId, updatedAt: nowMs }
+            : d
+        );
+      }
+      return [...prev, { staffName: courierName, status: 'on_delivery', activeOrderId: orderId, completedTrips: 0, updatedAt: nowMs }];
+    });
+    resolveOrderAssistanceCalls(orderId, courierName, ['pickup']);
+    showAppToast(`📦 ትዕዛዝ ${orderId} ተነስቷል! ወደ ${targetOrder.deliveryAddress || targetOrder.location} በመጓዝ ላይ።`);
+  };
+
+  const handleMarkDeliveryArrived = (orderId: string) => {
+    const nowMs = Date.now();
+    const timeNow = new Date(nowMs).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
+    setOrders((prev) =>
+      prev.map((o) =>
+        o.id === orderId
+          ? { ...o, deliveryStatus: 'Arrived', deliveryArrivedAt: timeNow, updatedAt: nowMs }
+          : o
+      )
+    );
+    showAppToast(`📍 ደንበኛው ጋር ደርሰዋል! የደንበኛውን 4-አሃዝ ሚስጥር PIN ጠይቀው ፎቶ ያንሱ።`);
+  };
+
+  const handleCompleteVerifiedHandover = (
+    orderId: string,
+    enteredPin: string,
+    proofPhotoUrl: string,
+    cashCollected: boolean
+  ): boolean => {
+    const targetOrder = orders.find((o) => o.id === orderId);
+    if (!targetOrder) return false;
+    const expectedPin = (targetOrder.deliveryPinCode || '').trim();
+    if (expectedPin && enteredPin.trim() !== expectedPin) {
+      return false;
+    }
+    const nowMs = Date.now();
+    const timeNow = new Date(nowMs).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
+    const courierName = currentUser?.name || targetOrder.deliveryDriverName || 'Delivery Courier';
+    const isCashSettlement = targetOrder.payment === 'cash' && cashCollected;
+
+    setOrders((prev) =>
+      prev.map((o) =>
+        o.id === orderId
+          ? {
+              ...o,
+              deliveryStatus: 'Delivered',
+              deliveryDeliveredAt: timeNow,
+              deliveryProofPhoto: proofPhotoUrl,
+              deliveryVerifiedByPin: true,
+              deliveryCashCollected: isCashSettlement ? true : o.deliveryCashCollected,
+              servedByWaiter: true,
+              checkedByWaiter: true,
+              servedAt: timeNow,
+              status: isCashSettlement ? 'Paid' : (o.status === 'Paid' ? 'Paid' : 'Completed'),
+              paymentVerified: isCashSettlement ? true : o.paymentVerified,
+              cashConfirmedAt: isCashSettlement ? timeNow : o.cashConfirmedAt,
+              updatedAt: nowMs,
+            }
+          : o
+      )
+    );
+
+    setDeliveryDriverStates((prev) => {
+      const exists = prev.some((d) => d.staffName.trim().toLowerCase() === courierName.trim().toLowerCase());
+      if (exists) {
+        return prev.map((d) =>
+          d.staffName.trim().toLowerCase() === courierName.trim().toLowerCase()
+            ? {
+                ...d,
+                status: 'on_delivery',
+                activeOrderId: undefined,
+                completedTrips: (d.completedTrips || 0) + 1,
+                updatedAt: nowMs,
+              }
+            : d
+        );
+      }
+      return [...prev, { staffName: courierName, status: 'on_delivery', completedTrips: 1, updatedAt: nowMs }];
+    });
+
+    resolveOrderAssistanceCalls(orderId, courierName, ['pickup', 'cash_request']);
+    playVoiceAlert(`Delivery ${orderId} verified with PIN and proof photo!`);
+    showAppToast(`🎉 ትዕዛዝ ${orderId} በሚስጥር ፒን እና በፎቶ ማስረጃ በተሳካ ሁኔታ ተረክቧል!`);
+    return true;
+  };
+
+  const handleMarkDriverReturned = (staffName: string, lastOrderId?: string) => {
+    const nowMs = Date.now();
+    const timeNow = new Date(nowMs).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
+    if (lastOrderId) {
+      setOrders((prev) =>
+        prev.map((o) =>
+          o.id === lastOrderId ? { ...o, deliveryReturnedAt: timeNow, updatedAt: nowMs } : o
+        )
+      );
+    }
+    setDeliveryDriverStates((prev) => {
+      const exists = prev.some((d) => d.staffName.trim().toLowerCase() === staffName.trim().toLowerCase());
+      if (exists) {
+        return prev.map((d) =>
+          d.staffName.trim().toLowerCase() === staffName.trim().toLowerCase()
+            ? { ...d, status: 'available', activeOrderId: undefined, lastReturnedAt: timeNow, updatedAt: nowMs }
+            : d
+        );
+      }
+      return [...prev, { staffName, status: 'available', completedTrips: 0, lastReturnedAt: timeNow, updatedAt: nowMs }];
+    });
+    showAppToast(`🏠 ${staffName} ወደ ሎጁ ተመልሰዋል! ለአዲስ ዴሊቨሪ ዝግጁ ነዎት (Ready for Next Dispatch)።`);
+  };
+
+  // ETHIOPIAN DELIVERY PARTNER COMPANIES COLLABORATION HANDLERS
+  const handleAddDeliveryPartner = (partner: DeliveryPartnerCompany) => {
+    setDeliveryPartners((prev) => [partner, ...prev]);
+    showAppToast(`🤝 አዲስ የዴሊቨሪ ካምፓኒ "${partner.nameAm}" በትብብር ዝርዝር ውስጥ ተጨምሯል!`);
+  };
+
+  const handleToggleDeliveryPartner = (partnerId: string) => {
+    setDeliveryPartners((prev) =>
+      prev.map((p) => (p.id === partnerId ? { ...p, active: !p.active } : p))
+    );
+    showAppToast('🤝 የዴሊቨሪ ካምፓኒው ሁኔታ ተዘምኗል።');
+  };
+
+  const handleDeleteDeliveryPartner = (partnerId: string) => {
+    setDeliveryPartners((prev) => prev.filter((p) => p.id !== partnerId));
+    showAppToast('🗑️ የዴሊቨሪ አጋር ካምፓኒው ከዝርዝሩ ተወግዷል።');
+  };
+
+  const handleAssignPartnerToOrder = (orderId: string, partner: DeliveryPartnerCompany) => {
+    const targetOrder = orders.find((o) => o.id === orderId);
+    if (!targetOrder) return;
+    const nowMs = Date.now();
+    const timeNow = new Date(nowMs).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
+    const pinCode = targetOrder.deliveryPinCode || String(Math.floor(1000 + Math.random() * 9000));
+    const trackingCode = targetOrder.deliveryPartnerTrackingCode || `HPL-PRT-${Math.floor(10000 + Math.random() * 90000)}`;
+
+    setOrders((prev) =>
+      prev.map((o) =>
+        o.id === orderId
+          ? {
+              ...o,
+              deliveryMode: 'partner',
+              deliveryPartnerId: partner.id,
+              deliveryPartnerName: `${partner.nameAm} (${partner.nameEn})`,
+              deliveryPartnerPhone: partner.phone,
+              deliveryPartnerTrackingCode: trackingCode,
+              deliveryPartnerFee: partner.baseFeeBirr,
+              deliveryDriverName: `${partner.nameEn} Rider`,
+              deliveryDriverPhone: partner.phone,
+              deliveryVehicleInfo: `🤝 ${partner.nameEn} Partner · ${trackingCode}`,
+              deliveryStatus: 'Assigned',
+              deliveryPinCode: pinCode,
+              deliveryAssignedAt: timeNow,
+              updatedAt: nowMs,
+            }
+          : o
+      )
+    );
+
+    addAssistanceCall({
+      id: `delivpartner-${orderId.replace('#', '')}-${nowMs}`,
+      orderId,
+      location: targetOrder.deliveryAddress || targetOrder.location,
+      time: timeNow,
+      active: true,
+      type: 'pickup',
+      targetRole: 'delivery',
+      createdAt: nowMs,
+      message: `🤝 የውጭ ዴሊቨሪ አጋር (${partner.nameAm}) ለትዕዛዝ ${orderId} ተመድቧል! Waybill: ${trackingCode}`,
+    });
+    playVoiceAlert(`Partner delivery ${partner.nameEn} assigned for order ${orderId}`);
+    showAppToast(`🤝 ትዕዛዝ ${orderId} ለ ${partner.nameAm} (${trackingCode}) ተመድቧል! PIN: ${pinCode}`);
+  };
+
+  const handleUpdatePartnerDeliveryStage = (
+    orderId: string,
+    status: 'Picked Up' | 'Arrived' | 'Delivered',
+    proofPhotoUrl?: string,
+    cashCollected?: boolean
+  ) => {
+    const targetOrder = orders.find((o) => o.id === orderId);
+    if (!targetOrder) return;
+    const nowMs = Date.now();
+    const timeNow = new Date(nowMs).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
+    const isCashSettlement = status === 'Delivered' && targetOrder.payment === 'cash' && Boolean(cashCollected);
+    const actorName = currentUser?.name || targetOrder.deliveryPartnerName || 'Partner Dispatch';
+
+    setOrders((prev) =>
+      prev.map((o) => {
+        if (o.id !== orderId) return o;
+        if (status === 'Picked Up') {
+          return {
+            ...o,
+            deliveryStatus: 'Picked Up',
+            deliveryPickedUpAt: o.deliveryPickedUpAt || timeNow,
+            checkedByWaiter: true,
+            updatedAt: nowMs,
+          };
+        }
+        if (status === 'Arrived') {
+          return {
+            ...o,
+            deliveryStatus: 'Arrived',
+            deliveryArrivedAt: o.deliveryArrivedAt || timeNow,
+            checkedByWaiter: true,
+            updatedAt: nowMs,
+          };
+        }
+        return {
+          ...o,
+          deliveryStatus: 'Delivered',
+          deliveryDeliveredAt: timeNow,
+          deliveryProofPhoto: proofPhotoUrl || o.deliveryProofPhoto,
+          deliveryCashCollected: isCashSettlement ? true : o.deliveryCashCollected,
+          servedByWaiter: true,
+          checkedByWaiter: true,
+          servedAt: timeNow,
+          status: isCashSettlement ? 'Paid' : (o.status === 'Paid' ? 'Paid' : 'Completed'),
+          paymentVerified: isCashSettlement ? true : o.paymentVerified,
+          cashConfirmedAt: isCashSettlement ? timeNow : o.cashConfirmedAt,
+          updatedAt: nowMs,
+        };
+      })
+    );
+
+    if (status === 'Delivered') {
+      resolveOrderAssistanceCalls(orderId, actorName, ['pickup', 'cash_request']);
+      showAppToast(`✅ የአጋር ዴሊቨሪ ትዕዛዝ ${orderId} በተሳካ ሁኔታ እንደደረሰ ተመዝግቧል!`);
+    } else if (status === 'Arrived') {
+      showAppToast(`📍 የአጋር አድራሹ ደንበኛው ጋር ደርሷል (${orderId})።`);
+    } else {
+      showAppToast(`📦 ትዕዛዝ ${orderId} በ ${targetOrder.deliveryPartnerName || 'Partner'} ተነስቷል!`);
+    }
+  };
+
+  // CASHIER INLINE RECEIPT PHOTO ATTACHMENT & ARCHIVE PAIRING
+  const handleCashierAttachOrderReceipt = async (orderId: string, file: File) => {
+    setCashierUploadingOrderId(orderId);
+    try {
+      const url = await processAndUploadReceiptImage(file);
+      const timeNow = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
+      const cashierActor = currentUser?.name || 'Cashier';
+      setOrders((prev) =>
+        prev.map((o) =>
+          o.id === orderId
+            ? {
+                ...o,
+                receiptScreenshot: url,
+                paymentVerified: true,
+                cashierName: o.cashierName || cashierActor,
+                cashConfirmedAt: o.cashConfirmedAt || timeNow,
+                updatedAt: Date.now(),
+              }
+            : o
+        )
+      );
+      showAppToast(`🖼️ የደረሰኝ ፎቶ ከትዕዛዝ ${orderId} ጋር አብሮ ተቀምጧል! (Receipt proof saved)`, 4500);
+    } catch (err) {
+      console.warn('Cashier receipt attach error:', err);
+      showAppToast('⚠️ የደረሰኝ ፎቶ መጫን አልተቻለም፣ እባክዎ እንደገና ይሞክሩ።');
+    } finally {
+      setCashierUploadingOrderId(null);
+    }
+  };
+
   // CREATE BED/ROOM BOOKING
   const handleCreateRoomBooking = (e: React.FormEvent) => {
     e.preventDefault();
     const form = e.currentTarget;
-    const roomNumber = (form.querySelector('#booking-room-number') as HTMLInputElement).value;
+    const roomInputEl = form.querySelector('#booking-room-number') as HTMLInputElement | null;
+    const roomNumber = (roomInputEl?.value || receptionRoomDraft || '').trim();
     const roomType = (form.querySelector('#booking-room-type') as HTMLSelectElement)?.value || 'Single Bed';
     const contactPhone = (form.querySelector('#booking-phone') as HTMLInputElement).value;
     const pricePerNight = Number((form.querySelector('#booking-price') as HTMLInputElement).value) || 0;
-    const checkInDate = (form.querySelector('#booking-date') as HTMLInputElement).value;
+    const nights = Math.max(1, Number((form.querySelector('#booking-nights') as HTMLInputElement | null)?.value || 1));
+    const paymentStatusRaw = (form.querySelector('#booking-payment-status') as HTMLSelectElement | null)?.value;
+    const paymentStatus: 'Paid' | 'Pending' = paymentStatusRaw === 'Paid' ? 'Paid' : 'Pending';
+    const checkInDate = (form.querySelector('#booking-date') as HTMLInputElement).value || getLocalTodayIso();
     const notes = (form.querySelector('#booking-notes') as HTMLTextAreaElement).value;
 
-    // Validate guestIds
-    const finalIds = guestIdsState.map((gid, index) => {
+    // Validate guestIds (preserving captured ID Photo URL!)
+    const finalIds = guestIdsState.slice(0, bookingGuestCount).map((gid, index) => {
       const name = gid.fullName.trim() || `እንግዳ ${index + 1} (Guest ${index + 1})`;
       const idNum = gid.idNumber.trim() || `የመታወቂያ መለያ የለም (No ID card)`;
-      return { fullName: name, idNumber: idNum };
+      return {
+        fullName: name,
+        idNumber: idNum,
+        idPhotoUrl: gid.idPhotoUrl?.trim() ? gid.idPhotoUrl : undefined,
+      };
     });
 
     const newBooking: RoomBooking = {
@@ -5506,6 +6332,9 @@ export default function App() {
       guestIds: finalIds,
       contactPhone,
       pricePerNight,
+      nights,
+      paymentStatus,
+      paidAmount: paymentStatus === 'Paid' ? pricePerNight * nights : 0,
       checkInDate,
       status: 'Active',
       notes,
@@ -5515,14 +6344,363 @@ export default function App() {
     setRoomBookings(prev => [...prev, newBooking]);
     // Reset guest inputs
     setBookingGuestCount(1);
-    setGuestIdsState([{ fullName: '', idNumber: '' }]);
+    setGuestIdsState([{ fullName: '', idNumber: '', idPhotoUrl: '' }]);
+    setReceptionRoomDraft('');
     form.reset();
-    showAppToast('🛎️ አልጋው በተሳካ ሁኔታ ተይዟል! / Bed reserved successfully.');
+    showAppToast(`🛎️ ክፍል ${roomNumber} (${nights} ሌሊት) በተሳካ ሁኔታ ተመዝግቧል! / Bed reserved successfully.`);
   };
 
   const handleCheckoutBooking = (id: string) => {
-    setRoomBookings(prev => prev.map(b => b.id === id ? { ...b, status: 'Checked Out', checkedOutByStaff: currentUser?.name || 'Reception Staff' } : b));
-    showAppToast('🔑 እንግዳው በተገቢው ሁኔታ ወጥቷል! / Checked out successfully.');
+    const todayIso = getLocalTodayIso();
+    setRoomBookings(prev =>
+      prev.map(b =>
+        b.id === id
+          ? {
+              ...b,
+              status: 'Checked Out',
+              checkOutDate: todayIso,
+              paymentStatus: b.paymentStatus || 'Paid',
+              checkedOutByStaff: currentUser?.name || 'Reception Staff',
+            }
+          : b
+      )
+    );
+    showAppToast('🔑 እንግዳው በተገቢው ሁኔታ ቼክ-አውት ሆኗል! / Checked out successfully.');
+  };
+
+  const handleExtendBookingNights = (id: string) => {
+    setRoomBookings(prev =>
+      prev.map(b => {
+        if (b.id !== id) return b;
+        const nextNights = Math.max(1, (b.nights || 1) + 1);
+        return { ...b, nights: nextNights };
+      })
+    );
+    showAppToast('🌙 የእንግዳው ቆይታ በ +1 ሌሊት ተራዝሟል! (+1 Night added)');
+  };
+
+  const handleToggleBookingPaymentStatus = (id: string) => {
+    setRoomBookings(prev =>
+      prev.map(b => {
+        if (b.id !== id) return b;
+        const nextStatus: 'Paid' | 'Pending' = b.paymentStatus === 'Paid' ? 'Pending' : 'Paid';
+        const folioRoom = (b.nights || 1) * (b.pricePerNight || 0);
+        return {
+          ...b,
+          paymentStatus: nextStatus,
+          paidAmount: nextStatus === 'Paid' ? folioRoom : 0,
+        };
+      })
+    );
+    showAppToast('💳 የክፍሉ የክፍያ ሁኔታ ተዘምኗል! (Room payment status updated)');
+  };
+
+  // ONLINE ROOM / BED BOOKING & TABLE + FOOD PRE-ORDER HANDLERS
+  const handleSubmitOnlineRoomBooking = (
+    payload: Omit<
+      OnlineRoomBooking,
+      'id' | 'time' | 'date' | 'createdAt' | 'updatedAt' | 'status' | 'paymentStatus'
+    >
+  ): OnlineRoomBooking => {
+    const nowMs = Date.now();
+    const timeNow = new Date(nowMs).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
+    const todayIso = getLocalTodayIso();
+    const newId = `#RB-${Math.floor(1000 + Math.random() * 9000)}`;
+
+    const newBooking: OnlineRoomBooking = {
+      ...payload,
+      id: newId,
+      status: 'Pending',
+      paymentStatus: 'Pending',
+      time: timeNow,
+      date: todayIso,
+      createdAt: nowMs,
+      updatedAt: nowMs,
+    };
+
+    setOnlineRoomBookings((prev) => [newBooking, ...prev]);
+
+    addAssistanceCall({
+      id: `rb-alert-${newId}-${nowMs}`,
+      location: `${payload.roomType} (${payload.nights}N · ${payload.guestName})`,
+      time: timeNow,
+      active: true,
+      type: 'room_booking',
+      targetRole: 'receptionist',
+      message: `አዲስ የኦንላይን አልጋ ቦኪንግ ${newId} — ${payload.guestName} (${payload.guestPhone}) · Check-in: ${payload.checkInDate}`,
+      createdAt: nowMs,
+    });
+
+    showAppToast(`🛏️ የአልጋ ቦኪንግ ${newId} በተሳካ ሁኔታ ተልኳል! (Online Room Booking Submitted)`);
+    return newBooking;
+  };
+
+  const handleConfirmOnlineRoomBooking = (id: string, roomNumber?: string) => {
+    const nowMs = Date.now();
+    setOnlineRoomBookings((prev) =>
+      prev.map((b) =>
+        b.id === id
+          ? {
+              ...b,
+              status: b.status === 'Checked In' ? 'Checked In' : 'Confirmed',
+              assignedRoomNumber: roomNumber || b.assignedRoomNumber || b.preferredRoomNumber,
+              confirmedByStaff: currentUser?.name || b.confirmedByStaff || 'Reception Staff',
+              updatedAt: nowMs,
+            }
+          : b
+      )
+    );
+    showAppToast(`✓ የአልጋ ቦኪንግ ${id} ተረጋግጧል!${roomNumber ? ` (Room #${roomNumber})` : ''}`);
+  };
+
+  const handleCheckInOnlineRoomBooking = (id: string, roomNumber: string) => {
+    const target = onlineRoomBookings.find((b) => b.id === id);
+    if (!target) return;
+    if (target.status === 'Checked In' && target.linkedBookingId) {
+      showAppToast(`🛏️ ቦኪንግ ${id} ቀድሞውኑ ወደ ክፍል ${target.assignedRoomNumber || roomNumber} ተመዝግቧል።`);
+      return;
+    }
+
+    const finalRoom = (roomNumber || target.assignedRoomNumber || target.preferredRoomNumber || '101').trim();
+    const nowMs = Date.now();
+    const newRoomBookingId = `b-${nowMs}`;
+
+    const createdRoomBooking: RoomBooking = {
+      id: newRoomBookingId,
+      roomNumber: finalRoom,
+      roomType: target.roomType,
+      guestCount: target.guestCount,
+      guestIds: [
+        {
+          fullName: target.guestName,
+          idNumber: `ONLINE-${target.id}`,
+        },
+      ],
+      contactPhone: target.guestPhone,
+      checkInDate: target.checkInDate || getLocalTodayIso(),
+      checkOutDate: target.checkOutDate,
+      status: 'Active',
+      pricePerNight: target.pricePerNight,
+      nights: target.nights,
+      paidAmount: target.paymentStatus === 'Paid' ? target.totalAmount : 0,
+      paymentStatus: target.paymentStatus === 'Paid' ? 'Paid' : 'Pending',
+      notes: `Online Booking ${target.id}${target.notes ? ` · ${target.notes}` : ''}`,
+      receptionistName: currentUser?.name || 'Reception Staff',
+    };
+
+    setRoomBookings((prev) => [...prev, createdRoomBooking]);
+    setOnlineRoomBookings((prev) =>
+      prev.map((b) =>
+        b.id === id
+          ? {
+              ...b,
+              status: 'Checked In',
+              assignedRoomNumber: finalRoom,
+              linkedBookingId: newRoomBookingId,
+              confirmedByStaff: currentUser?.name || b.confirmedByStaff || 'Reception Staff',
+              updatedAt: nowMs,
+            }
+          : b
+      )
+    );
+    showAppToast(`🛎️ እንግዳ ${target.guestName} ወደ ክፍል #${finalRoom} በተሳካ ሁኔታ ገብተዋል (Checked In)!`);
+  };
+
+  const handleToggleOnlineRoomBookingPaid = (id: string) => {
+    const nowMs = Date.now();
+    setOnlineRoomBookings((prev) =>
+      prev.map((b) =>
+        b.id === id
+          ? {
+              ...b,
+              paymentStatus: b.paymentStatus === 'Paid' ? 'Pending' : 'Paid',
+              updatedAt: nowMs,
+            }
+          : b
+      )
+    );
+    showAppToast(`💳 የቦኪንግ ${id} የክፍያ ሁኔታ ተዘምኗል።`);
+  };
+
+  const handleCancelOnlineRoomBooking = (id: string) => {
+    const nowMs = Date.now();
+    setOnlineRoomBookings((prev) =>
+      prev.map((b) => (b.id === id ? { ...b, status: 'Cancelled', updatedAt: nowMs } : b))
+    );
+    showAppToast(`❌ የአልጋ ቦኪንግ ${id} ተሰርዟል።`);
+  };
+
+  const handleSubmitOnlineTableReservation = (
+    payload: Omit<
+      OnlineTableReservation,
+      'id' | 'time' | 'date' | 'createdAt' | 'updatedAt' | 'status' | 'paymentStatus'
+    >
+  ): OnlineTableReservation => {
+    const nowMs = Date.now();
+    const timeNow = new Date(nowMs).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
+    const todayIso = getLocalTodayIso();
+    const newId = `#TB-${Math.floor(1000 + Math.random() * 9000)}`;
+
+    const newReservation: OnlineTableReservation = {
+      ...payload,
+      id: newId,
+      status: 'Pending',
+      paymentStatus: 'Pending',
+      time: timeNow,
+      date: todayIso,
+      createdAt: nowMs,
+      updatedAt: nowMs,
+    };
+
+    setOnlineTableReservations((prev) => [newReservation, ...prev]);
+
+    addAssistanceCall({
+      id: `tb-alert-${newId}-${nowMs}`,
+      location: `${payload.seatingZone} (${payload.partySize} Guests · ${payload.reservationTime})`,
+      time: timeNow,
+      active: true,
+      type: 'table_booking',
+      targetRole: 'waiter',
+      message: `አዲስ የኦንላይን ቴብል ${payload.bookingMode === 'table_and_food' ? '+ ምግብ ቅድመ-ትዕዛዝ ' : ''}${newId} — ${payload.guestName} (${payload.reservationDate} ${payload.reservationTime})`,
+      createdAt: nowMs,
+    });
+
+    showAppToast(`🍽️ የቴብል ቦኪንግ ${newId} በተሳካ ሁኔታ ተልኳል! (Table Reservation Submitted)`);
+    return newReservation;
+  };
+
+  const handleConfirmOnlineTableReservation = (id: string, assignedTable?: string) => {
+    const nowMs = Date.now();
+    setOnlineTableReservations((prev) =>
+      prev.map((r) =>
+        r.id === id
+          ? {
+              ...r,
+              status: r.status === 'Pending' ? 'Confirmed' : r.status,
+              assignedTable: assignedTable || r.assignedTable || 'Table 01',
+              confirmedByStaff: currentUser?.name || r.confirmedByStaff || 'Staff',
+              updatedAt: nowMs,
+            }
+          : r
+      )
+    );
+    showAppToast(`✓ የቴብል ቦኪንግ ${id} ተረጋግጧል!${assignedTable ? ` (${assignedTable})` : ''}`);
+  };
+
+  const handleSendTablePreOrderToKitchen = (id: string, assignedTable?: string) => {
+    const resv = onlineTableReservations.find((r) => r.id === id);
+    if (!resv) return;
+    if (resv.preOrderItems.length === 0) {
+      showAppToast('ℹ️ ይህ ቦኪንግ ቅድመ-ምግብ ትዕዛዝ የለውም (Table Only)።');
+      return;
+    }
+    if (resv.linkedOrderId) {
+      showAppToast(`🍳 ትዕዛዙ ቀድሞውኑ ወደ ኩሽና (${resv.linkedOrderId}) ተልኳል።`);
+      return;
+    }
+
+    const nowMs = Date.now();
+    const timeNow = new Date(nowMs).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
+    const todayIso = getLocalTodayIso();
+    const tableLoc = (assignedTable || resv.assignedTable || 'Table 01').trim();
+    const assignedWaiter = getAssignedWaiterForTable(tableLoc) || currentUser?.name || undefined;
+    const assignedChef = getAssignedChefForTable(tableLoc) || undefined;
+    const newOrderId = `#PRE-${Math.floor(1000 + Math.random() * 9000)}`;
+
+    const preOrder: Order = {
+      id: newOrderId,
+      location: `${tableLoc} · ${resv.guestName} (Pre-Order ${resv.reservationTime})`,
+      orderType: 'dine',
+      items: resv.preOrderItems,
+      serviceCharge: resv.serviceCharge,
+      vat: resv.vat,
+      tip: 0,
+      total: resv.totalAmount,
+      payment: resv.paymentMethod === 'bank' ? 'bank' : resv.paymentMethod === 'chapa' ? 'chapa' : 'cash',
+      paymentVerified: resv.paymentStatus === 'Paid',
+      bankId: resv.bankId,
+      bankRef: resv.bankRef,
+      receiptScreenshot: resv.receiptScreenshot,
+      receiptComment: `Online Table Pre-Order ${resv.id} · ${resv.guestPhone}`,
+      confirmed: true,
+      status: resv.paymentStatus === 'Paid' ? 'Paid' : 'Pending',
+      cookingStatus: 'Pending',
+      waiter: assignedWaiter,
+      chefName: assignedChef,
+      time: timeNow,
+      date: todayIso,
+      createdAt: nowMs,
+      updatedAt: nowMs,
+    };
+
+    setOrders((prev) => [preOrder, ...prev]);
+    setOnlineTableReservations((prev) =>
+      prev.map((r) =>
+        r.id === id
+          ? {
+              ...r,
+              status: 'In Kitchen',
+              assignedTable: tableLoc,
+              linkedOrderId: newOrderId,
+              confirmedByStaff: currentUser?.name || r.confirmedByStaff || 'Staff',
+              updatedAt: nowMs,
+            }
+          : r
+      )
+    );
+
+    addAssistanceCall({
+      id: `chef-pre-${newOrderId}-${nowMs}`,
+      orderId: newOrderId,
+      location: `${tableLoc} (${resv.guestName} · ${resv.reservationTime})`,
+      time: timeNow,
+      active: true,
+      type: 'new_order',
+      targetRole: 'chef',
+      targetWaiter: assignedWaiter,
+      message: `🍽️ የኦንላይን ቅድመ-ትዕዛዝ ${newOrderId} ለ ${tableLoc} (${resv.reservationDate} ${resv.reservationTime})`,
+      createdAt: nowMs,
+    });
+
+    showAppToast(`🍳 የምግብ ቅድመ-ትዕዛዝ ${newOrderId} ወደ ኩሽና ተልኳል! (${tableLoc})`);
+  };
+
+  const handleUpdateOnlineTableStatus = (
+    id: string,
+    nextStatus: OnlineTableReservation['status'],
+    assignedTable?: string
+  ) => {
+    const nowMs = Date.now();
+    setOnlineTableReservations((prev) =>
+      prev.map((r) =>
+        r.id === id
+          ? {
+              ...r,
+              status: nextStatus,
+              assignedTable: assignedTable || r.assignedTable,
+              confirmedByStaff: currentUser?.name || r.confirmedByStaff || 'Staff',
+              updatedAt: nowMs,
+            }
+          : r
+      )
+    );
+    showAppToast(`🍽️ የቴብል ቦኪንግ ${id} ሁኔታ ወደ "${nextStatus}" ተቀይሯል።`);
+  };
+
+  const handleToggleOnlineTablePaid = (id: string) => {
+    const nowMs = Date.now();
+    setOnlineTableReservations((prev) =>
+      prev.map((r) =>
+        r.id === id
+          ? {
+              ...r,
+              paymentStatus: r.paymentStatus === 'Paid' ? 'Pending' : 'Paid',
+              updatedAt: nowMs,
+            }
+          : r
+      )
+    );
+    showAppToast(`💳 የቴብል ቦኪንግ ${id} የክፍያ ሁኔታ ተዘምኗል።`);
   };
 
   const handleDeleteBooking = (id: string) => {
@@ -5539,7 +6717,7 @@ export default function App() {
       title: title.trim() || 'ማብራሪያ ያልተሰጠው ወጪ',
       category: category || 'ሌላ ወጪ (Other)',
       amount: Number(amount) || 0,
-      date: date || new Date().toISOString().split('T')[0],
+      date: date || getLocalTodayIso(),
       time: timeNow,
       notes: notes.trim(),
       recordedByStaff: currentUser?.name || 'Manager Staff',
@@ -5661,7 +6839,7 @@ export default function App() {
       printedByName: currentUser?.name || leadershipContacts.gmName || 'System Admin',
       printedByRole: currentUser?.role || activeRole || 'admin',
       time: now.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-      date: now.toISOString().split('T')[0],
+      date: getLocalTodayIso(),
       timestamp: now.getTime(),
     };
     setQrPrintLogs((prev) => [entry, ...prev].slice(0, 100));
@@ -5725,10 +6903,12 @@ export default function App() {
 
     const nowMs = Date.now();
     const timeNow = new Date(nowMs).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
-    const resolvedWaiter =
-      (!isGenericWaiterLabel(targetOrder.waiter) ? targetOrder.waiter : '') ||
-      getAssignedWaiterForTable(targetOrder.location) ||
-      undefined;
+    const isDeliveryOrder = targetOrder.orderType === 'delivery';
+    const resolvedWaiter = isDeliveryOrder
+      ? undefined
+      : (!isGenericWaiterLabel(targetOrder.waiter) ? targetOrder.waiter : '') ||
+        getAssignedWaiterForTable(targetOrder.location) ||
+        undefined;
 
     if (newStatus === 'Preparing') {
       resolveOrderAssistanceCalls(orderId, currentUser?.name, ['new_order']);
@@ -5745,7 +6925,28 @@ export default function App() {
           (c.id === pickupId || (c.orderId && c.orderId.replace(/^#/, '').trim() === bareId))
       );
 
-      if (!existingActivePickup) {
+      if (isDeliveryOrder) {
+        if (targetOrder.deliveryStatus !== 'Delivered' && !existingActivePickup) {
+          if (triggeredPickupAlertIdsRef.current) {
+            triggeredPickupAlertIdsRef.current.add(pickupId);
+          }
+          playVoiceAlert(
+            `Attention delivery staff! Delivery order ${orderId} for ${targetOrder.deliveryAddress || targetOrder.location} is ready for pickup.`
+          );
+          addAssistanceCall({
+            id: pickupId,
+            orderId,
+            location: targetOrder.deliveryAddress || targetOrder.location,
+            time: timeNow,
+            active: true,
+            type: 'pickup',
+            targetRole: 'delivery',
+            targetWaiter: targetOrder.deliveryDriverName || undefined,
+            createdAt: nowMs,
+            message: `🛵 የዴሊቨሪ ምግብ ${orderId} (${targetOrder.deliveryAddress || targetOrder.location}) ከኩሽና ተዘጋጅቷል! (Delivery Ready for Dispatch)`,
+          });
+        }
+      } else if (!existingActivePickup) {
         if (triggeredPickupAlertIdsRef.current) {
           triggeredPickupAlertIdsRef.current.add(pickupId);
         }
@@ -5783,7 +6984,9 @@ export default function App() {
             readyAt: newStatus === 'Completed' ? timeNow : o.readyAt,
             updatedAt: nowMs,
             chefName: activeRoleLower === 'chef' && currentUser?.name ? currentUser.name : o.chefName,
-            waiter: resolvedWaiter || (activeRoleLower === 'waiter' && currentUser?.name && !o.waiter ? currentUser.name : o.waiter),
+            waiter: o.orderType === 'delivery'
+              ? undefined
+              : resolvedWaiter || (activeRoleLower === 'waiter' && currentUser?.name && !o.waiter ? currentUser.name : o.waiter),
           };
         }
         return o;
@@ -5807,16 +7010,18 @@ export default function App() {
     const nowMs = Date.now();
     const timeNow = new Date(nowMs).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
     const activeRoleLower = (currentUser?.accessPrivilege || currentUser?.role || activeRole || '').toLowerCase();
-    const resolvedWaiter =
-      (waiterName && waiterName.trim()) ||
-      (!isGenericWaiterLabel(targetOrder.waiter) ? targetOrder.waiter : '') ||
-      getAssignedWaiterForTable(targetOrder.location) ||
-      undefined;
+    const isDeliveryOrder = targetOrder.orderType === 'delivery';
+    const resolvedWaiter = isDeliveryOrder
+      ? undefined
+      : (waiterName && waiterName.trim()) ||
+        (!isGenericWaiterLabel(targetOrder.waiter) ? targetOrder.waiter : '') ||
+        getAssignedWaiterForTable(targetOrder.location) ||
+        undefined;
 
     // Clear kitchen incoming alert once cooked
     resolveOrderAssistanceCalls(orderId, currentUser?.name, ['new_order']);
 
-    // Mark as completed and update the assigned waiter
+    // Mark as completed; keep delivery orders strictly unassigned from any waiter
     setOrders(prev => {
       return prev.map(o => {
         if (o.id === orderId) {
@@ -5829,7 +7034,7 @@ export default function App() {
             checkedByWaiter: false,
             readyAt: timeNow,
             updatedAt: nowMs,
-            waiter: resolvedWaiter || o.waiter,
+            waiter: isDeliveryOrder ? undefined : (resolvedWaiter || o.waiter),
             chefName: activeRoleLower === 'chef' && currentUser?.name ? currentUser.name : o.chefName,
           };
         }
@@ -5845,6 +7050,33 @@ export default function App() {
         c.type === 'pickup' &&
         (c.id === pickupId || (c.orderId && c.orderId.replace(/^#/, '').trim() === bareId))
     );
+
+    if (isDeliveryOrder) {
+      if (targetOrder.deliveryStatus !== 'Delivered') {
+        if (!existingActivePickup) {
+          if (triggeredPickupAlertIdsRef.current) {
+            triggeredPickupAlertIdsRef.current.add(pickupId);
+          }
+          playVoiceAlert(
+            `Attention delivery staff! Delivery order ${orderId} for ${targetOrder.deliveryAddress || targetOrder.location} is ready for pickup.`
+          );
+        }
+        addAssistanceCall({
+          id: pickupId,
+          orderId,
+          location: targetOrder.deliveryAddress || targetOrder.location,
+          time: timeNow,
+          active: true,
+          type: 'pickup',
+          targetRole: 'delivery',
+          targetWaiter: targetOrder.deliveryDriverName || undefined,
+          createdAt: nowMs,
+          message: `🛵 የዴሊቨሪ ምግብ ${orderId} (${targetOrder.deliveryAddress || targetOrder.location}) ከኩሽና ተዘጋጅቷል! (Delivery Ready for Dispatch)`,
+        });
+      }
+      showAppToast(`🛵 ትዕዛዝ ${orderId} ተዘጋጅቶ ለዴሊቨሪ ሰራተኛ ብቻ ተልኳል!`);
+      return;
+    }
 
     const targetMsg = resolvedWaiter
       ? `🍲 ${resolvedWaiter} — ${targetOrder.location} (${orderId}) ተሰርቶ አልቋል! እባክዎ ቼክ አድርገው ለደንበኛው ያድርሱ! (Ready for Check & Delivery)`
@@ -5972,28 +7204,45 @@ export default function App() {
       return;
     }
 
-    setStaff(prev => prev.map(s => s.name === originalStaffName ? editingStaff : s));
+    const normalizedEdited: StaffMember = {
+      ...editingStaff,
+      name: editingStaff.name.trim(),
+      role: (editingStaff.role || 'waiter').trim().toLowerCase(),
+      accessPrivilege: ((editingStaff.accessPrivilege || editingStaff.role || 'waiter').trim().toLowerCase()) as any,
+      username: (editingStaff.username || editingStaff.name).trim().toLowerCase(),
+      password: (editingStaff.password || editingStaff.pin || '1234').trim(),
+      pin: editingStaff.pin.trim(),
+      phone: (editingStaff.phone || '').trim(),
+    };
+
+    setStaff(prev => prev.map(s => s.name === originalStaffName ? normalizedEdited : s));
+    if (normalizedEdited.role === 'delivery' || normalizedEdited.accessPrivilege === 'delivery') {
+      setDeliveryDriverStates(prev => {
+        if (prev.some(d => d.staffName.trim().toLowerCase() === normalizedEdited.name.toLowerCase())) return prev;
+        return [...prev, { staffName: normalizedEdited.name, status: 'available', completedTrips: 0, updatedAt: Date.now() }];
+      });
+    }
 
     if (fbUser) {
       try {
         const uid = fbUser.id || fbUser.uid;
         const { error } = await supabase.from('user_team_members')
           .update({
-            name: editingStaff.name,
-            phone: editingStaff.phone || '',
-            role: editingStaff.role,
-            status: editingStaff.active ? 'On Duty' : 'Active',
-            pin: editingStaff.pin,
-            active: editingStaff.active,
-            photo: editingStaff.photo || '',
-            accessPrivilege: editingStaff.accessPrivilege || editingStaff.role,
-            username: editingStaff.username,
-            password: editingStaff.password || '',
-            securityAnswer: editingStaff.securityAnswer || '',
-            hireDate: editingStaff.hireDate || '',
-            info: editingStaff.info || '',
-            education: editingStaff.education || '',
-            certificatePhoto: editingStaff.certificatePhoto || ''
+            name: normalizedEdited.name,
+            phone: normalizedEdited.phone || '',
+            role: normalizedEdited.role,
+            status: normalizedEdited.active ? 'On Duty' : 'Active',
+            pin: normalizedEdited.pin,
+            active: normalizedEdited.active,
+            photo: normalizedEdited.photo || '',
+            accessPrivilege: normalizedEdited.accessPrivilege || normalizedEdited.role,
+            username: normalizedEdited.username,
+            password: normalizedEdited.password || '',
+            securityAnswer: normalizedEdited.securityAnswer || '',
+            hireDate: normalizedEdited.hireDate || '',
+            info: normalizedEdited.info || '',
+            education: normalizedEdited.education || '',
+            certificatePhoto: normalizedEdited.certificatePhoto || ''
           })
           .eq('userId', uid)
           .eq('name', originalStaffName);
@@ -6011,10 +7260,16 @@ export default function App() {
   const handleSaveEditedMenuItem = (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingMenuItem) return;
+    if (isUploadingMedia) {
+      showAppToast('⏳ ምስሉ ወደ ሰርቨር እየተጫነ ነው፣ እባክዎ ትንሽ ይጠብቁ...');
+      return;
+    }
 
-    setMenuItems(prev => prev.map(m => m.id === editingMenuItem.id ? editingMenuItem : m));
+    const nextMenu = menuItems.map(m => m.id === editingMenuItem.id ? editingMenuItem : m);
+    setMenuItems(nextMenu);
+    void syncKeyToCloud('menu', { items: nextMenu });
     setEditingMenuItem(null);
-    showAppToast('🍽️ የሜኑ መረጃ በተሳካ ሁኔታ ተስተካክሏል! / Menu item updated.');
+    showAppToast('🍽️ የሜኑ መረጃ እና ምስሉ በቋሚነት ተቀምጠዋል! / Menu item updated permanently.');
   };
 
   const handleSaveEditedBank = (e: React.FormEvent) => {
@@ -6229,7 +7484,7 @@ export default function App() {
     );
   }
 
-  const isStaffPortalRole = ['waiter', 'chef', 'receptionist', 'cashier', 'guard', 'manager', 'admin'].includes(activeRole);
+  const isStaffPortalRole = ['waiter', 'chef', 'delivery', 'receptionist', 'cashier', 'guard', 'manager', 'admin'].includes(activeRole);
 
   return (
     <div
@@ -6503,20 +7758,58 @@ export default function App() {
                 );
               })()}
 
-              {/* Room Location Selector */}
-              <div className="flex items-center gap-1.5 bg-white border border-stone-200 px-2.5 py-1 rounded-xl shadow-md shrink-0">
-                <MapPin className="text-[#b21f1f] w-3.5 h-3.5 shrink-0" />
-                <div className="flex flex-col text-left">
-                  <span className="text-[6px] uppercase font-mono font-black text-stone-500 tracking-wider block leading-none">{t('header.room')}</span>
-                  <input 
-                    type="text" 
-                    value={guestLocation}
-                    onChange={(e) => setGuestLocation(e.target.value)}
-                    placeholder="Room 101"
-                    className="bg-transparent text-stone-900 font-black text-xs outline-none w-14 uppercase leading-none p-0 border-none focus:ring-0"
-                    id="guest-location-input-top-main"
-                  />
+              {/* Integrated Dine-In / Delivery Mode Switch + Room Location Selector */}
+              <div className="flex items-center gap-1.5 bg-white border border-stone-200 px-2 py-1 rounded-xl shadow-md shrink-0">
+                <div className="flex items-center bg-stone-100 rounded-lg p-0.5 border border-stone-200">
+                  <button
+                    type="button"
+                    onClick={() => setCustomerOrderMode('dine')}
+                    className={`px-2 py-1 rounded-md text-[10px] font-black uppercase cursor-pointer transition-all ${
+                      customerOrderMode === 'dine'
+                        ? 'bg-[#b21f1f] text-white shadow-sm'
+                        : 'text-stone-600 hover:text-stone-900'
+                    }`}
+                  >
+                    🍽️ Dine
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCustomerOrderMode('delivery')}
+                    className={`px-2 py-1 rounded-md text-[10px] font-black uppercase cursor-pointer transition-all ${
+                      customerOrderMode === 'delivery'
+                        ? 'bg-[#b21f1f] text-white shadow-sm'
+                        : 'text-stone-600 hover:text-stone-900'
+                    }`}
+                  >
+                    🛵 Delivery
+                  </button>
                 </div>
+                {customerOrderMode === 'dine' ? (
+                  <div className="flex items-center gap-1 pl-1">
+                    <MapPin className="text-[#b21f1f] w-3.5 h-3.5 shrink-0" />
+                    <div className="flex flex-col text-left">
+                      <span className="text-[6px] uppercase font-mono font-black text-stone-500 tracking-wider block leading-none">{t('header.room')}</span>
+                      <input 
+                        type="text" 
+                        value={guestLocation}
+                        onChange={(e) => setGuestLocation(e.target.value)}
+                        placeholder="Room 101"
+                        className="bg-transparent text-stone-900 font-black text-xs outline-none w-14 uppercase leading-none p-0 border-none focus:ring-0"
+                        id="guest-location-input-top-main"
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setIsCartOpen(true)}
+                    className="flex items-center gap-1 pl-1 pr-1 text-[10px] font-black text-[#b21f1f] cursor-pointer max-w-[90px] truncate"
+                    title={customerDeliveryAddress || customerDeliveryPhone || 'Set Delivery Address'}
+                  >
+                    <Truck className="w-3.5 h-3.5 shrink-0" />
+                    <span className="truncate">{customerDeliveryAddress || customerDeliveryPhone || 'አድራሻ'}</span>
+                  </button>
+                )}
               </div>
             </div>
           </div>
@@ -6960,6 +8253,78 @@ export default function App() {
                         </button>
                       </div>
 
+                      {/* Online Pre-Arrival Room & Table+Food Booking Quick Launchers */}
+                      <div className="flex flex-wrap items-center gap-2 pt-1">
+                        <button
+                          id="btn-entry-book-room"
+                          type="button"
+                          onClick={() => setOnlineBookingModalTab('room')}
+                          className="bg-emerald-500/20 hover:bg-emerald-500 hover:text-black text-emerald-200 border border-emerald-400/50 font-black text-xs px-4 py-2.5 rounded-full flex items-center gap-2 cursor-pointer transition-all active:scale-[0.98]"
+                        >
+                          <span>🛏️</span>
+                          <span>
+                            {tText({
+                              am: 'አልጋ በኦንላይን ያዝ (Book Room)',
+                              en: 'Book Room Online',
+                              or: 'Kutaa Tooraan Qabadhu',
+                              ti: 'ክፍሊ ብኦንላይን ሓዝ',
+                              sid: 'Mine Onlayinenni Amadi',
+                              fr: 'Réserver une Chambre',
+                              de: 'Zimmer online buchen',
+                              it: 'Prenota Camera Online',
+                              zh: '在线预订客房',
+                              ar: 'احجز غرفة أونلاين',
+                            })}
+                          </span>
+                        </button>
+
+                        <button
+                          id="btn-entry-book-table-food"
+                          type="button"
+                          onClick={() => setOnlineBookingModalTab('table_food')}
+                          className="bg-amber-500/20 hover:bg-[#f4c22b] hover:text-black text-amber-200 border border-amber-400/50 font-black text-xs px-4 py-2.5 rounded-full flex items-center gap-2 cursor-pointer transition-all active:scale-[0.98]"
+                        >
+                          <span>🍽️</span>
+                          <span>
+                            {tText({
+                              am: 'ሳይመጡ ቴብል & ምግብ ያዙ (Table & Food Pre-Order)',
+                              en: 'Reserve Table & Pre-Order Food',
+                              or: 'Minjaalaa & Nyaata Dursii Ajaji',
+                              ti: 'ጣውላን ምግብን ብኦንላይን ሓዝ',
+                              sid: 'Xarapheessonna Sagale Balaxxe Ajaji',
+                              fr: 'Réserver Table & Précommander',
+                              de: 'Tisch & Essen vorbestellen',
+                              it: 'Prenota Tavolo e Piatti',
+                              zh: '提前预订餐桌与点餐',
+                              ar: 'احجز طاولة واطلب مسبقاً',
+                            })}
+                          </span>
+                        </button>
+
+                        <button
+                          id="btn-entry-track-bookings"
+                          type="button"
+                          onClick={() => setOnlineBookingModalTab('my_bookings')}
+                          className="bg-white/10 hover:bg-white/20 text-white border border-white/25 font-bold text-xs px-4 py-2.5 rounded-full flex items-center gap-1.5 cursor-pointer transition-all active:scale-[0.98]"
+                        >
+                          <span>📋</span>
+                          <span>
+                            {tText({
+                              am: 'ቦኪንጌን ተከታተል',
+                              en: 'My Bookings',
+                              or: 'Qabannaa Koo',
+                              ti: 'ቦኪንገይ ተኸታተል',
+                              sid: 'Amadimmanna Haroonsi',
+                              fr: 'Mes Réservations',
+                              de: 'Meine Buchungen',
+                              it: 'Le Mie Prenotazioni',
+                              zh: '我的预订',
+                              ar: 'حجوزاتي',
+                            })}
+                          </span>
+                        </button>
+                      </div>
+
                       {/* Accessible Blind / Voice Menu Launcher Drawer (appears only on demand) */}
                       {entryVoiceOpen && (
                         <div
@@ -7394,10 +8759,12 @@ export default function App() {
                                       <span className="text-base select-none">
                                         {unifiedRole === 'waiter' ? '🏃' :
                                          unifiedRole === 'chef' ? '🍳' :
+                                         unifiedRole === 'delivery' ? '🛵' :
                                          unifiedRole === 'receptionist' ? '🛎️' :
                                          unifiedRole === 'cashier' ? '💰' :
                                          unifiedRole === 'guard' ? '🛡️' :
-                                         unifiedRole === 'manager' ? '⚡' : '👑'}
+                                         unifiedRole === 'manager' ? '⚡' :
+                                         unifiedRole === 'admin' ? '👑' : '🪪'}
                                       </span>
                                       <div>
                                         <span className="text-[8px] font-mono tracking-widest text-[#EA580C] uppercase block font-extrabold leading-none">
@@ -7406,10 +8773,13 @@ export default function App() {
                                         <span className="text-xs font-black text-[#1C1917] leading-tight block mt-0.5">
                                           {unifiedRole === 'waiter' ? 'አስተናጋጅ (Waiter)' :
                                            unifiedRole === 'chef' ? 'ሼፍ (Chef)' :
+                                           unifiedRole === 'delivery' ? 'ዴሊቨሪ አድራሽ (Delivery)' :
                                            unifiedRole === 'receptionist' ? 'ሪሴብሽን (Receptionist)' :
                                            unifiedRole === 'cashier' ? 'ካሸር (Cashier)' :
                                            unifiedRole === 'guard' ? 'ጥበቃ (Security)' :
-                                           unifiedRole === 'manager' ? 'ማናጀር (Manager)' : 'አስኪያጅ (Admin)'}
+                                           unifiedRole === 'manager' ? 'ማናጀር (Manager)' :
+                                           unifiedRole === 'admin' ? 'አስኪያጅ (Admin)' :
+                                           `${unifiedRole.toUpperCase()} (Portal)`}
                                         </span>
                                       </div>
                                     </div>
@@ -7430,21 +8800,30 @@ export default function App() {
                                       <span className="text-[8px] font-mono text-[#78716C] uppercase block font-bold">
                                         የስራ ዘርፍዎን ይምረጡ / CHOOSE WORK DIVISION
                                       </span>
-                                      <div className="grid grid-cols-2 gap-1.5 max-h-[125px] overflow-y-auto pr-1 no-scrollbar">
-                                        {[
-                                          { val: 'waiter', labelAm: 'አስተናጋጅ', labelEn: 'Waiter', emoji: '🏃' },
-                                          { val: 'chef', labelAm: 'ሼፍ', labelEn: 'Chef', emoji: '🍳' },
-                                          { val: 'receptionist', labelAm: 'ሪሴብሽን', labelEn: 'Receptionist', emoji: '🛎️' },
-                                          { val: 'cashier', labelAm: 'ካሸር', labelEn: 'Cashier', emoji: '💰' },
-                                          { val: 'guard', labelAm: 'ጥበቃ', labelEn: 'Security', emoji: '🛡️' },
-                                          { val: 'manager', labelAm: 'ማናጀር', labelEn: 'Manager', emoji: '⚡' },
-                                          { val: 'admin', labelAm: 'አስኪያጅ', labelEn: 'Admin', emoji: '👑' }
-                                        ].map(item => (
+                                      <div className="grid grid-cols-2 gap-1.5 max-h-[145px] overflow-y-auto pr-1 no-scrollbar">
+                                        {(() => {
+                                          const builtInDivs = [
+                                            { val: 'waiter', labelAm: 'አስተናጋጅ', labelEn: 'Waiter', emoji: '🏃' },
+                                            { val: 'chef', labelAm: 'ሼፍ', labelEn: 'Chef', emoji: '🍳' },
+                                            { val: 'delivery', labelAm: 'ዴሊቨሪ', labelEn: 'Delivery', emoji: '🛵' },
+                                            { val: 'receptionist', labelAm: 'ሪሴብሽን', labelEn: 'Receptionist', emoji: '🛎️' },
+                                            { val: 'cashier', labelAm: 'ካሸር', labelEn: 'Cashier', emoji: '💰' },
+                                            { val: 'guard', labelAm: 'ጥበቃ', labelEn: 'Security', emoji: '🛡️' },
+                                            { val: 'manager', labelAm: 'ማናጀር', labelEn: 'Manager', emoji: '⚡' },
+                                            { val: 'admin', labelAm: 'አስኪያጅ', labelEn: 'Admin', emoji: '👑' }
+                                          ];
+                                          const knownVals = new Set(builtInDivs.map(b => b.val));
+                                          const extraCustomDivs = Array.from(new Set([...customRoles, ...customPrivileges]))
+                                            .map(r => (r || '').trim().toLowerCase())
+                                            .filter(r => r && r !== 'none' && !knownVals.has(r))
+                                            .map(r => ({ val: r, labelAm: r.toUpperCase(), labelEn: 'Custom Portal', emoji: '🪪' }));
+                                          return [...builtInDivs, ...extraCustomDivs];
+                                        })().map(item => (
                                           <button
                                             key={item.val}
                                             type="button"
                                             onClick={() => {
-                                              setUnifiedRole(item.val as any);
+                                              setUnifiedRole(item.val);
                                               setUnifiedError('');
                                               setIsDivisionExpanded(false);
                                               runVoiceOver(`Selected ${item.labelEn}`);
@@ -7875,19 +9254,28 @@ export default function App() {
                                     የስራ ዘርፍ (SELECT ROLE)
                                   </label>
                                   <div className="flex gap-1 py-1 px-1 bg-[#F3EFE9] border border-stone-200/80 rounded-full overflow-x-auto no-scrollbar whitespace-nowrap font-sans">
-                                    {[
-                                      { val: 'waiter', label: 'አስተናጋጅ 🏃' },
-                                      { val: 'chef', label: 'ሼፍ 🍳' },
-                                      { val: 'receptionist', label: 'ሪሴብሽን 🛎️' },
-                                      { val: 'cashier', label: 'ካሸር 💰' },
-                                      { val: 'guard', label: 'ጥበቃ 🛡️' },
-                                      { val: 'manager', label: 'ማናጀር ⚡' },
-                                      { val: 'admin', label: 'አስኪያጅ 👑' }
-                                    ].map(item => (
+                                    {(() => {
+                                      const builtInSignupRoles = [
+                                        { val: 'waiter', label: 'አስተናጋጅ 🏃' },
+                                        { val: 'chef', label: 'ሼፍ 🍳' },
+                                        { val: 'delivery', label: 'ዴሊቨሪ 🛵' },
+                                        { val: 'receptionist', label: 'ሪሴብሽን 🛎️' },
+                                        { val: 'cashier', label: 'ካሸር 💰' },
+                                        { val: 'guard', label: 'ጥበቃ 🛡️' },
+                                        { val: 'manager', label: 'ማናጀር ⚡' },
+                                        { val: 'admin', label: 'አስኪያጅ 👑' }
+                                      ];
+                                      const known = new Set(builtInSignupRoles.map(b => b.val));
+                                      const customExtra = Array.from(new Set([...customRoles, ...customPrivileges]))
+                                        .map(r => (r || '').trim().toLowerCase())
+                                        .filter(r => r && r !== 'none' && !known.has(r))
+                                        .map(r => ({ val: r, label: `${r.toUpperCase()} 🪪` }));
+                                      return [...builtInSignupRoles, ...customExtra];
+                                    })().map(item => (
                                       <button
                                         key={item.val}
                                         type="button"
-                                        onClick={() => setSignupRole(item.val as any)}
+                                        onClick={() => setSignupRole(item.val)}
                                         className={`py-1 px-2.5 text-[10px] shrink-0 text-center font-sans tracking-tight rounded-full transition-all cursor-pointer ${
                                           signupRole === item.val
                                             ? 'bg-[#FF5A1F] text-[#FFFFFF] font-extrabold shadow-xs'
@@ -8075,6 +9463,23 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => {
+                          setCustomerOrderMode('delivery');
+                          const quickHub = document.getElementById('customer-delivery-service-hub');
+                          if (quickHub) quickHub.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        }}
+                        className={`font-black text-xs px-4 py-2.5 rounded-xl flex items-center gap-1.5 cursor-pointer active:scale-95 transition-all border ${
+                          customerOrderMode === 'delivery'
+                            ? 'bg-emerald-500 text-black border-emerald-300 shadow-md'
+                            : 'bg-white/15 hover:bg-white/25 text-white border-white/30'
+                        }`}
+                      >
+                        <span>🛵</span>
+                        <span>{tText({ am: 'በዴሊቨሪ እዘዝ (Delivery)', en: 'Order Delivery', or: 'Deelivarii Ajaji', ti: 'ብዴሊቨሪ ኣዝዝ', sid: 'Iillishunni Ajaji', fr: 'Livraison', de: 'Lieferung', it: 'Consegna', zh: '外卖配送', ar: 'طلب توصيل' })}</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
                           const voiceSec = document.getElementById('voice-ordering-standalone-section');
                           if (voiceSec) {
                             voiceSec.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -8088,6 +9493,33 @@ export default function App() {
                       >
                         <span>🎙️</span>
                         <span>{tText({ am: 'በድምፅ እዘዝ', en: 'Speak to Order', or: 'Sagaleen Ajaji', ti: 'ብድምጺ ኣዝዝ', sid: 'Huurranni Ajaji', fr: 'Commander à la voix', de: 'Per Sprache bestellen', it: 'Ordina a voce', zh: '语音点餐', ar: 'اطلب بالصوت' })}</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setOnlineBookingModalTab('room')}
+                        className="bg-emerald-600/85 hover:bg-emerald-500 text-white border border-emerald-300/40 font-black text-xs px-4 py-2.5 rounded-xl flex items-center gap-1.5 cursor-pointer active:scale-95 transition-all"
+                      >
+                        <span>🛏️</span>
+                        <span>{tText({ am: 'አልጋ በኦንላይን ያዝ', en: 'Book Room', or: 'Kutaa Qabadhu', ti: 'ክፍሊ ሓዝ', sid: 'Mine Amadi', fr: 'Réserver Chambre', de: 'Zimmer buchen', it: 'Prenota Camera', zh: '在线订房', ar: 'احجز غرفة' })}</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setOnlineBookingModalTab('table_food')}
+                        className="bg-amber-600/85 hover:bg-amber-500 text-white border border-amber-300/40 font-black text-xs px-4 py-2.5 rounded-xl flex items-center gap-1.5 cursor-pointer active:scale-95 transition-all"
+                      >
+                        <span>📅</span>
+                        <span>{tText({ am: 'ቴብል & ምግብ ቦኪንግ', en: 'Table & Pre-Order', or: 'Minjaala & Nyaata', ti: 'ጣውላን ምግብን', sid: 'Xarapheessonna Sagale', fr: 'Table & Précommande', de: 'Tisch & Vorbestellung', it: 'Tavolo e Piatti', zh: '订桌与预点餐', ar: 'طاولة وطلب مسبق' })}</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setOnlineBookingModalTab('my_bookings')}
+                        className="bg-black/35 hover:bg-black/55 text-white border border-white/25 font-bold text-xs px-3.5 py-2.5 rounded-xl flex items-center gap-1.5 cursor-pointer active:scale-95 transition-all"
+                      >
+                        <span>📋</span>
+                        <span>{tText({ am: 'ቦኪንጌ', en: 'My Bookings', or: 'Qabannaa', ti: 'ቦኪንገይ', sid: 'Amadimma', fr: 'Réservations', de: 'Buchungen', it: 'Prenotazioni', zh: '我的预订', ar: 'حجوزاتي' })}</span>
                       </button>
                     </div>
                   </div>
@@ -8105,71 +9537,223 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* ASSIGNED TABLE/ROOM WAITER & MANAGER / GENERAL MANAGER / SUPPORT QUICK BAR */}
+                {/* INTEGRATED CUSTOMER SERVICE & DELIVERY HUB (Dine-In Waiter OR Delivery Customer Fleet + Ethiopian Partners) */}
                 {(() => {
                   const { waiterName, staffMember } = getAssignedWaiterDetails(guestLocation);
                   const activeForLoc = assistanceCalls.filter(
                     (c) => c.active && c.location.trim().toLowerCase() === (guestLocation || '').trim().toLowerCase(),
                   ).length;
+                  const cleanCustomerPhone = customerDeliveryPhone.replace(/\D/g, '');
+                  const customerDeliveryOrders = orders.filter((o) => {
+                    if (o.orderType !== 'delivery' || o.status === 'Cancelled') return false;
+                    const oDigits = (o.deliveryPhone || '').replace(/\D/g, '');
+                    const phoneMatch = cleanCustomerPhone.length >= 6 && oDigits.length >= 6 && (oDigits === cleanCustomerPhone || oDigits.endsWith(cleanCustomerPhone.slice(-8)));
+                    return trackedOrderIds.includes(o.id) || phoneMatch;
+                  });
+                  const latestDeliveryOrder = customerDeliveryOrders[0] || null;
+                  const activePartnerNames = deliveryPartners.filter((p) => p.active).slice(0, 4).map((p) => p.nameEn).join(', ');
                   return (
-                    <div className="bg-[#991B1B] border-2 border-[#f4c22b] rounded-3xl p-4 sm:p-5 shadow-xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4 text-left">
-                      <div className="flex items-center gap-3.5">
-                        <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-[#b21f1f] to-red-800 border-2 border-[#f4c22b] flex items-center justify-center text-2xl shadow-md shrink-0">
-                          🛎️
+                    <div
+                      id="customer-delivery-service-hub"
+                      className="bg-[#991B1B] border-2 border-[#f4c22b] rounded-3xl p-4 sm:p-5 shadow-xl space-y-4 text-left"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2 pb-2.5 border-b border-white/15">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-black uppercase text-[#f4c22b] tracking-wider">
+                            {customerOrderMode === 'delivery'
+                              ? '🛵 የደንበኛ ዴሊቨሪ እና ቀጥታ ክትትል (Delivery Customer Hub)'
+                              : '🛎️ የሎጁ ክፍልና ጠረጴዛ መስተንግዶ (Lodge Dine-In Service)'}
+                          </span>
                         </div>
-                        <div className="space-y-0.5">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="px-2 py-0.5 rounded-lg bg-[#f4c22b] text-red-950 font-mono font-black text-[10px]">
-                              📍 {guestLocation || 'Room 101'}
-                            </span>
-                            {activeForLoc > 0 && (
-                              <span className="px-2 py-0.5 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-400/40 font-bold text-[10px] animate-pulse">
-                                ● {tText({ am: `{n} ጥሪ በሂደት ላይ`, en: `{n} Active Call`, or: `Waamicha {n} Hojii Irra`, ti: `{n} ጻውዒት ኣብ መስርሕ`, sid: `{n} Woshshatto Loosunni`, fr: `{n} appel actif`, de: `{n} aktiver Ruf`, it: `{n} chiamata attiva`, zh: `{n} 个进行中呼叫`, ar: `{n} نداء نشط` }, { n: activeForLoc })}
-                              </span>
-                            )}
-                          </div>
-                          <p className="text-xs sm:text-sm font-black text-white">
-                            {waiterName
-                              ? tText({ am: 'የተመደበ አስተናጋጅ፦ {w}', en: 'Assigned Waiter: {w}', or: 'Tajaajilaa Ramadame: {w}', ti: 'ዝተመደበ ኣስተናጋጅ: {w}', sid: 'Gaamo Soolaancho: {w}', fr: 'Serveur assigné : {w}', de: 'Zugewiesener Kellner: {w}', it: 'Cameriere assegnato: {w}', zh: '指派服务员：{w}', ar: 'النادل المخصص: {w}' }, { w: waiterName })
-                              : tText({ am: 'በስራ ላይ ያለ አስተናጋጅ (ለመጥራት ይጫኑ)', en: 'On-Duty Waiter Service Ready', or: 'Tajaajilli Keessummeessaa Qophaa\'aa Dha', ti: 'ኣብ ስራሕ ዘሎ ኣስተናጋጅ ድሉው እዩ', sid: 'Owaantete Soolaancho Qixxaawo', fr: 'Service serveur prêt', de: 'Kellnerservice bereit', it: 'Servizio cameriere pronto', zh: '值班服务员已就绪', ar: 'خدمة النادل المناوب جاهزة' })}
-                          </p>
-                          <p className="text-[11px] text-white/70">
-                            {waiterName
-                              ? staffMember?.phone
-                                ? `📞 ${staffMember.phone} • `
-                                : ''
-                              : ''}
-                            {tText({ am: 'ለዚህ ጠረጴዛ/ክፍል የተመደበውን አስተናጋጅ ወይም ማናጀር / ስራ አስኪያጅ / Support በቀጥታ ያግኙ።', en: 'Call your assigned waiter or contact Management & Support Team directly.', or: 'Tajaajilaa minjaala/kutaa kanaaf ramadame ykn Hoggansa & Deeggarsa qunnamaa.', ti: 'ነዚ ጣውላ/ክፍሊ ዝተመደበ ኣስተናጋጅ ወይ ኣመሓዳርን ደገፍን ብቐጥታ ርኸቡ።', sid: 'Konne xarapheessa/minira gaamo soolaancho woy massagaancho/kaa\'lote bissa xaadi.', fr: 'Appelez votre serveur dédié ou contactez directement la direction.', de: 'Rufen Sie Ihren Kellner oder kontaktieren Sie direkt das Management.', it: 'Chiama il tuo cameriere o contatta direttamente la direzione.', zh: '呼叫您的专属服务员或直接联系管理及支持团队。', ar: 'اتصل بالنادل المخصص أو تواصل مباشرة مع الإدارة والدعم.' })}
-                          </p>
+                        <div className="flex items-center gap-1 bg-black/30 p-1 rounded-xl border border-white/15">
+                          <button
+                            type="button"
+                            onClick={() => setCustomerOrderMode('dine')}
+                            className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase cursor-pointer transition-all ${
+                              customerOrderMode === 'dine'
+                                ? 'bg-[#f4c22b] text-red-950 shadow'
+                                : 'text-white/80 hover:text-white'
+                            }`}
+                          >
+                            🍽️ በሎጁ / ክፍል
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setCustomerOrderMode('delivery')}
+                            className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase cursor-pointer transition-all ${
+                              customerOrderMode === 'delivery'
+                                ? 'bg-[#f4c22b] text-red-950 shadow'
+                                : 'text-white/80 hover:text-white'
+                            }`}
+                          >
+                            🛵 ዴሊቨሪ (Delivery)
+                          </button>
                         </div>
                       </div>
 
-                      <div className="flex flex-wrap items-center gap-2.5 w-full md:w-auto">
-                        <button
-                          type="button"
-                          id="btn-inline-call-assigned-waiter"
-                          onClick={handleTriggerBuzzer}
-                          className="flex-1 md:flex-none px-4 py-2.5 rounded-xl bg-gradient-to-r from-[#b21f1f] to-red-600 hover:from-red-500 hover:to-red-600 text-yellow-300 font-black text-xs border border-yellow-400/70 shadow-lg flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 transition-all"
-                        >
-                          <span>🛎️</span>
-                          <span>
-                            {waiterName
-                              ? tText({ am: '{w} ን ጥራ', en: 'Call {w}', or: '{w} Waami', ti: 'ን{w} ጸውዕ', sid: '{w} Woshshi', fr: 'Appeler {w}', de: '{w} rufen', it: 'Chiama {w}', zh: '呼叫 {w}', ar: 'استدعاء {w}' }, { w: waiterName })
-                              : tText({ am: 'አስተናጋጅ ጥራ', en: 'Call Waiter', or: 'Tajaajilaa Waami', ti: 'ኣስተናጋጅ ጸውዕ', sid: 'Soolaancho Woshshi', fr: 'Appeler serveur', de: 'Kellner rufen', it: 'Chiama cameriere', zh: '呼叫服务员', ar: 'استدعاء النادل' })}
-                          </span>
-                        </button>
-                        <button
-                          type="button"
-                          id="btn-inline-contact-leadership"
-                          onClick={handleOpenLeadershipContact}
-                          className="flex-1 md:flex-none px-4 py-2.5 rounded-xl bg-[#f4c22b] hover:bg-yellow-300 text-red-950 font-black text-xs border border-white/60 shadow-lg flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 transition-all"
-                        >
-                          <span>👔</span>
-                          <span>
-                            {tText({ am: 'ማናጀር / ስራ አስኪያጅ / Support', en: 'Manager / GM / Support', or: 'Hoggansa / GM / Deeggarsa', ti: 'ማናጀር / GM / ደገፍ', sid: 'Massagaancho / GM / Kaa\'lo', fr: 'Direction / Support', de: 'Management / Support', it: 'Direzione / Supporto', zh: '经理 / 总经理 / 支持', ar: 'المدير / الإدارة / الدعم' })}
-                          </span>
-                        </button>
-                      </div>
+                      {customerOrderMode === 'delivery' ? (
+                        <div className="space-y-3">
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                            <div>
+                              <label className="text-[10px] font-mono uppercase text-yellow-300 font-black block mb-1">
+                                📞 የደንበኛ ስልክ ቁጥር (Delivery Phone)
+                              </label>
+                              <input
+                                type="tel"
+                                value={customerDeliveryPhone}
+                                onChange={(e) => setCustomerDeliveryPhone(e.target.value)}
+                                placeholder="09xxxxxxxx"
+                                className="w-full bg-white text-stone-900 font-mono text-xs font-bold px-3 py-2 rounded-xl border border-[#f4c22b]/70 outline-none"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[10px] font-mono uppercase text-yellow-300 font-black block mb-1">
+                                📍 መድረሻ አድራሻ (Delivery Address)
+                              </label>
+                              <input
+                                type="text"
+                                value={customerDeliveryAddress}
+                                onChange={(e) => setCustomerDeliveryAddress(e.target.value)}
+                                placeholder="Hawassa Piazza / Sefer / House No..."
+                                className="w-full bg-white text-stone-900 text-xs font-bold px-3 py-2 rounded-xl border border-[#f4c22b]/70 outline-none"
+                              />
+                            </div>
+                          </div>
+
+                          {latestDeliveryOrder ? (
+                            <div className="bg-black/30 border border-yellow-400/50 rounded-2xl p-3 flex flex-wrap items-center justify-between gap-3">
+                              <div className="space-y-1">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className="font-mono font-black text-xs text-yellow-300">{latestDeliveryOrder.id}</span>
+                                  <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-200 border border-emerald-400/40 font-mono text-[10px] font-black">
+                                    {latestDeliveryOrder.deliveryStatus || 'Waiting Driver'}
+                                  </span>
+                                  {latestDeliveryOrder.deliveryPinCode && (
+                                    <span className="px-2 py-0.5 rounded-lg bg-[#7A1212] text-[#F4C22B] border border-[#F4C22B] font-mono text-[11px] font-black tabular-nums">
+                                      🔐 Handover PIN: {latestDeliveryOrder.deliveryPinCode}
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="text-[11px] text-white/85">
+                                  {latestDeliveryOrder.deliveryMode === 'partner' && latestDeliveryOrder.deliveryPartnerName
+                                    ? `🤝 Partner: ${latestDeliveryOrder.deliveryPartnerName} (${latestDeliveryOrder.deliveryPartnerTrackingCode || ''})`
+                                    : latestDeliveryOrder.deliveryDriverName
+                                    ? `🛵 Courier: ${latestDeliveryOrder.deliveryDriverName} (${latestDeliveryOrder.deliveryDriverPhone || ''})`
+                                    : '⏳ ዝግጁ የሎጁ ዴሊቨሪ ወይም አጋር ድርጅት በመመደብ ላይ ነው...'}
+                                </p>
+                              </div>
+                              <div className="flex flex-wrap items-center gap-2">
+                                {latestDeliveryOrder.deliveryStatus === 'Delivered' &&
+                                  !latestDeliveryOrder.customerConfirmedReceipt && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleCustomerConfirmOrderReceived(latestDeliveryOrder.id)}
+                                      className="bg-emerald-500 hover:bg-emerald-400 text-black font-black text-[11px] px-3 py-2 rounded-xl cursor-pointer"
+                                    >
+                                      ✅ ደርሶኛል (Confirm)
+                                    </button>
+                                  )}
+                                <button
+                                  type="button"
+                                  onClick={() => setIsLiveTrackerOpen(true)}
+                                  className="bg-[#f4c22b] hover:bg-white text-red-950 font-black text-[11px] px-3 py-2 rounded-xl cursor-pointer"
+                                >
+                                  📡 ቀጥታ ክትትል (Track Live)
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <p className="text-[11px] text-white/80 leading-relaxed">
+                              🤝 በሎጁ ፈጣን ዴሊቨሪ እና በኢትዮጵያ አጋር ካምፓኒዎች ({activePartnerNames || 'BeU, Deliver Addis, ZayRide, Feres'}) በ4-አሃዝ ሚስጥር PIN እና የፎቶ ማረጋገጫ ደህንነቱ በተጠበቀ ሁኔታ ይደርስዎታል።
+                            </p>
+                          )}
+
+                          <div className="flex flex-wrap items-center gap-2.5">
+                            <button
+                              type="button"
+                              onClick={() => setIsCartOpen(true)}
+                              className="px-4 py-2.5 rounded-xl bg-[#f4c22b] hover:bg-white text-red-950 font-black text-xs border border-white/60 shadow-lg flex items-center gap-1.5 cursor-pointer"
+                            >
+                              <span>🛒</span>
+                              <span>ቅርጫት / በዴሊቨሪ እዘዝ ({cart.reduce((s, i) => s + i.qty, 0)})</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setIsLiveTrackerOpen(true)}
+                              className="px-4 py-2.5 rounded-xl bg-black/30 hover:bg-black/50 text-yellow-300 font-black text-xs border border-yellow-400/50 cursor-pointer"
+                            >
+                              📡 የዴሊቨሪ ትዕዛዜን ተከታተል
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleOpenLeadershipContact}
+                              className="px-4 py-2.5 rounded-xl bg-white/15 hover:bg-white/25 text-white font-black text-xs border border-white/30 cursor-pointer"
+                            >
+                              👔 Support / ድጋፍ
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                          <div className="flex items-center gap-3.5">
+                            <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-[#b21f1f] to-red-800 border-2 border-[#f4c22b] flex items-center justify-center text-2xl shadow-md shrink-0">
+                              🛎️
+                            </div>
+                            <div className="space-y-0.5">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="px-2 py-0.5 rounded-lg bg-[#f4c22b] text-red-950 font-mono font-black text-[10px]">
+                                  📍 {guestLocation || 'Room 101'}
+                                </span>
+                                {activeForLoc > 0 && (
+                                  <span className="px-2 py-0.5 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-400/40 font-bold text-[10px] animate-pulse">
+                                    ● {tText({ am: `{n} ጥሪ በሂደት ላይ`, en: `{n} Active Call`, or: `Waamicha {n} Hojii Irra`, ti: `{n} ጻውዒት ኣብ መስርሕ`, sid: `{n} Woshshatto Loosunni`, fr: `{n} appel actif`, de: `{n} aktiver Ruf`, it: `{n} chiamata attiva`, zh: `{n} 个进行中呼叫`, ar: `{n} نداء نشط` }, { n: activeForLoc })}
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-xs sm:text-sm font-black text-white">
+                                {waiterName
+                                  ? tText({ am: 'የተመደበ አስተናጋጅ፦ {w}', en: 'Assigned Waiter: {w}', or: 'Tajaajilaa Ramadame: {w}', ti: 'ዝተመደበ ኣስተናጋጅ: {w}', sid: 'Gaamo Soolaancho: {w}', fr: 'Serveur assigné : {w}', de: 'Zugewiesener Kellner: {w}', it: 'Cameriere assegnato: {w}', zh: '指派服务员：{w}', ar: 'النادل المخصص: {w}' }, { w: waiterName })
+                                  : tText({ am: 'በስራ ላይ ያለ አስተናጋጅ (ለመጥራት ይጫኑ)', en: 'On-Duty Waiter Service Ready', or: 'Tajaajilli Keessummeessaa Qophaa\'aa Dha', ti: 'ኣብ ስራሕ ዘሎ ኣስተናጋጅ ድሉው እዩ', sid: 'Owaantete Soolaancho Qixxaawo', fr: 'Service serveur prêt', de: 'Kellnerservice bereit', it: 'Servizio cameriere pronto', zh: '值班服务员已就绪', ar: 'خدمة النادل المناوب جاهزة' })}
+                              </p>
+                              <p className="text-[11px] text-white/70">
+                                {waiterName
+                                  ? staffMember?.phone
+                                    ? `📞 ${staffMember.phone} • `
+                                    : ''
+                                  : ''}
+                                {tText({ am: 'ለዚህ ጠረጴዛ/ክፍል የተመደበውን አስተናጋጅ ወይም ማናጀር / ስራ አስኪያጅ / Support በቀጥታ ያግኙ።', en: 'Call your assigned waiter or contact Management & Support Team directly.', or: 'Tajaajilaa minjaala/kutaa kanaaf ramadame ykn Hoggansa & Deeggarsa qunnamaa.', ti: 'ነዚ ጣውላ/ክፍሊ ዝተመደበ ኣስተናጋጅ ወይ ኣመሓዳርን ደገፍን ብቐጥታ ርኸቡ።', sid: 'Konne xarapheessa/minira gaamo soolaancho woy massagaancho/kaa\'lote bissa xaadi.', fr: 'Appelez votre serveur dédié ou contactez directement la direction.', de: 'Rufen Sie Ihren Kellner oder kontaktieren Sie direkt das Management.', it: 'Chiama il tuo cameriere o contatta direttamente la direzione.', zh: '呼叫您的专属服务员或直接联系管理及支持团队。', ar: 'اتصل بالنادل المخصص أو تواصل مباشرة مع الإدارة والدعم.' })}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-2.5 w-full md:w-auto">
+                            <button
+                              type="button"
+                              id="btn-inline-call-assigned-waiter"
+                              onClick={handleTriggerBuzzer}
+                              className="flex-1 md:flex-none px-4 py-2.5 rounded-xl bg-gradient-to-r from-[#b21f1f] to-red-600 hover:from-red-500 hover:to-red-600 text-yellow-300 font-black text-xs border border-yellow-400/70 shadow-lg flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 transition-all"
+                            >
+                              <span>🛎️</span>
+                              <span>
+                                {waiterName
+                                  ? tText({ am: '{w} ን ጥራ', en: 'Call {w}', or: '{w} Waami', ti: 'ን{w} ጸውዕ', sid: '{w} Woshshi', fr: 'Appeler {w}', de: '{w} rufen', it: 'Chiama {w}', zh: '呼叫 {w}', ar: 'استدعاء {w}' }, { w: waiterName })
+                                  : tText({ am: 'አስተናጋጅ ጥራ', en: 'Call Waiter', or: 'Tajaajilaa Waami', ti: 'ኣስተናጋጅ ጸውዕ', sid: 'Soolaancho Woshshi', fr: 'Appeler serveur', de: 'Kellner rufen', it: 'Chiama cameriere', zh: '呼叫服务员', ar: 'استدعاء النادل' })}
+                              </span>
+                            </button>
+                            <button
+                              type="button"
+                              id="btn-inline-contact-leadership"
+                              onClick={handleOpenLeadershipContact}
+                              className="flex-1 md:flex-none px-4 py-2.5 rounded-xl bg-[#f4c22b] hover:bg-yellow-300 text-red-950 font-black text-xs border border-white/60 shadow-lg flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 transition-all"
+                            >
+                              <span>👔</span>
+                              <span>
+                                {tText({ am: 'ማናጀር / ስራ አስኪያጅ / Support', en: 'Manager / GM / Support', or: 'Hoggansa / GM / Deeggarsa', ti: 'ማናጀር / GM / ደገፍ', sid: 'Massagaancho / GM / Kaa\'lo', fr: 'Direction / Support', de: 'Management / Support', it: 'Direzione / Supporto', zh: '经理 / 总经理 / 支持', ar: 'المدير / الإدارة / الدعم' })}
+                              </span>
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   );
                 })()}
@@ -8179,6 +9763,7 @@ export default function App() {
                   mode="inline"
                   orders={orders}
                   guestLocation={guestLocation}
+                  guestPhone={customerDeliveryPhone}
                   trackedOrderIds={trackedOrderIds}
                   highlightedOrderId={lastPlacedOrderId}
                   appLang={appLang}
@@ -8220,6 +9805,7 @@ export default function App() {
                   onOpenFullModal={() => setIsLiveTrackerOpen(true)}
                   onConfirmOrderReceived={handleCustomerConfirmOrderReceived}
                   onRequestCashierPayment={handleGuestRequestCashierPayment}
+                  onUploadOrderReceipt={handleGuestUploadOrderReceipt}
                 />
 
                 {/* STANDALONE VOICE ORDERING & AUDIO ACCESSIBILITY SECTION (COMPLETELY SEPARATE FROM DIGITAL MENU) */}
@@ -8441,6 +10027,28 @@ export default function App() {
                       })}
                     </div>
                   </div>
+
+                  {(selectedCategory === 'room' || selectedCategory === 'venue') && (
+                    <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                      <div className="text-left">
+                        <span className="text-[10px] font-mono font-black uppercase text-emerald-700 block">
+                          {selectedCategory === 'room' ? 'ONLINE LODGE ROOM RESERVATION' : 'ONLINE TABLE & FOOD PRE-ORDER'}
+                        </span>
+                        <p className="text-xs font-black text-stone-900 mt-0.5">
+                          {selectedCategory === 'room'
+                            ? '🛏️ ከመምጣትዎ በፊት አልጋ በኦንላይን አስቀድመው ማስያዝ ይችላሉ!'
+                            : '🍽️ ሳይመጡ ባሉበት ሆነው ቴብል እና የሚፈልጉትን ምግብ በኦንላይን ይያዙ!'}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setOnlineBookingModalTab(selectedCategory === 'room' ? 'room' : 'table_food')}
+                        className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black shrink-0 cursor-pointer transition-colors"
+                      >
+                        {selectedCategory === 'room' ? 'አልጋ አሁን ያዝ ➔' : 'ቴብል & ምግብ አሁን ያዝ ➔'}
+                      </button>
+                    </div>
+                  )}
 
                   {/* Active search results label */}
                   {menuSearchQuery.trim() !== '' && (
@@ -8992,22 +10600,20 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => {
-                          const element = document.getElementById('btn-basket-react');
-                          if (element) {
-                            element.scrollIntoView({ behavior: 'smooth' });
-                          }
+                          setCustomerOrderMode('delivery');
+                          setIsCartOpen(true);
                         }}
                         className="px-6 py-3 bg-[#f4c22b] hover:bg-white text-black font-mono text-xs font-black uppercase tracking-wider rounded-lg shadow-md cursor-pointer text-center border border-white/10 active:scale-95 transition-transform"
                       >
-                        {tText({ am: 'አሁን ይዘዙ ➔', en: 'Order Now ➔', or: 'Amma Ajaji ➔', ti: 'ሕጂ ኣዝዝ ➔', sid: 'Xa Ajaji ➔', fr: 'Commander ➔', de: 'Jetzt bestellen ➔', it: 'Ordina ora ➔', zh: '立即点单 ➔', ar: 'اطلب الآن ➔' })}
+                        {tText({ am: '🛵 በዴሊቨሪ አሁን ይዘዙ ➔', en: '🛵 Order Delivery Now ➔', or: '🛵 Deelivarii Ajaji ➔', ti: '🛵 ብዴሊቨሪ ኣዝዝ ➔', sid: '🛵 Iillishunni Ajaji ➔', fr: '🛵 Commander en livraison ➔', de: '🛵 Jetzt liefern lassen ➔', it: '🛵 Ordina consegna ➔', zh: '🛵 立即外卖下单 ➔', ar: '🛵 اطلب توصيل الآن ➔' })}
                       </button>
 
                       {/* Glassmorphic Live Stats Badge: Fast Delivery */}
                       <div className="bg-white/10 backdrop-blur-md px-3.5 py-2.5 rounded-lg border border-white/20 shadow-sm flex items-center gap-2">
-                        <span className="text-sm sm:text-base">🛵</span>
+                        <span className="text-sm sm:text-base">🤝</span>
                         <div>
                           <span className="text-white font-extrabold text-[10px] sm:text-xs block leading-none">
-                            {tText({ am: 'ፈጣን መስተንግዶ', en: 'Fast Delivery', or: 'Geessuu Ariifataa', ti: 'ቅልጡፍ ኣገልግሎት', sid: 'Rakkino Owaante', fr: 'Livraison rapide', de: 'Schnelle Lieferung', it: 'Consegna rapida', zh: '极速配送', ar: 'توصيل سريع' })}
+                            {tText({ am: 'የሎጁ + አጋር ዴሊቨሪ (Verified PIN)', en: 'Lodge Fleet + Ethiopian Partners', or: 'Deelivarii Mirkanaa\'aa', ti: 'ውሑስ ዴሊቨሪ', sid: 'Amanamaancho Iillisha', fr: 'Flotte & Partenaires', de: 'Flotte & Partner', it: 'Flotta & Partner', zh: '自营与合作骑手实时追踪', ar: 'أسطولنا وشركاء التوصيل' })}
                           </span>
                         </div>
                       </div>
@@ -9534,12 +11140,27 @@ export default function App() {
                   );
                 })()}
 
-                {/* Active waiter calls & kitchen pickup alerts — deduplicated (1 per room/table call or orderId) and compact */}
-                {assistanceCalls.some(c => c.active !== false && c.type !== 'new_order') && (() => {
+                {/* Active waiter calls & kitchen pickup alerts — deduplicated (1 per room/table call or orderId) and strictly excludes delivery orders */}
+                {assistanceCalls.some(c => {
+                  if (c.active === false || c.type === 'new_order' || c.targetRole === 'delivery') return false;
+                  const linkedOrd = c.orderId ? orders.find(o => o.id === c.orderId) : undefined;
+                  return linkedOrd?.orderType !== 'delivery';
+                }) && (() => {
                   const supervisorUser = isSupervisorRole(currentUser);
                   const myName = (currentUser?.name || '').trim().toLowerCase();
                   const isAssignedCallToMe = (c: AssistanceCall) => {
-                    if (c.active === false || c.type === 'new_order' || c.type === 'cash_request' || c.targetRole === 'chef' || c.targetRole === 'cashier') return false;
+                    if (
+                      c.active === false ||
+                      c.type === 'new_order' ||
+                      c.type === 'cash_request' ||
+                      c.type === 'room_booking' ||
+                      c.targetRole === 'chef' ||
+                      c.targetRole === 'cashier' ||
+                      c.targetRole === 'delivery' ||
+                      c.targetRole === 'receptionist'
+                    ) return false;
+                    const linkedOrd = c.orderId ? orders.find(o => o.id === c.orderId) : undefined;
+                    if (linkedOrd?.orderType === 'delivery') return false;
                     if (supervisorUser) return true;
                     if (!myName) return false;
                     const explicit = (c.targetWaiter || '').trim().toLowerCase();
@@ -9737,6 +11358,7 @@ export default function App() {
                   {(() => {
                     const supervisorUser = isSupervisorRole(currentUser);
                     const allInPrepOrders = orders.filter(o => {
+                      if (o.orderType === 'delivery') return false;
                       const stage = getEffectiveCookingStatus(o);
                       return stage === 'Pending' || stage === 'Preparing';
                     });
@@ -9783,7 +11405,9 @@ export default function App() {
                     };
 
                     const inPrepOrders = filterOrdersByShift(allInPrepOrders);
-                    const allReadyOrders = orders.filter(o => getEffectiveCookingStatus(o) === 'Completed' && !o.servedByWaiter);
+                    const allReadyOrders = orders.filter(
+                      o => o.orderType !== 'delivery' && getEffectiveCookingStatus(o) === 'Completed' && !o.servedByWaiter
+                    );
                     const readyToDeliverOrders = filterOrdersByShift(allReadyOrders);
 
                     return (
@@ -10097,18 +11721,18 @@ export default function App() {
                       <div className="bg-[#181818] p-3 border border-white/5">
                         <span className="font-mono text-[9px] uppercase text-white/40 block">የዛሬ ያደረሱት ብዛት (DELIVERED)</span>
                         <h4 className="text-2xl font-black mt-1 text-[#C1FF00]">
-                          {orders.filter(o => Boolean(o.servedByWaiter)).length}
+                          {orders.filter(o => o.orderType !== 'delivery' && Boolean(o.servedByWaiter)).length}
                         </h4>
                       </div>
                       <div className="bg-[#181818] p-3 border border-emerald-500/20">
                         <span className="font-mono text-[9px] uppercase text-emerald-300/70 block">🎉 በደንበኛ የተረጋገጠ (CUSTOMER CONFIRMED)</span>
                         <h4 className="text-2xl font-black mt-1 text-emerald-400">
-                          {orders.filter(o => Boolean(o.servedByWaiter) && Boolean(o.customerConfirmedReceipt)).length}
+                          {orders.filter(o => o.orderType !== 'delivery' && Boolean(o.servedByWaiter) && Boolean(o.customerConfirmedReceipt)).length}
                         </h4>
-                        {orders.some(o => Boolean(o.servedByWaiter)) && (
+                        {orders.some(o => o.orderType !== 'delivery' && Boolean(o.servedByWaiter)) && (
                           <div className="mt-2 pt-2 border-t border-white/5 space-y-1.5 max-h-36 overflow-y-auto no-scrollbar">
                             {orders
-                              .filter(o => Boolean(o.servedByWaiter))
+                              .filter(o => o.orderType !== 'delivery' && Boolean(o.servedByWaiter))
                               .slice(0, 5)
                               .map((dOrd) => (
                                 <div key={`w-rec-${dOrd.id}`} className="flex items-center justify-between gap-2 text-[10px]">
@@ -10140,6 +11764,25 @@ export default function App() {
                         </h4>
                       </div>
                     </div>
+                  </div>
+
+                  {/* Online Table & Food Pre-Order Queue for Waiters */}
+                  <div className="col-span-1 lg:col-span-3">
+                    <StaffOnlineBookingsPanel
+                      mode="waiter"
+                      onlineRoomBookings={onlineRoomBookings}
+                      onlineTableReservations={onlineTableReservations}
+                      roomBookings={roomBookings}
+                      currency={currency}
+                      onConfirmRoomBooking={handleConfirmOnlineRoomBooking}
+                      onCheckInRoomBooking={handleCheckInOnlineRoomBooking}
+                      onToggleRoomBookingPaid={handleToggleOnlineRoomBookingPaid}
+                      onCancelRoomBooking={handleCancelOnlineRoomBooking}
+                      onConfirmTableReservation={handleConfirmOnlineTableReservation}
+                      onSendTablePreOrderToKitchen={handleSendTablePreOrderToKitchen}
+                      onUpdateTableStatus={handleUpdateOnlineTableStatus}
+                      onToggleTableReservationPaid={handleToggleOnlineTablePaid}
+                    />
                   </div>
 
                   {/* Waiter Menu Stock Toggle Panel */}
@@ -10566,7 +12209,10 @@ export default function App() {
                           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                             {chefVisibleOrders.map(ord => {
                               const effectiveCook = getEffectiveCookingStatus(ord);
-                              const assignedWaiterName = (!isGenericWaiterLabel(ord.waiter) ? ord.waiter : '') || getAssignedWaiterForTable(ord.location);
+                              const isDeliveryOrd = ord.orderType === 'delivery';
+                              const assignedWaiterName = isDeliveryOrd
+                                ? ''
+                                : (!isGenericWaiterLabel(ord.waiter) ? ord.waiter : '') || getAssignedWaiterForTable(ord.location);
                               const assignedChefName = getAssignedChefForTable(ord.location) || ord.chefName;
                               const waiterSelectId = `chef-select-waiter-${ord.id}`;
                               return (
@@ -10574,7 +12220,9 @@ export default function App() {
                                   <div className="flex justify-between items-start border-b border-white/5 pb-2 gap-2">
                                     <div>
                                       <span className="font-mono text-xs font-black text-orange-400">{ord.id}</span>
-                                      <span className="text-[9px] text-stone-400 font-mono block">{ord.time} · 🍽️ {ord.location}</span>
+                                      <span className="text-[9px] text-stone-400 font-mono block">
+                                        {ord.time} · {isDeliveryOrd ? '🛵' : '🍽️'} {isDeliveryOrd ? (ord.deliveryAddress || ord.location) : ord.location}
+                                      </span>
                                     </div>
                                     <div className="flex flex-col items-end gap-1">
                                       <select
@@ -10583,9 +12231,13 @@ export default function App() {
                                         onChange={(e) => {
                                           const nextStage = e.target.value as 'Pending' | 'Preparing' | 'Completed';
                                           if (nextStage === 'Completed') {
-                                            const selEl = document.getElementById(waiterSelectId) as HTMLSelectElement | null;
-                                            const finalWaiter = selEl ? selEl.value : assignedWaiterName;
-                                            handleSendReadyOrderToWaiter(ord.id, finalWaiter || '');
+                                            if (isDeliveryOrd) {
+                                              handleSendReadyOrderToWaiter(ord.id, '');
+                                            } else {
+                                              const selEl = document.getElementById(waiterSelectId) as HTMLSelectElement | null;
+                                              const finalWaiter = selEl ? selEl.value : assignedWaiterName;
+                                              handleSendReadyOrderToWaiter(ord.id, finalWaiter || '');
+                                            }
                                           } else if (nextStage === 'Preparing') {
                                             handleUpdateOrderStatus(ord.id, 'Preparing');
                                           }
@@ -10626,35 +12278,50 @@ export default function App() {
                                           {assignedChefName || currentUser?.name || 'Kitchen'}
                                         </span>
                                       </div>
-                                      <div className="flex items-center gap-1.5 font-mono">
-                                        <span className="text-stone-500">{tText({ am: '👤 የተመደበ አስተናጋጅ: ', en: '👤 Assigned Waiter: ', or: '👤 Tajaajilaa Ramadame: ', ti: '👤 ዝተመደበ ኣስተናጋጅ: ', sid: '👤 Gaamo Soolaancho: ', fr: '👤 Serveur assigné : ', de: '👤 Zugewiesener Kellner: ', it: '👤 Cameriere assegnato: ', zh: '👤 指派服务员：', ar: '👤 النادل المخصص: ' })}</span>
-                                        {assignedWaiterName ? (
-                                          <span className="text-yellow-400 font-bold bg-yellow-400/10 px-2 py-0.5 rounded border border-yellow-400/20">
-                                            {assignedWaiterName} 🏃
-                                          </span>
-                                        ) : (
-                                          <span className="text-amber-300 font-bold bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20">
-                                            {tText({ am: 'ክፍት (ማንኛውም አስተናጋጅ)', en: 'Open / Select Waiter', or: 'Banaa / Tajaajilaa Filadhu', ti: 'ክፉት / ኣስተናጋጅ ምረጽ', sid: 'Faano / Soolaancho Doori', fr: 'Ouvert / Choisir serveur', de: 'Offen / Kellner wählen', it: 'Aperto / Scegli cameriere', zh: '待指派服务员', ar: 'مفتوح / اختر نادلاً' })}
-                                          </span>
-                                        )}
-                                      </div>
 
-                                      {/* Select Waiter Dropdown */}
-                                      <div className="mt-1 space-y-1">
-                                        <label className="text-[9px] text-stone-400 font-mono block">
-                                          {tText({ am: '🎯 ምግብ አድራሽ አስተናጋጅ ይምረጡ (Select Deliverer):', en: '🎯 Select Deliverer:', or: '🎯 Geessaa Filadhu:', ti: '🎯 መብጽሒ ኣስተናጋጅ ምረጽ:', sid: '🎯 Soolaancho Doori:', fr: '🎯 Choisir le serveur :', de: '🎯 Kellner wählen:', it: '🎯 Seleziona cameriere:', zh: '🎯 选择送餐服务员：', ar: '🎯 اختر النادل الموصل:' })}
-                                        </label>
-                                        <select
-                                          id={waiterSelectId}
-                                          defaultValue={assignedWaiterName}
-                                          className="w-full bg-[#121212] border border-white/10 text-white text-[10px] font-mono p-1.5 outline-none focus:border-yellow-400"
-                                        >
-                                          <option key="unassigned" value="">-- {tText({ am: 'አስተናጋጅ ይምረጡ / ክፍት', en: 'Any Active Waiter', or: 'Tajaajilaa Filadhu', ti: 'ኣስተናጋጅ ምረጽ', sid: 'Soolaancho Doori', fr: 'Serveur disponible', de: 'Beliebiger Kellner', it: 'Cameriere disponibile', zh: '任意在岗服务员', ar: 'أي نادل متاح' })} --</option>
-                                          {staff.filter(s => (s.role || '').toLowerCase() === 'waiter' || (s.accessPrivilege || '').toLowerCase() === 'waiter').map((w, idx) => (
-                                            <option key={`deliverer-${w.name}-${idx}`} value={w.name}>{w.name}</option>
-                                          ))}
-                                        </select>
-                                      </div>
+                                      {isDeliveryOrd ? (
+                                        <div className="mt-1 bg-orange-950/35 border border-orange-500/35 rounded-lg p-2 space-y-1">
+                                          <div className="flex items-center justify-between gap-2 font-mono text-[10px]">
+                                            <span className="text-orange-300 font-black">🛵 የዴሊቨሪ ትዕዛዝ (Delivery Only)</span>
+                                            <span className="text-[9px] px-1.5 py-0.5 rounded bg-black/50 text-stone-300">No Waiter</span>
+                                          </div>
+                                          <p className="text-[10px] font-mono text-stone-200">
+                                            አድራሽ፦ <strong className="text-yellow-300">{ord.deliveryDriverName || ord.deliveryPartnerName || 'ለዴሊቨሪ ሰራተኛ ዝግጁ (Delivery Queue)'}</strong>
+                                          </p>
+                                        </div>
+                                      ) : (
+                                        <>
+                                          <div className="flex items-center gap-1.5 font-mono">
+                                            <span className="text-stone-500">{tText({ am: '👤 የተመደበ አስተናጋጅ: ', en: '👤 Assigned Waiter: ', or: '👤 Tajaajilaa Ramadame: ', ti: '👤 ዝተመደበ ኣስተናጋጅ: ', sid: '👤 Gaamo Soolaancho: ', fr: '👤 Serveur assigné : ', de: '👤 Zugewiesener Kellner: ', it: '👤 Cameriere assegnato: ', zh: '👤 指派服务员：', ar: '👤 النادل المخصص: ' })}</span>
+                                            {assignedWaiterName ? (
+                                              <span className="text-yellow-400 font-bold bg-yellow-400/10 px-2 py-0.5 rounded border border-yellow-400/20">
+                                                {assignedWaiterName} 🏃
+                                              </span>
+                                            ) : (
+                                              <span className="text-amber-300 font-bold bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20">
+                                                {tText({ am: 'ክፍት (ማንኛውም አስተናጋጅ)', en: 'Open / Select Waiter', or: 'Banaa / Tajaajilaa Filadhu', ti: 'ክፉት / ኣስተናጋጅ ምረጽ', sid: 'Faano / Soolaancho Doori', fr: 'Ouvert / Choisir serveur', de: 'Offen / Kellner wählen', it: 'Aperto / Scegli cameriere', zh: '待指派服务员', ar: 'مفتوح / اختر نادلاً' })}
+                                              </span>
+                                            )}
+                                          </div>
+
+                                          {/* Select Waiter Dropdown */}
+                                          <div className="mt-1 space-y-1">
+                                            <label className="text-[9px] text-stone-400 font-mono block">
+                                              {tText({ am: '🎯 ምግብ አድራሽ አስተናጋጅ ይምረጡ (Select Deliverer):', en: '🎯 Select Deliverer:', or: '🎯 Geessaa Filadhu:', ti: '🎯 መብጽሒ ኣስተናጋጅ ምረጽ:', sid: '🎯 Soolaancho Doori:', fr: '🎯 Choisir le serveur :', de: '🎯 Kellner wählen:', it: '🎯 Seleziona cameriere:', zh: '🎯 选择送餐服务员：', ar: '🎯 اختر النادل الموصل:' })}
+                                            </label>
+                                            <select
+                                              id={waiterSelectId}
+                                              defaultValue={assignedWaiterName}
+                                              className="w-full bg-[#121212] border border-white/10 text-white text-[10px] font-mono p-1.5 outline-none focus:border-yellow-400"
+                                            >
+                                              <option key="unassigned" value="">-- {tText({ am: 'አስተናጋጅ ይምረጡ / ክፍት', en: 'Any Active Waiter', or: 'Tajaajilaa Filadhu', ti: 'ኣስተናጋጅ ምረጽ', sid: 'Soolaancho Doori', fr: 'Serveur disponible', de: 'Beliebiger Kellner', it: 'Cameriere disponibile', zh: '任意在岗服务员', ar: 'أي نادل متاح' })} --</option>
+                                              {staff.filter(s => (s.role || '').toLowerCase() === 'waiter' || (s.accessPrivilege || '').toLowerCase() === 'waiter').map((w, idx) => (
+                                                <option key={`deliverer-${w.name}-${idx}`} value={w.name}>{w.name}</option>
+                                              ))}
+                                            </select>
+                                          </div>
+                                        </>
+                                      )}
                                     </div>
 
                                     <div className="pt-2 border-t border-white/5 flex justify-between items-center gap-2 w-full">
@@ -10677,13 +12344,23 @@ export default function App() {
                                         )}
                                         <button
                                           onClick={() => {
-                                            const selEl = document.getElementById(waiterSelectId) as HTMLSelectElement | null;
-                                            const finalWaiter = selEl ? selEl.value : assignedWaiterName;
-                                            handleSendReadyOrderToWaiter(ord.id, finalWaiter || '');
+                                            if (isDeliveryOrd) {
+                                              handleSendReadyOrderToWaiter(ord.id, '');
+                                            } else {
+                                              const selEl = document.getElementById(waiterSelectId) as HTMLSelectElement | null;
+                                              const finalWaiter = selEl ? selEl.value : assignedWaiterName;
+                                              handleSendReadyOrderToWaiter(ord.id, finalWaiter || '');
+                                            }
                                           }}
-                                          className="px-2.5 py-1 bg-emerald-500 hover:bg-emerald-600 text-white text-[10px] font-black uppercase rounded cursor-pointer transition-colors flex items-center gap-1"
+                                          className={`px-2.5 py-1 text-white text-[10px] font-black uppercase rounded cursor-pointer transition-colors flex items-center gap-1 ${
+                                            isDeliveryOrd ? 'bg-orange-600 hover:bg-orange-500' : 'bg-emerald-500 hover:bg-emerald-600'
+                                          }`}
                                         >
-                                          <span>{tText({ am: 'አልቋል · ለአስተናጋጅ ላክ', en: 'Completed · Notify Waiter', or: 'Qophaa\'e · Ergi', ti: 'ተዳልዩ · ንኣስተናጋጅ ስደድ', sid: 'Qixxaawo · Soyi', fr: 'Terminé · Notifier', de: 'Fertig · Senden', it: 'Pronto · Invia', zh: '完成 · 通知服务员', ar: 'مكتمل · إرسال للنادل' })}</span>
+                                          <span>
+                                            {isDeliveryOrd
+                                              ? tText({ am: 'አልቋል · ለዴሊቨሪ ላክ', en: 'Completed · Notify Delivery', or: 'Qophaa\'e · Deelivarii Ergi', ti: 'ተዳልዩ · ንዴሊቨሪ ስደድ', sid: 'Qixxaawo · Iillishshora Soyi', fr: 'Terminé · Notifier Livreur', de: 'Fertig · Fahrer melden', it: 'Pronto · Avvisa Corriere', zh: '完成 · 通知配送员', ar: 'مكتمل · إشعار التوصيل' })
+                                              : tText({ am: 'አልቋል · ለአስተናጋጅ ላክ', en: 'Completed · Notify Waiter', or: 'Qophaa\'e · Ergi', ti: 'ተዳልዩ · ንኣስተናጋጅ ስደድ', sid: 'Qixxaawo · Soyi', fr: 'Terminé · Notifier', de: 'Fertig · Senden', it: 'Pronto · Invia', zh: '完成 · 通知服务员', ar: 'مكتمل · إرسال للنادل' })}
+                                          </span>
                                           <span>✓</span>
                                         </button>
                                       </div>
@@ -10734,9 +12411,12 @@ export default function App() {
                                     }`}
                                   >
                                     <div className="min-w-0">
-                                      <span className="font-black block truncate">{dOrd.id} · {dOrd.location}</span>
+                                      <span className="font-black block truncate">{dOrd.id} · {dOrd.orderType === 'delivery' ? (dOrd.deliveryAddress || dOrd.location) : dOrd.location}</span>
                                       <span className="text-[9px] opacity-80 block truncate">
-                                        🏃 {dOrd.waiter || 'Waiter'} {dOrd.servedAt ? `· ${dOrd.servedAt}` : dOrd.readyAt ? `· ${dOrd.readyAt}` : ''}
+                                        {dOrd.orderType === 'delivery'
+                                          ? `🛵 ${dOrd.deliveryDriverName || dOrd.deliveryPartnerName || 'Delivery Courier'}`
+                                          : `🏃 ${dOrd.waiter || 'Waiter'}`}{' '}
+                                        {dOrd.servedAt ? `· ${dOrd.servedAt}` : dOrd.readyAt ? `· ${dOrd.readyAt}` : ''}
                                       </span>
                                     </div>
                                     <span className={`px-2 py-0.5 rounded font-black text-[9px] shrink-0 ${
@@ -11570,7 +13250,15 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                               <div className="flex gap-2">
                                 <select 
                                   value={editingStaff.role || ''}
-                                  onChange={(e) => setEditingStaff({ ...editingStaff, role: e.target.value as any })}
+                                  onChange={(e) => {
+                                    const nextRole = e.target.value;
+                                    const shouldSyncPriv = !editingStaff.accessPrivilege || editingStaff.accessPrivilege === editingStaff.role;
+                                    setEditingStaff({
+                                      ...editingStaff,
+                                      role: nextRole as any,
+                                      accessPrivilege: shouldSyncPriv ? (nextRole as any) : editingStaff.accessPrivilege,
+                                    });
+                                  }}
                                   className="flex-1 bg-[#181818] border border-[#C1FF00]/40 text-white text-xs font-bold p-2.5 outline-none focus:border-[#C1FF00]"
                                 >
                                   {customRoles.map(roleKey => (
@@ -11580,6 +13268,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                        roleKey === 'receptionist' ? 'ሪሴብሽነር (Receptionist)' : 
                                        roleKey === 'admin' ? 'ተቆጣጣሪ (System Admin)' : 
                                        roleKey === 'manager' ? 'ማናጀር (Manager)' : 
+                                       roleKey === 'delivery' ? 'ዴሊቨሪ አድራሽ (Delivery Courier)' :
                                        roleKey === 'guard' ? 'ጥበቃ (Guard)' : 
                                        roleKey === 'cashier' ? 'ካሸር (Cashier)' : roleKey.toUpperCase()}
                                     </option>
@@ -11621,9 +13310,15 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                       }
                                       if (!customRoles.includes(normalized)) {
                                         setCustomRoles(prev => [...prev, normalized]);
-                                        showAppToast(`✔ አዲስ የስራ መደብ "${normalized}" ተጨምሯል!`);
                                       }
-                                      setEditingStaff({ ...editingStaff, role: normalized });
+                                      if (!customPrivileges.includes(normalized)) {
+                                        setCustomPrivileges(prev => {
+                                          const withoutNone = prev.filter(p => p !== 'none');
+                                          return [...withoutNone, normalized, 'none'];
+                                        });
+                                      }
+                                      setEditingStaff({ ...editingStaff, role: normalized, accessPrivilege: normalized as any });
+                                      showAppToast(`✔ አዲስ የስራ መደብ እና ፖርታል "${normalized}" ተጨምሯል!`);
                                       setInlineNewRoleEditVal('');
                                       setShowInlineNewRoleEdit(false);
                                     }}
@@ -11659,6 +13354,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                      priv === 'admin' ? 'ተቆጣጣሪ (System Admin Access)' :
                                      priv === 'manager' ? 'ማናጀር (Manager Dashboard Access)' :
                                      priv === 'cashier' ? 'የካሸር መቆጣጠሪያ (Cashier Access)' :
+                                     priv === 'delivery' ? 'ዴሊቨሪ አድራሽ (Delivery Portal Access)' :
                                      priv === 'guard' ? 'ጥበቃ (Guard Portal Access)' :
                                      priv === 'none' ? 'ምንም መዳረሻ የለም (No Web Login Access)' :
                                      `${priv.toUpperCase()} (Custom Access)`}
@@ -11870,7 +13566,17 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                               <div className="flex gap-2">
                                 <select 
                                   value={addStaffRoleSelected}
-                                  onChange={(e) => setAddStaffRoleSelected(e.target.value)}
+                                  onChange={(e) => {
+                                    const nextR = e.target.value;
+                                    setAddStaffRoleSelected(nextR);
+                                    if (!customPrivileges.includes(nextR)) {
+                                      setCustomPrivileges(prev => {
+                                        const withoutNone = prev.filter(p => p !== 'none');
+                                        return [...withoutNone, nextR, 'none'];
+                                      });
+                                    }
+                                    setAddStaffAccessSelected(nextR);
+                                  }}
                                   className="flex-1 bg-[#181818] border border-white/10 text-white text-xs font-bold p-2.5 outline-none focus:border-[#C1FF00]"
                                 >
                                   {customRoles.map(r => (
@@ -11880,6 +13586,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                        r === 'receptionist' ? 'ሪሴብሽነር (Receptionist)' : 
                                        r === 'admin' ? 'አድሚን (Admin)' : 
                                        r === 'manager' ? 'ማናጀር (Manager)' : 
+                                       r === 'delivery' ? 'ዴሊቨሪ አድራሽ (Delivery)' :
                                        r === 'guard' ? 'ጥበቃ (Guard)' : 
                                        r === 'cashier' ? 'ካሸር (Cashier)' : r.toUpperCase()}
                                     </option>
@@ -11916,9 +13623,16 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                       }
                                       if (!customRoles.includes(normalized)) {
                                         setCustomRoles(prev => [...prev, normalized]);
-                                        showAppToast(`✔ አዲስ የስራ መደብ "${normalized}" ተጨምሯል!`);
+                                      }
+                                      if (!customPrivileges.includes(normalized)) {
+                                        setCustomPrivileges(prev => {
+                                          const withoutNone = prev.filter(p => p !== 'none');
+                                          return [...withoutNone, normalized, 'none'];
+                                        });
                                       }
                                       setAddStaffRoleSelected(normalized);
+                                      setAddStaffAccessSelected(normalized);
+                                      showAppToast(`✔ አዲስ የስራ መደብ እና ፖርታል "${normalized}" ተጨምሯል!`);
                                       setInlineNewRoleAddVal('');
                                       setShowInlineNewRoleAdd(false);
                                     }}
@@ -11955,6 +13669,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                      priv === 'admin' ? 'ተቆጣጣሪ (System Admin Access)' :
                                      priv === 'manager' ? 'ማናጀር (Manager Dashboard Access)' :
                                      priv === 'cashier' ? 'የካሸር መቆጣጠሪያ (Cashier Access)' :
+                                     priv === 'delivery' ? 'ዴሊቨሪ አድራሽ (Delivery Portal Access)' :
                                      priv === 'guard' ? 'ጥበቃ (Guard Portal Access)' :
                                      priv === 'none' ? 'ምንም መዳረሻ የለም (No Web Login Access)' :
                                      `${priv.toUpperCase()} (Custom Access)`}
@@ -12201,6 +13916,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                        role === 'receptionist' ? 'ሪሴብሽነር (Receptionist)' : 
                                        role === 'admin' ? 'አድሚን (Admin)' : 
                                        role === 'manager' ? 'ማናጀር (Manager)' : 
+                                       role === 'delivery' ? 'ዴሊቨሪ (Delivery)' :
                                        role === 'guard' ? 'ጥበቃ (Guard)' : 
                                        role === 'cashier' ? 'ካሸር (Cashier)' : role.toUpperCase()}</span>
                                 
@@ -12252,10 +13968,22 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                 const normalized = val.toLowerCase();
                                 if (!customRoles.includes(normalized)) {
                                   setCustomRoles(prev => [...prev, normalized]);
-                                  showAppToast(`✔ አዲስ የስራ መደብ "${val}" በተሳካ ሁኔታ ተጨምሯል!`);
+                                  if (!customPrivileges.includes(normalized)) {
+                                    setCustomPrivileges(prev => {
+                                      const withoutNone = prev.filter(p => p !== 'none');
+                                      return [...withoutNone, normalized, 'none'];
+                                    });
+                                  }
+                                  showAppToast(`✔ አዲስ የስራ መደብ እና የመግቢያ ፖርታል "${val}" በተሳካ ሁኔታ ተጨምሯል!`);
                                   input.value = '';
                                 } else {
-                                  showAppToast(`⚠️ የስራ መደቡ "${val}" ቀድሞውኑ ተመዝግቧል!`);
+                                  if (!customPrivileges.includes(normalized)) {
+                                    setCustomPrivileges(prev => {
+                                      const withoutNone = prev.filter(p => p !== 'none');
+                                      return [...withoutNone, normalized, 'none'];
+                                    });
+                                  }
+                                  showAppToast(`⚠️ የስራ መደቡ "${val}" ቀድሞውኑ ተመዝግቧል (መዳረሻውም ዝግጁ ነው)!`);
                                 }
                               } else {
                                 showAppToast(`⚠️ አሁኑኑ የሚጨምሩትን ባዶ ያልሆነ የስራ መደብ ስም ይጻፉ!`);
@@ -12323,6 +14051,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                        priv === 'receptionist' ? 'ሪሴብሽነር (Receptionist)' :
                                        priv === 'admin' ? 'አድሚን (Admin)' :
                                        priv === 'manager' ? 'ማናጀር (Manager)' :
+                                       priv === 'delivery' ? 'ዴሊቨሪ (Delivery)' :
                                        priv === 'cashier' ? 'ካሸር (Cashier)' :
                                        priv === 'guard' ? 'ጥበቃ (Guard)' :
                                        priv === 'none' ? 'ምንም (None)' : priv.toUpperCase()}</span>
@@ -12600,9 +14329,14 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                           <div className="flex gap-2">
                             <button 
                               type="submit" 
-                              className="flex-1 bg-[#C1FF00] hover:bg-white text-black text-xs font-black uppercase py-3 font-mono cursor-pointer"
+                              disabled={isUploadingMedia}
+                              className={`flex-1 text-black text-xs font-black uppercase py-3 font-mono transition-all ${
+                                isUploadingMedia
+                                  ? 'bg-amber-300 cursor-wait opacity-80'
+                                  : 'bg-[#C1FF00] hover:bg-white cursor-pointer'
+                              }`}
                             >
-                              UPDATE ITEM ✔️
+                              {isUploadingMedia ? '⏳ ምስል በመጫን ላይ...' : 'UPDATE ITEM ✔️'}
                             </button>
                             <button 
                               type="button" 
@@ -12733,10 +14467,15 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                           </div>
                           <button 
                             type="submit" 
-                            className="w-full bg-[#C1FF00] hover:bg-white text-black text-xs font-black uppercase py-3 font-mono cursor-pointer"
+                            disabled={isUploadingMedia}
+                            className={`w-full text-black text-xs font-black uppercase py-3 font-mono transition-all ${
+                              isUploadingMedia
+                                ? 'bg-amber-300 cursor-wait opacity-80'
+                                : 'bg-[#C1FF00] hover:bg-white cursor-pointer'
+                            }`}
                             id="btn-add-menu-submit"
                           >
-                            SAVE MENU ITEM
+                            {isUploadingMedia ? '⏳ ምስል በመጫን ላይ...' : 'SAVE MENU ITEM'}
                           </button>
                         </form>
                       </div>
@@ -14533,45 +16272,63 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                     </div>
                                   )}
 
-                                  <div className="flex-1 flex gap-2">
+                                  <div className="flex-1 flex flex-wrap gap-2">
                                     <input 
-                                      type="file"
+                                      type="file" 
                                       accept="image/*"
                                       id={`guest-id-upload-${gIdx}`}
                                       className="hidden"
-                                      onChange={(e) => {
+                                      onChange={async (e) => {
                                         const file = e.target.files?.[0];
                                         if (file) {
-                                          processFileWithCompression(file, (base64) => {
+                                          try {
+                                            const url = await processAndUploadReceiptImage(file);
                                             const updated = [...guestIdsState];
-                                            updated[gIdx] = { ...updated[gIdx], idPhotoUrl: base64 };
+                                            updated[gIdx] = { ...updated[gIdx], idPhotoUrl: url };
                                             setGuestIdsState(updated);
-                                          });
+                                            showAppToast('🪪 የእንግዳው መታወቂያ ፎቶ ተጭኗል!');
+                                          } catch {
+                                            showAppToast('⚠️ ፎቶ መጫን አልተቻለም።');
+                                          }
                                         }
+                                        e.target.value = '';
+                                      }}
+                                    />
+                                    <input
+                                      type="file"
+                                      accept="image/*"
+                                      capture="environment"
+                                      id={`guest-id-camera-${gIdx}`}
+                                      className="hidden"
+                                      onChange={async (e) => {
+                                        const file = e.target.files?.[0];
+                                        if (file) {
+                                          try {
+                                            const url = await processAndUploadReceiptImage(file);
+                                            const updated = [...guestIdsState];
+                                            updated[gIdx] = { ...updated[gIdx], idPhotoUrl: url };
+                                            setGuestIdsState(updated);
+                                            showAppToast('📷 የመታወቂያ ካሜራ ፎቶ ተይዟል!');
+                                          } catch {
+                                            showAppToast('⚠️ ፎቶ መጫን አልተቻለም።');
+                                          }
+                                        }
+                                        e.target.value = '';
                                       }}
                                     />
                                     <button
                                       type="button"
-                                      onClick={() => document.getElementById(`guest-id-upload-${gIdx}`)?.click()}
-                                      className="text-[9px] font-mono font-bold bg-white/5 hover:bg-white/10 text-white/80 border border-white/20 py-1.5 px-2.5 rounded cursor-pointer transition-all uppercase"
+                                      onClick={() => document.getElementById(`guest-id-camera-${gIdx}`)?.click()}
+                                      className="inline-flex items-center gap-1 text-[9px] font-mono font-bold bg-[#C1FF00]/15 hover:bg-[#C1FF00]/25 text-[#C1FF00] border border-[#C1FF00]/40 py-1.5 px-2.5 rounded cursor-pointer transition-all uppercase"
                                     >
-                                      Upload Document
+                                      <Camera className="w-3 h-3" /> Camera Scan
                                     </button>
                                     <button
                                       type="button"
-                                      onClick={() => {
-                                        const presets = [
-                                          'https://images.unsplash.com/photo-1554774853-aae0a22c8aa4?w=200',
-                                          'https://images.unsplash.com/photo-1544256718-3bcf237f3974?w=200'
-                                        ];
-                                        const randomPreset = presets[Math.floor(Math.random() * presets.length)];
-                                        const updated = [...guestIdsState];
-                                        updated[gIdx] = { ...updated[gIdx], idPhotoUrl: randomPreset };
-                                        setGuestIdsState(updated);
-                                      }}
-                                      className="text-[9px] font-mono font-bold bg-[#C1FF00]/10 hover:bg-[#C1FF00]/20 text-[#C1FF00] border border-[#C1FF00]/30 py-1.5 px-2.5 rounded cursor-pointer transition-all uppercase"
+                                      onClick={() => document.getElementById(`guest-id-upload-${gIdx}`)?.click()}
+                                      className="inline-flex items-center gap-1 text-[9px] font-mono font-bold bg-white/10 hover:bg-white/20 text-white border border-white/25 py-1.5 px-2.5 rounded cursor-pointer transition-all uppercase"
                                     >
-                                      Mock Scan
+                                      <Upload className="w-3 h-3" /> Upload ID
                                     </button>
                                   </div>
                                 </div>
@@ -14583,10 +16340,10 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                         <div>
                           <label className="text-[9px] font-mono text-white/50 uppercase block mb-1">መግቢያ ቀን (CHECK IN DATE)</label>
                           <input 
-                            type="date"
+                            type="date" 
                             id="booking-date"
                             required 
-                            defaultValue={new Date().toISOString().split('T')[0]}
+                            defaultValue={getLocalTodayIso()}
                             className="w-full bg-[#181818] border border-white/10 text-[#C1FF00] font-mono text-xs p-2.5 outline-none focus:border-[#C1FF00]"
                           />
                         </div>
@@ -14707,13 +16464,31 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                   </p>
                                   <div className="space-y-1">
                                     {b.guestIds.map((guest, gidx) => (
-                                      <div key={gidx} className="flex flex-col text-xs space-y-0.5 pb-1 border-b border-white/5 last:border-0 last:pb-0">
-                                        <p className="font-bold text-white flex items-center gap-1">
-                                          <span className="text-[10px] text-white/40">{gidx + 1}.</span> {guest.fullName}
-                                        </p>
-                                        <p className="text-[10px] font-mono text-[#00f5ff]">
-                                          🔎 መታወቂያ: <span className="bg-[#00f5ff]/10 px-1 rounded text-[#0aeffa] font-normal">{guest.idNumber}</span>
-                                        </p>
+                                      <div key={gidx} className="flex items-center justify-between gap-2 text-xs pb-1 border-b border-white/5 last:border-0 last:pb-0">
+                                        <div className="space-y-0.5 min-w-0">
+                                          <p className="font-bold text-white flex items-center gap-1 truncate">
+                                            <span className="text-[10px] text-white/40">{gidx + 1}.</span> {guest.fullName}
+                                          </p>
+                                          <p className="text-[10px] font-mono text-[#00f5ff]">
+                                            🔎 መታወቂያ: <span className="bg-[#00f5ff]/10 px-1 rounded text-[#0aeffa] font-normal">{guest.idNumber}</span>
+                                          </p>
+                                        </div>
+                                        {guest.idPhotoUrl && (
+                                          <button
+                                            type="button"
+                                            onClick={() =>
+                                              setReceptionPreviewIdPhoto({
+                                                url: guest.idPhotoUrl!,
+                                                guestName: guest.fullName,
+                                                roomNumber: b.roomNumber,
+                                              })
+                                            }
+                                            className="shrink-0 w-10 h-8 rounded overflow-hidden border border-[#C1FF00]/50 hover:border-[#C1FF00] cursor-pointer"
+                                            title="View Guest ID Photo"
+                                          >
+                                            <img src={guest.idPhotoUrl} alt={guest.fullName} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                                          </button>
+                                        )}
                                       </div>
                                     ))}
                                   </div>
@@ -15338,7 +17113,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                     </p>
                   </div>
 
-                  <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3">
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
                     {[
                       {
                         id: 'bono',
@@ -15413,6 +17188,24 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                         badgeClass: leadershipMessages.some((m) => m.status === 'Pending' && (m.target === 'manager' || m.target === 'support' || m.target === 'both'))
                           ? 'bg-red-500/20 text-red-300 border border-red-500/40 animate-pulse'
                           : 'bg-amber-400/10 text-amber-300 border border-amber-500/20'
+                      },
+                      {
+                        id: 'delivery',
+                        titleAm: 'የዴሊቨሪ ቡድን & መላኪያ',
+                        titleEn: 'Delivery Fleet',
+                        icon: '🛵',
+                        desc: 'የዴሊቨሪ ሰዎች ምዝገባ፣ ምደባ እና ማረጋገጫ',
+                        badge: `${orders.filter((o) => o.orderType === 'delivery' && o.status !== 'Cancelled' && o.deliveryStatus !== 'Delivered').length} ንቁ`,
+                        badgeClass: 'bg-orange-400/15 text-orange-300 border border-orange-500/30'
+                      },
+                      {
+                        id: 'online_bookings',
+                        titleAm: 'ኦንላይን አልጋ & ቴብል',
+                        titleEn: 'Online Bookings',
+                        icon: '🌐',
+                        desc: 'የአልጋ እና የምግብ+ቴብል ቅድመ-ቦኪንግ',
+                        badge: `${onlineRoomBookings.filter((b) => b.status === 'Pending').length + onlineTableReservations.filter((r) => r.status === 'Pending').length} አዲስ`,
+                        badgeClass: 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
                       },
                       {
                         id: 'cache',
@@ -15541,6 +17334,31 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                     }`}
                   >
                     👔 ማናጀር / ስራ አስኪያጅ / Support መገናኛ
+                  </button>
+                  <button 
+                    onClick={() => setManagerTab('delivery')}
+                    className={`px-5 py-3 font-mono text-[11px] uppercase font-black tracking-widest border-b-2 transition-all shrink-0 cursor-pointer ${
+                      managerTab === 'delivery' 
+                        ? 'border-orange-400 text-orange-300 bg-orange-500/10' 
+                        : 'border-transparent text-white/60 hover:text-white hover:bg-white/5'
+                    }`}
+                  >
+                    🛵 ዴሊቨሪ (DELIVERY)
+                  </button>
+                  <button
+                    onClick={() => setManagerTab('online_bookings')}
+                    className={`px-5 py-3 font-mono text-[11px] uppercase font-black tracking-widest border-b-2 transition-all shrink-0 cursor-pointer flex items-center gap-1.5 ${
+                      managerTab === 'online_bookings'
+                        ? 'border-emerald-400 text-emerald-300 bg-emerald-500/10'
+                        : 'border-transparent text-white/60 hover:text-white hover:bg-white/5'
+                    }`}
+                  >
+                    <span>🌐 ኦንላይን አልጋ &amp; ቴብል ቦኪንግ</span>
+                    {(onlineRoomBookings.filter((b) => b.status === 'Pending').length + onlineTableReservations.filter((r) => r.status === 'Pending').length) > 0 && (
+                      <span className="bg-emerald-500 text-black text-[9px] px-1.5 py-0.5 rounded font-black tabular-nums">
+                        {onlineRoomBookings.filter((b) => b.status === 'Pending').length + onlineTableReservations.filter((r) => r.status === 'Pending').length}
+                      </span>
+                    )}
                   </button>
                   <button 
                     onClick={() => setManagerTab('cleaner')}
@@ -15681,7 +17499,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                   onClick={() => setActiveBonusReceipt(b)}
                                   className={`p-3 bg-[#181818] border transition-all cursor-pointer flex justify-between items-center ${
                                     activeBonusReceipt?.id === b.id 
-                                      ? 'border-yellow-400 shadow-[0_0_8px_rgba(234,179,8,0.15)] bg-yellow-450/5' 
+                                      ? 'border-yellow-400 shadow-[0_0_8px_rgba(234,179,8,0.15)] bg-yellow-400/10' 
                                       : 'border-white/5 hover:border-white/15'
                                   }`}
                                 >
@@ -15711,7 +17529,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                           </div>
 
                           {activeBonusReceipt ? (
-                            <div className="bg-white text-black p-5 font-mono shadow-2xl max-w-xs w-full text-center space-y-3 relative shrink-0 text-xs border border-neutral-300">
+                            <div id="printable-area" className="bg-white text-black p-5 font-mono shadow-2xl max-w-xs w-full text-center space-y-3 relative shrink-0 text-xs border border-neutral-300">
                               {/* Jagged paper top */}
                               <div className="absolute top-0 inset-x-0 h-1.5 bg-neutral-200/50 flex overflow-hidden">
                                 {Array.from({ length: 24 }).map((_, i) => (
@@ -15940,6 +17758,32 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                       </div>
                     </div>
 
+                    {/* Staff Attendance Search & Role Filter */}
+                    <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center justify-between bg-[#151515] border border-white/10 p-3 rounded-lg">
+                      <input
+                        type="text"
+                        value={managerAttSearch}
+                        onChange={(e) => setManagerAttSearch(e.target.value)}
+                        placeholder="🔍 ሰራተኛ በስም ወይም በPIN ይፈልጉ (Search staff name or PIN)..."
+                        className="flex-1 bg-black/70 border border-white/15 rounded-lg px-3 py-2 text-xs text-white placeholder:text-stone-400 outline-none focus:border-yellow-400"
+                      />
+                      <select
+                        value={managerAttRoleFilter}
+                        onChange={(e) => setManagerAttRoleFilter(e.target.value)}
+                        className="bg-black/70 border border-white/15 rounded-lg px-3 py-2 text-xs font-bold text-yellow-300 outline-none focus:border-yellow-400 cursor-pointer"
+                      >
+                        <option value="all">🌐 ሁሉም የስራ ክፍሎች (All Roles)</option>
+                        <option value="waiter">🍽️ አስተናጋጅ (Waiter)</option>
+                        <option value="chef">👨‍🍳 ሼፍ (Chef)</option>
+                        <option value="cashier">💵 ካሸር (Cashier)</option>
+                        <option value="receptionist">🛎️ ሪሴብሽን (Receptionist)</option>
+                        <option value="delivery">🛵 ዴሊቨሪ (Delivery)</option>
+                        <option value="guard">🛡️ ጥበቃ (Guard)</option>
+                        <option value="manager">👔 ማናጀር (Manager)</option>
+                        <option value="admin">🔑 አድሚን (Admin)</option>
+                      </select>
+                    </div>
+
                     {/* Staff List Table for Attendance Entries */}
                     <div className="border border-white/5 bg-[#181818] rounded-lg overflow-hidden">
                       <div className="overflow-x-auto">
@@ -15955,92 +17799,121 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-white/5 font-bold">
-                            {staff.map((s, idx) => {
-                              const todayIso = getLocalTodayIso();
-                              const record = attendance.find(a => a.staffName === s.name && normalizeRecordDateToIso(a.date) === todayIso);
+                            {(() => {
+                              const attQuery = managerAttSearch.trim().toLowerCase();
+                              const filteredAttStaff = staff.filter((s) => {
+                                if (managerAttRoleFilter !== 'all') {
+                                  const r = (s.role || '').toLowerCase();
+                                  const ap = (s.accessPrivilege || '').toLowerCase();
+                                  if (r !== managerAttRoleFilter && ap !== managerAttRoleFilter) return false;
+                                }
+                                if (attQuery) {
+                                  return (
+                                    s.name.toLowerCase().includes(attQuery) ||
+                                    (s.pin || '').toLowerCase().includes(attQuery) ||
+                                    (s.phone || '').toLowerCase().includes(attQuery)
+                                  );
+                                }
+                                return true;
+                              });
 
-                              return (
-                                <tr key={idx} className="hover:bg-white/[0.02] transition-colors">
-                                  <td className="p-3 flex items-center gap-3">
-                                    <img 
-                                      src={s.photo || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100"} 
-                                      className="w-10 h-10 rounded-full object-cover border border-white/10 bg-slate-900 shrink-0" 
-                                      alt={s.name} 
-                                    />
-                                    <div>
-                                      <div className="text-white text-xs">{s.name}</div>
-                                      <div className="text-[9px] text-white/40 font-mono">PIN: {s.pin}</div>
-                                    </div>
-                                  </td>
-                                  <td className="p-3 uppercase">
-                                    <span className="text-[10px] font-mono bg-red-950/80 text-yellow-300 border border-yellow-400/50 py-0.5 px-2 rounded font-bold shadow-sm">
-                                      {s.role}
-                                    </span>
-                                  </td>
-                                  <td className="p-3">
-                                    {record ? (
-                                      <span className={`px-2 py-0.5 text-[10px] rounded font-mono ${
-                                        record.status === 'Present' 
-                                          ? 'bg-lime-950 text-lime-400 border border-lime-800/50' 
-                                          : record.status === 'Late' 
-                                          ? 'bg-amber-950 text-amber-400 border border-amber-800/50'
-                                          : 'bg-red-950 text-red-400 border border-red-800/50'
-                                      }`}>
-                                        {record.status === 'Present' ? '✓ Present' : record.status === 'Late' ? '⏱ Late' : '✗ Absent'}
+                              if (filteredAttStaff.length === 0) {
+                                return (
+                                  <tr>
+                                    <td colSpan={6} className="p-8 text-center text-stone-400 font-mono text-xs">
+                                      🔍 ከፍለጋው ጋር የሚመሳሰል ሰራተኛ አልተገኘም። (No matching staff found)
+                                    </td>
+                                  </tr>
+                                );
+                              }
+
+                              const todayIso = getLocalTodayIso();
+                              return filteredAttStaff.map((s, idx) => {
+                                const record = attendance.find(a => a.staffName === s.name && normalizeRecordDateToIso(a.date) === todayIso);
+
+                                return (
+                                  <tr key={s.name + '-' + idx} className="hover:bg-white/[0.02] transition-colors">
+                                    <td className="p-3 flex items-center gap-3">
+                                      <img 
+                                        src={s.photo || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100"} 
+                                        className="w-10 h-10 rounded-full object-cover border border-white/10 bg-slate-900 shrink-0" 
+                                        alt={s.name} 
+                                      />
+                                      <div>
+                                        <div className="text-white text-xs">{s.name}</div>
+                                        <div className="text-[9px] text-white/40 font-mono">PIN: {s.pin}</div>
+                                      </div>
+                                    </td>
+                                    <td className="p-3 uppercase">
+                                      <span className="text-[10px] font-mono bg-red-950/80 text-yellow-300 border border-yellow-400/50 py-0.5 px-2 rounded font-bold shadow-sm">
+                                        {s.role}
                                       </span>
-                                    ) : (
-                                      <span className="text-white/30 font-mono italic text-[10px]">Not Marked</span>
-                                    )}
-                                  </td>
-                                  <td className="p-3 font-mono text-white/80">
-                                    {record?.clockInTime || '--:--'}
-                                  </td>
-                                  <td className="p-3 font-mono text-white/80">
-                                    {record?.clockOutTime || '--:--'}
-                                  </td>
-                                  <td className="p-3 text-right">
-                                    <div className="inline-flex flex-wrap justify-end gap-1">
-                                      <button 
-                                        onClick={() => {
-                                          handleManagerUpdateAttendance(s.name, 'Present', customAttendanceTime);
-                                          showAppToast(`✓ ${s.name} — Present ተመዝግቧል`);
-                                        }}
-                                        className="px-2.5 py-1.5 bg-lime-900/30 hover:bg-lime-600 text-lime-400 hover:text-white border border-lime-800/40 text-[9px] uppercase font-mono font-black rounded transition-all cursor-pointer"
-                                      >
-                                        PRESENT
-                                      </button>
-                                      <button 
-                                        onClick={() => {
-                                          handleManagerUpdateAttendance(s.name, 'Late', customAttendanceTime);
-                                          showAppToast(`⏱ ${s.name} — Late ተመዝግቧል`);
-                                        }}
-                                        className="px-2.5 py-1.5 bg-amber-900/30 hover:bg-amber-600 text-amber-400 hover:text-white border border-amber-800/40 text-[9px] uppercase font-mono font-black rounded transition-all cursor-pointer"
-                                      >
-                                        LATE
-                                      </button>
-                                      <button 
-                                        onClick={() => {
-                                          handleManagerUpdateAttendance(s.name, 'Absent', customAttendanceTime);
-                                          showAppToast(`✗ ${s.name} — Absent ተመዝግቧል`);
-                                        }}
-                                        className="px-2.5 py-1.5 bg-red-900/30 hover:bg-red-600 text-red-400 hover:text-white border border-red-800/40 text-[9px] uppercase font-mono font-black rounded transition-all cursor-pointer"
-                                      >
-                                        ABSENT
-                                      </button>
-                                      <button 
-                                        onClick={() => {
-                                          handleClockOutAttendance(s.name);
-                                          showAppToast(`🚪 ${s.name} የስራ መውጫ (Clock-out) ተመዝግቧል`);
-                                        }}
-                                        className="px-2.5 py-1.5 bg-sky-900/30 hover:bg-sky-600 text-sky-300 hover:text-white border border-sky-700/40 text-[9px] uppercase font-mono font-black rounded transition-all cursor-pointer"
-                                      >
-                                        🚪 CLOCK OUT
-                                      </button>
-                                    </div>
-                                  </td>
-                                </tr>
-                              );
-                            })}
+                                    </td>
+                                    <td className="p-3">
+                                      {record ? (
+                                        <span className={`px-2 py-0.5 text-[10px] rounded font-mono ${
+                                          record.status === 'Present' 
+                                            ? 'bg-lime-950 text-lime-400 border border-lime-800/50' 
+                                            : record.status === 'Late' 
+                                            ? 'bg-amber-950 text-amber-400 border border-amber-800/50' 
+                                            : 'bg-red-950 text-red-400 border border-red-800/50'
+                                        }`}>
+                                          {record.status === 'Present' ? '✓ Present' : record.status === 'Late' ? '⏱ Late' : '✗ Absent'}
+                                        </span>
+                                      ) : (
+                                        <span className="text-white/30 font-mono italic text-[10px]">Not Marked</span>
+                                      )}
+                                    </td>
+                                    <td className="p-3 font-mono text-white/80">
+                                      {record?.clockInTime || '--:--'}
+                                    </td>
+                                    <td className="p-3 font-mono text-white/80">
+                                      {record?.clockOutTime || '--:--'}
+                                    </td>
+                                    <td className="p-3 text-right">
+                                      <div className="inline-flex flex-wrap justify-end gap-1">
+                                        <button 
+                                          onClick={() => {
+                                            handleManagerUpdateAttendance(s.name, 'Present', customAttendanceTime);
+                                            showAppToast(`✓ ${s.name} — Present ተመዝግቧል`);
+                                          }}
+                                          className="px-2.5 py-1.5 bg-lime-900/30 hover:bg-lime-600 text-lime-400 hover:text-white border border-lime-800/40 text-[9px] uppercase font-mono font-black rounded transition-all cursor-pointer"
+                                        >
+                                          PRESENT
+                                        </button>
+                                        <button 
+                                          onClick={() => {
+                                            handleManagerUpdateAttendance(s.name, 'Late', customAttendanceTime);
+                                            showAppToast(`⏱ ${s.name} — Late ተመዝግቧል`);
+                                          }}
+                                          className="px-2.5 py-1.5 bg-amber-900/30 hover:bg-amber-600 text-amber-400 hover:text-white border border-amber-800/40 text-[9px] uppercase font-mono font-black rounded transition-all cursor-pointer"
+                                        >
+                                          LATE
+                                        </button>
+                                        <button 
+                                          onClick={() => {
+                                            handleManagerUpdateAttendance(s.name, 'Absent', customAttendanceTime);
+                                            showAppToast(`✗ ${s.name} — Absent ተመዝግቧል`);
+                                          }}
+                                          className="px-2.5 py-1.5 bg-red-900/30 hover:bg-red-600 text-red-400 hover:text-white border border-red-800/40 text-[9px] uppercase font-mono font-black rounded transition-all cursor-pointer"
+                                        >
+                                          ABSENT
+                                        </button>
+                                        <button 
+                                          onClick={() => {
+                                            handleClockOutAttendance(s.name);
+                                            showAppToast(`🚪 ${s.name} የስራ መውጫ (Clock-out) ተመዝግቧል`);
+                                          }}
+                                          className="px-2.5 py-1.5 bg-sky-900/30 hover:bg-sky-600 text-sky-300 hover:text-white border border-sky-700/40 text-[9px] uppercase font-mono font-black rounded transition-all cursor-pointer"
+                                        >
+                                          🚪 CLOCK OUT
+                                        </button>
+                                      </div>
+                                    </td>
+                                  </tr>
+                                );
+                              });
+                            })()}
                           </tbody>
                         </table>
                       </div>
@@ -16296,31 +18169,103 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                     {ledgerFilterTab === 'daily' && (
                       <div className="space-y-4">
                         {(() => {
-                          const todayIso = getLocalTodayIso();
-                          const dailyOrders = orders.filter(o => normalizeRecordDateToIso(o.date) === todayIso);
+                          const selectedDate = managerLedgerDate || getLocalTodayIso();
+                          const searchLower = managerLedgerSearch.trim().toLowerCase();
+                          const dateOrders = managerLedgerAllDates
+                            ? orders.filter((o) => o.status !== 'Cancelled')
+                            : orders.filter(
+                                (o) => o.status !== 'Cancelled' && normalizeRecordDateToIso(o.date) === selectedDate
+                              );
+                          const dailyOrders = dateOrders.filter((o) => {
+                            if (!searchLower) return true;
+                            return (
+                              o.id.toLowerCase().includes(searchLower) ||
+                              (o.location || '').toLowerCase().includes(searchLower) ||
+                              (o.customerPhone || '').toLowerCase().includes(searchLower) ||
+                              (o.bankRef || '').toLowerCase().includes(searchLower) ||
+                              (o.cashPaymentCode || '').toLowerCase().includes(searchLower) ||
+                              (o.waiter || '').toLowerCase().includes(searchLower)
+                            );
+                          });
+
                           const totalSales = dailyOrders.reduce((s, o) => s + o.total, 0);
-                          const cashSales = dailyOrders.filter(o => o.payment === 'cash').reduce((s, o) => s + o.total, 0);
-                          const bankSales = dailyOrders.filter(o => o.payment === 'bank').reduce((s, o) => s + o.total, 0);
-                          const chapaSales = dailyOrders.filter(o => o.payment === 'chapa').reduce((s, o) => s + o.total, 0);
+                          const cashSales = dailyOrders.filter((o) => o.payment === 'cash').reduce((s, o) => s + o.total, 0);
+                          const bankSales = dailyOrders.filter((o) => o.payment === 'bank').reduce((s, o) => s + o.total, 0);
+                          const chapaSales = dailyOrders.filter((o) => o.payment === 'chapa').reduce((s, o) => s + o.total, 0);
+
+                          const filteredExpenses = (
+                            managerLedgerAllDates
+                              ? expenses
+                              : expenses.filter((ex) => normalizeRecordDateToIso(ex.date) === selectedDate)
+                          ).filter((ex) => {
+                            if (!searchLower) return true;
+                            return (
+                              ex.title.toLowerCase().includes(searchLower) ||
+                              ex.category.toLowerCase().includes(searchLower) ||
+                              (ex.notes || '').toLowerCase().includes(searchLower)
+                            );
+                          });
+                          const totalExpenses = filteredExpenses.reduce((s, ex) => s + (Number(ex.amount) || 0), 0);
+                          const netProfit = totalSales - totalExpenses;
 
                           return (
-                            <div className="space-y-4">
-                              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
-                                <div className="bg-black/30 border border-white/5 p-4 rounded-lg">
-                                  <span className="text-[9px] text-white/40 block uppercase">{tText({ am: 'የዛሬ ጠቅላላ', en: "Today's Total", or: 'Ida’ama Har’aa', ti: 'ናይ ሎሚ ድምር', sid: 'Techo Xaphooma', fr: "Total du jour", de: 'Tagessumme', it: 'Totale odierno', zh: '今日总额', ar: 'إجمالي اليوم' })}</span>
-                                  <span className="text-xl font-mono font-bold text-white">{totalSales} {currency}</span>
+                            <div className="space-y-5">
+                              {/* Date Filter + All Dates Toggle + Search */}
+                              <div className="flex flex-col md:flex-row gap-3 items-stretch md:items-center justify-between bg-black/40 border border-white/10 p-3 rounded-xl">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <input
+                                    type="date"
+                                    value={selectedDate}
+                                    disabled={managerLedgerAllDates}
+                                    onChange={(e) => setManagerLedgerDate(e.target.value)}
+                                    className="bg-[#181818] border border-white/15 rounded-lg px-3 py-1.5 text-xs font-mono text-[#C1FF00] outline-none disabled:opacity-40"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => setManagerLedgerAllDates((prev) => !prev)}
+                                    className={`px-3 py-1.5 rounded-lg text-[10px] font-mono font-black uppercase border transition-colors cursor-pointer ${
+                                      managerLedgerAllDates
+                                        ? 'bg-[#C1FF00] text-black border-[#C1FF00]'
+                                        : 'bg-[#181818] text-white/75 border-white/15 hover:text-white'
+                                    }`}
+                                  >
+                                    {managerLedgerAllDates ? '✓ ሁሉም ቀናት (All Dates)' : '📅 ሁሉንም ቀናት አሳይ (All Dates)'}
+                                  </button>
                                 </div>
-                                <div className="bg-emerald-950/20 border border-emerald-900/30 p-4 rounded-lg">
-                                  <span className="text-[9px] text-emerald-400/60 block uppercase">{tText({ am: 'በጥሬ ገንዘብ ሽያጭ', en: 'Cash Sales', or: 'Gurgurtaa Kaashii', ti: 'ብጥረ ገንዘብ', sid: 'Kaashete Hirro', fr: 'Ventes espèces', de: 'Barverkäufe', it: 'Vendite contanti', zh: '现金销售', ar: 'المبيعات النقدية' })}</span>
-                                  <span className="text-xl font-mono font-bold text-emerald-400">{cashSales} {currency}</span>
+                                <input
+                                  type="text"
+                                  value={managerLedgerSearch}
+                                  onChange={(e) => setManagerLedgerSearch(e.target.value)}
+                                  placeholder="🔍 Order ID, ቦታ, ስልክ, Bank Ref ወይም Cash Code..."
+                                  className="md:w-80 bg-[#181818] border border-white/15 rounded-lg px-3 py-1.5 text-xs text-white placeholder:text-stone-400 outline-none focus:border-[#C1FF00]"
+                                />
+                              </div>
+
+                              {/* 6 Financial KPIs: Total, Cash, Bank, Chapa, Expenses, Net Profit */}
+                              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+                                <div className="bg-black/30 border border-white/10 p-3.5 rounded-lg">
+                                  <span className="text-[9px] text-white/50 block uppercase font-bold">ጠቅላላ ሽያጭ (Gross)</span>
+                                  <span className="text-lg font-mono font-black text-white">{totalSales} {currency}</span>
                                 </div>
-                                <div className="bg-sky-950/20 border border-sky-900/30 p-4 rounded-lg">
-                                  <span className="text-[9px] text-sky-400/60 block uppercase">{tText({ am: 'በባንክ ዝውውር', en: 'Bank Transfers', or: 'Jijjiirraa Baankii', ti: 'ብባንኪ', sid: 'Baankete Soorro', fr: 'Virements bancaires', de: 'Banküberweisungen', it: 'Bonifici bancari', zh: '银行转账', ar: 'التحويلات البنكية' })}</span>
-                                  <span className="text-xl font-mono font-bold text-sky-400">{bankSales} {currency}</span>
+                                <div className="bg-emerald-950/20 border border-emerald-900/30 p-3.5 rounded-lg">
+                                  <span className="text-[9px] text-emerald-400/70 block uppercase font-bold">ጥሬ ገንዘብ (Cash)</span>
+                                  <span className="text-lg font-mono font-black text-emerald-400">{cashSales} {currency}</span>
                                 </div>
-                                <div className="bg-teal-950/20 border border-teal-900/30 p-4 rounded-lg">
-                                  <span className="text-[9px] text-teal-400/70 block uppercase">⚡ CHAPA ONLINE</span>
-                                  <span className="text-xl font-mono font-bold text-teal-400">{chapaSales} {currency}</span>
+                                <div className="bg-sky-950/20 border border-sky-900/30 p-3.5 rounded-lg">
+                                  <span className="text-[9px] text-sky-400/70 block uppercase font-bold">ባንክ (Bank)</span>
+                                  <span className="text-lg font-mono font-black text-sky-400">{bankSales} {currency}</span>
+                                </div>
+                                <div className="bg-teal-950/20 border border-teal-900/30 p-3.5 rounded-lg">
+                                  <span className="text-[9px] text-teal-400/70 block uppercase font-bold">⚡ CHAPA</span>
+                                  <span className="text-lg font-mono font-black text-teal-400">{chapaSales} {currency}</span>
+                                </div>
+                                <div className="bg-rose-950/25 border border-rose-500/30 p-3.5 rounded-lg">
+                                  <span className="text-[9px] text-rose-300/80 block uppercase font-bold">💸 ወጪዎች (Expenses)</span>
+                                  <span className="text-lg font-mono font-black text-rose-400">-{totalExpenses} {currency}</span>
+                                </div>
+                                <div className={`p-3.5 rounded-lg border ${netProfit >= 0 ? 'bg-lime-950/25 border-[#C1FF00]/40' : 'bg-red-950/30 border-red-500/40'}`}>
+                                  <span className="text-[9px] text-[#C1FF00] block uppercase font-bold">📈 የተጣራ ትርፍ (Net)</span>
+                                  <span className={`text-lg font-mono font-black ${netProfit >= 0 ? 'text-[#C1FF00]' : 'text-red-400'}`}>{netProfit} {currency}</span>
                                 </div>
                               </div>
 
@@ -16333,96 +18278,251 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                         <th className="pb-2">ቦታ (Location)</th>
                                         <th className="pb-2 font-mono">ዝርዝር (Details)</th>
                                         <th className="pb-2 text-left font-mono">ክፍያ (Method)</th>
-                                            <th className="pb-2 text-right">ጠቅላላ (Total)</th>
-                                            <th className="pb-2 text-center text-xs">ደረሰኝ ማረጋገጫ (Receipt Verification)</th>
-                                          </tr>
-                                        </thead>
-                                        <tbody className="divide-y divide-white/5 font-medium">
-                                          {dailyOrders.length === 0 ? (
-                                            <tr>
-                                              <td colSpan={6} className="p-8 text-center text-stone-500 font-mono italic">
-                                                ዛሬ ({todayIso}) እስካሁን የተመዘገበ ሽያጭ የለም። (No sales recorded today yet)
-                                              </td>
-                                            </tr>
-                                          ) : dailyOrders.map(ord => (
-                                            <tr key={ord.id} className="hover:bg-white/2 transition-colors">
-                                              <td className="py-3 px-3 font-mono font-bold text-sky-400">
-                                                {ord.id}
-                                                <span className="text-[8px] text-white/30 font-mono block">{ord.time}</span>
-                                                {ord.customerConfirmedReceipt && (
-                                                  <span className="inline-block mt-1 px-1.5 py-0.5 rounded bg-emerald-500/20 border border-emerald-500/30 text-emerald-300 text-[8px] font-black">
-                                                    🎉 Customer Confirmed
-                                                  </span>
+                                        <th className="pb-2 text-right">ጠቅላላ (Total)</th>
+                                        <th className="pb-2 text-center text-xs">ደረሰኝ ማረጋገጫ (Receipt Verification)</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-white/5 font-medium">
+                                      {dailyOrders.length === 0 ? (
+                                        <tr>
+                                          <td colSpan={6} className="p-8 text-center text-stone-400 font-mono italic">
+                                            {managerLedgerAllDates
+                                              ? 'ምንም የሽያጭ መዝገብ አልተገኘም። (No matching sales found)'
+                                              : `በቀን ${selectedDate} የተመዘገበ ሽያጭ የለም። (No sales recorded for this date)`}
+                                          </td>
+                                        </tr>
+                                      ) : dailyOrders.map((ord) => (
+                                        <tr key={ord.id} className="hover:bg-white/5 transition-colors">
+                                          <td className="py-3 px-3 font-mono font-bold text-sky-400">
+                                            {ord.id}
+                                            <span className="text-[8px] text-white/40 font-mono block">{ord.date} · {ord.time}</span>
+                                            {ord.customerConfirmedReceipt && (
+                                              <span className="inline-block mt-1 px-1.5 py-0.5 rounded bg-emerald-500/20 border border-emerald-500/30 text-emerald-300 text-[8px] font-black">
+                                                🎉 Customer Confirmed
+                                              </span>
+                                            )}
+                                          </td>
+                                          <td className="py-3">
+                                            <span className="font-black text-white/90 block">{ord.location}</span>
+                                            <span className="text-[8px] text-white/40 font-mono uppercase block">{ord.orderType}</span>
+                                          </td>
+                                          <td className="py-3 max-w-xs font-bold">
+                                            <div className="space-y-0.5 text-[11px] text-white/80">
+                                              {ord.items.map((it, iIdx) => (
+                                                <div key={iIdx}>• {it.qty} × {it.name}</div>
+                                              ))}
+                                            </div>
+                                          </td>
+                                          <td className="py-3 font-mono">
+                                            {ord.payment === 'cash' ? (
+                                              <div className="space-y-1">
+                                                <span className="text-emerald-400 font-bold bg-emerald-950/20 px-1.5 py-0.5 border border-emerald-900/30 rounded inline-block">CASH</span>
+                                                {ord.cashPaymentCode && (
+                                                  <span className="text-[9px] text-amber-300 font-bold block">Code: {ord.cashPaymentCode}</span>
                                                 )}
-                                              </td>
-                                              <td className="py-3">
-                                                <span className="font-black text-white/90 block">{ord.location}</span>
-                                                <span className="text-[8px] text-white/40 font-mono uppercase block">{ord.orderType}</span>
-                                              </td>
-                                              <td className="py-3 max-w-xs font-bold">
-                                                <div className="space-y-0.5 text-[11px] text-white/80">
-                                                  {ord.items.map((it, iIdx) => (
-                                                    <div key={iIdx}>• {it.qty} × {it.name}</div>
-                                                  ))}
+                                              </div>
+                                            ) : ord.payment === 'chapa' ? (
+                                              <span className="text-teal-300 font-bold bg-teal-950/30 px-1.5 py-0.5 border border-teal-700/40 rounded">⚡ CHAPA</span>
+                                            ) : (
+                                              <div className="space-y-1">
+                                                <span className="text-sky-400 font-bold bg-sky-950/20 px-1.5 py-0.5 border border-sky-900/30 rounded block w-fit text-[9px]">BANK TRANSFER</span>
+                                                {ord.bankRef && <span className="text-[9px] text-[#C1FF00] font-bold block">Ref: {ord.bankRef}</span>}
+                                              </div>
+                                            )}
+                                          </td>
+                                          <td className="py-3 text-right font-mono font-black text-white">{ord.total} {currency}</td>
+                                          <td className="py-3 text-center">
+                                            <div className="inline-flex flex-col gap-2 items-center justify-center p-2 bg-[#121212] border border-white/10 rounded-lg w-full max-w-[220px]">
+                                              {ord.payment === 'cash' && (
+                                                <div className="w-full text-[9px] font-mono bg-emerald-950/20 border border-emerald-500/20 rounded p-1.5 text-left space-y-0.5">
+                                                  <p className="text-emerald-300 font-bold">
+                                                    💵 ኮድ: {ord.cashPaymentCode || '—'}
+                                                  </p>
+                                                  {ord.cashRequestedAt && (
+                                                    <p className="text-stone-400 text-[8px]">ጥያቄ ሰዓት: {ord.cashRequestedAt}</p>
+                                                  )}
+                                                  {ord.cashTenderedAmount !== undefined && (
+                                                    <p className="text-amber-300 text-[8px]">
+                                                      የተሰጠ: {ord.cashTenderedAmount} · መልስ: {ord.cashChangeAmount ?? 0} {currency}
+                                                    </p>
+                                                  )}
+                                                  {ord.cashierName && (
+                                                    <p className="text-white/60 text-[8px]">
+                                                      Cashier: {ord.cashierName}{ord.cashConfirmedAt ? ` (${ord.cashConfirmedAt})` : ''}
+                                                    </p>
+                                                  )}
                                                 </div>
-                                              </td>
-                                              <td className="py-3 font-mono">
-                                                {ord.payment === 'cash' ? (
-                                                  <span className="text-emerald-400 font-bold bg-emerald-950/20 px-1.5 py-0.5 border border-emerald-900/30 rounded">CASH</span>
-                                                ) : ord.payment === 'chapa' ? (
-                                                  <span className="text-teal-300 font-bold bg-teal-950/30 px-1.5 py-0.5 border border-teal-700/40 rounded">⚡ CHAPA</span>
-                                                ) : (
-                                                  <div className="space-y-1">
-                                                    <span className="text-sky-400 font-bold bg-sky-950/20 px-1.5 py-0.5 border border-sky-900/30 rounded block w-fit text-[9px]">BANK TRANSFER</span>
-                                                    {ord.bankRef && <span className="text-[9px] text-[#C1FF00] font-bold block">Ref: {ord.bankRef}</span>}
-                                                  </div>
-                                                )}
-                                              </td>
-                                              <td className="py-3 text-right font-mono font-black text-white">{ord.total} {currency}</td>
-                                              <td className="py-3 text-center">
-                                                {ord.payment === 'cash' ? (
-                                                  <span className="text-white/30 text-[9px] font-mono block">-</span>
-                                                ) : (
-                                                  <div className="inline-flex flex-col gap-2 items-center justify-center p-2 bg-[#121212] border border-white/5 rounded-lg w-full max-w-[200px]">
-                                                    {ord.receiptScreenshot ? (
-                                                      <div className="space-y-1.5 w-full">
-                                                        <div className="relative border border-white/10 bg-black max-h-12 flex justify-center">
-                                                          <img src={ord.receiptScreenshot} referrerPolicy="no-referrer" className="h-10 object-contain" alt="Receipt proof" />
-                                                        </div>
-                                                        <a href={ord.receiptScreenshot} target="_blank" rel="noreferrer" referrerPolicy="no-referrer" className="text-[8px] text-[#C1FF00] hover:underline font-bold block text-center uppercase">🔍 VIEW FULL</a>
-                                                        {ord.receiptComment && (
-                                                          <p className="text-[8px] text-white/50 leading-tight italic bg-black/40 p-1">"{ord.receiptComment}"</p>
-                                                        )}
-                                                      </div>
-                                                    ) : (
-                                                      <span className="text-[8px] text-white/40 block">No Proof image</span>
-                                                    )}
+                                              )}
 
-                                                    {ord.confirmed ? (
-                                                      <span className="text-[9px] uppercase bg-emerald-950 font-black text-emerald-400 px-2 py-0.5 rounded-full flex gap-1">✔ Verified</span>
-                                                    ) : (
-                                                      <div className="space-y-1.5 w-full">
-                                                        <span className="text-[8px] uppercase bg-yellow-950 font-black text-yellow-500 px-2 py-0.5 rounded block text-center animate-pulse">⚠️ PENDING</span>
-                                                        <div className="grid grid-cols-2 gap-1">
-                                                          <button onClick={() => handleConfirmOrderPayment(ord.id, true)} className="bg-[#C1FF00] hover:bg-white text-black font-mono font-black text-[8px] uppercase py-1 cursor-pointer">CONFIRM</button>
-                                                          <button onClick={() => handleConfirmOrderPayment(ord.id, false)} className="bg-red-950 text-red-500 font-mono text-[8px] py-1 cursor-pointer">REJECT</button>
-                                                        </div>
-                                                      </div>
-                                                    )}
+                                              {ord.receiptScreenshot ? (
+                                                <div className="space-y-1.5 w-full">
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                      setManagerReceiptPreviewUrl(ord.receiptScreenshot || null);
+                                                      setManagerReceiptPreviewOrder(ord);
+                                                    }}
+                                                    className="relative border border-white/15 bg-black max-h-14 w-full flex justify-center rounded overflow-hidden cursor-pointer hover:border-[#C1FF00] transition-colors"
+                                                  >
+                                                    <img src={ord.receiptScreenshot} referrerPolicy="no-referrer" className="h-12 object-contain" alt="Receipt proof" />
+                                                  </button>
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                      setManagerReceiptPreviewUrl(ord.receiptScreenshot || null);
+                                                      setManagerReceiptPreviewOrder(ord);
+                                                    }}
+                                                    className="w-full text-[9px] text-[#C1FF00] hover:underline font-bold text-center uppercase cursor-pointer"
+                                                  >
+                                                    🔍 ፎቶውን በትልቁ እይ (VIEW FULL)
+                                                  </button>
+                                                  {ord.receiptComment && (
+                                                    <p className="text-[8px] text-white/60 leading-tight italic bg-black/40 p-1 rounded">"{ord.receiptComment}"</p>
+                                                  )}
+                                                </div>
+                                              ) : (
+                                                ord.payment !== 'cash' && (
+                                                  <span className="text-[8px] text-white/40 block">No Proof image</span>
+                                                )
+                                              )}
+
+                                              {ord.confirmed || ord.status === 'Paid' ? (
+                                                <span className="text-[9px] uppercase bg-emerald-950 font-black text-emerald-400 px-2 py-0.5 rounded-full flex gap-1">✔ Verified</span>
+                                              ) : (
+                                                <div className="space-y-1.5 w-full">
+                                                  <span className="text-[8px] uppercase bg-yellow-950 font-black text-yellow-400 px-2 py-0.5 rounded block text-center animate-pulse">⚠️ PENDING</span>
+                                                  <div className="grid grid-cols-2 gap-1">
+                                                    <button type="button" onClick={() => handleConfirmOrderPayment(ord.id, true)} className="bg-[#C1FF00] hover:bg-white text-black font-mono font-black text-[8px] uppercase py-1 rounded cursor-pointer">CONFIRM</button>
+                                                    <button type="button" onClick={() => handleConfirmOrderPayment(ord.id, false)} className="bg-red-950 hover:bg-red-700 text-red-300 font-mono text-[8px] py-1 rounded cursor-pointer">REJECT</button>
                                                   </div>
-                                                )}
-                                              </td>
-                                            </tr>
-                                          ))}
-                                        </tbody>
-                                      </table>
-                                    </div>
-                                  </div>
+                                                </div>
+                                              )}
+                                            </div>
+                                          </td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
                                 </div>
-                              );
-                            })()}
-                          </div>
-                        )}
+                              </div>
+
+                              {/* Daily Expense Recorder & History */}
+                              <div className="bg-black/40 border border-rose-500/20 rounded-xl p-4 space-y-4">
+                                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-white/10 pb-2">
+                                  <div>
+                                    <span className="text-[9px] text-rose-400 font-mono font-bold uppercase block">EXPENSES & PROFIT TRACKER</span>
+                                    <h4 className="text-xs font-black text-white uppercase">💸 የዕለት ወጪዎች መመዝገቢያ እና መዝገብ (Expenses Ledger)</h4>
+                                  </div>
+                                  <span className="text-xs font-mono font-black text-rose-300">
+                                    ጠቅላላ ወጪ: {totalExpenses} {currency} ({filteredExpenses.length} መዝገቦች)
+                                  </span>
+                                </div>
+
+                                <form
+                                  onSubmit={(e) => {
+                                    e.preventDefault();
+                                    const amt = Number(managerExpAmount);
+                                    if (!managerExpTitle.trim() || !amt || amt <= 0) {
+                                      showAppToast('⚠️ እባክዎ የወጪውን ስም እና ትክክለኛ የብር መጠን ያስገቡ!');
+                                      return;
+                                    }
+                                    handleAddExpense(managerExpTitle, managerExpCategory, amt, selectedDate, managerExpNotes);
+                                    setManagerExpTitle('');
+                                    setManagerExpAmount('');
+                                    setManagerExpNotes('');
+                                  }}
+                                  className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5 items-end bg-[#181818] p-3 rounded-lg border border-white/10"
+                                >
+                                  <div>
+                                    <label className="text-[9px] font-mono text-white/50 uppercase block mb-1">የወጪ ስም (Expense Title)</label>
+                                    <input
+                                      type="text"
+                                      required
+                                      value={managerExpTitle}
+                                      onChange={(e) => setManagerExpTitle(e.target.value)}
+                                      placeholder="ለምሳሌ፡ ዓሳና ዘይት ግዢ"
+                                      className="w-full bg-black border border-white/15 rounded px-2.5 py-2 text-xs text-white placeholder:text-stone-400 outline-none focus:border-rose-400"
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="text-[9px] font-mono text-white/50 uppercase block mb-1">ምድብ (Category)</label>
+                                    <select
+                                      value={managerExpCategory}
+                                      onChange={(e) => setManagerExpCategory(e.target.value)}
+                                      className="w-full bg-black border border-white/15 rounded px-2.5 py-2 text-xs text-white outline-none focus:border-rose-400"
+                                    >
+                                      <option value="ማቴሪያል ግዢ (Kitchen Supply)">ማቴሪያል ግዢ (Kitchen Supply)</option>
+                                      <option value="መጠጥ ግዢ (Beverages)">መጠጥ ግዢ (Beverages)</option>
+                                      <option value="መብራትና ውሃ (Utilities)">መብራትና ውሃ (Utilities)</option>
+                                      <option value="የሰራተኛ ክፍያ (Staff/Wages)">የሰራተኛ ክፍያ (Staff/Wages)</option>
+                                      <option value="ጥገና (Maintenance)">ጥገና (Maintenance)</option>
+                                      <option value="ሌላ ወጪ (Other)">ሌላ ወጪ (Other)</option>
+                                    </select>
+                                  </div>
+                                  <div>
+                                    <label className="text-[9px] font-mono text-white/50 uppercase block mb-1">መጠን ({currency})</label>
+                                    <input
+                                      type="number"
+                                      min={1}
+                                      required
+                                      value={managerExpAmount}
+                                      onChange={(e) => setManagerExpAmount(e.target.value)}
+                                      placeholder="0.00"
+                                      className="w-full bg-black border border-white/15 rounded px-2.5 py-2 text-xs font-mono text-rose-300 outline-none focus:border-rose-400"
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="text-[9px] font-mono text-white/50 uppercase block mb-1">ማስታወሻ (Notes)</label>
+                                    <input
+                                      type="text"
+                                      value={managerExpNotes}
+                                      onChange={(e) => setManagerExpNotes(e.target.value)}
+                                      placeholder="ዝርዝር ማብራሪያ (አማራጭ)"
+                                      className="w-full bg-black border border-white/15 rounded px-2.5 py-2 text-xs text-white placeholder:text-stone-400 outline-none focus:border-rose-400"
+                                    />
+                                  </div>
+                                  <button
+                                    type="submit"
+                                    className="h-9 bg-rose-600 hover:bg-rose-500 text-white font-mono text-[10px] font-black uppercase rounded tracking-wider cursor-pointer transition-colors"
+                                  >
+                                    ➕ ወጪ መዝግብ (ADD)
+                                  </button>
+                                </form>
+
+                                {filteredExpenses.length > 0 ? (
+                                  <div className="divide-y divide-white/5 bg-[#181818] border border-white/10 rounded-lg overflow-hidden">
+                                    {filteredExpenses.map((ex) => (
+                                      <div key={ex.id} className="p-3 flex flex-wrap items-center justify-between gap-3 text-xs">
+                                        <div>
+                                          <p className="font-bold text-white">{ex.title}</p>
+                                          <p className="text-[10px] text-stone-400 font-mono">
+                                            {ex.category} · {ex.date} {ex.time} {ex.notes ? `· "${ex.notes}"` : ''}
+                                          </p>
+                                        </div>
+                                        <div className="flex items-center gap-3">
+                                          <span className="font-mono font-black text-rose-400">-{ex.amount} {currency}</span>
+                                          <button
+                                            type="button"
+                                            onClick={() => handleRemoveExpense(ex.id)}
+                                            className="px-2 py-1 bg-red-950/60 hover:bg-red-600 text-red-300 hover:text-white rounded text-[10px] font-mono cursor-pointer transition-colors"
+                                          >
+                                            🗑️
+                                          </button>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <p className="text-[11px] text-stone-500 font-mono text-center py-3">
+                                    ለዚህ ቀን የተመዘገበ ወጪ የለም። (No expenses recorded for this period)
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })()}
+                      </div>
+                    )}
 
                         {/* Month View for Manager */}
                         {ledgerFilterTab === 'monthly' && (
@@ -16901,6 +19001,142 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                   />
                 )}
 
+                {/* TAB CONTENT: DELIVERY FLEET REGISTRATION, DISPATCH & VERIFICATION */}
+                {managerTab === 'delivery' && (
+                  <ManagerDeliveryPanel
+                    staff={staff}
+                    orders={orders}
+                    currency={currency}
+                    driverStates={deliveryDriverStates}
+                    partners={deliveryPartners}
+                    onRegisterDriver={handleRegisterDeliveryDriver}
+                    onToggleDriverDuty={handleToggleDriverDuty}
+                    onRemoveDriver={handleRemoveStaff}
+                    onAssignDriverToOrder={handleAssignDriverToOrder}
+                    onMarkDriverReturned={handleMarkDriverReturned}
+                    onAddPartner={handleAddDeliveryPartner}
+                    onTogglePartnerActive={handleToggleDeliveryPartner}
+                    onDeletePartner={handleDeleteDeliveryPartner}
+                    onAssignPartnerToOrder={handleAssignPartnerToOrder}
+                    onUpdatePartnerDeliveryStage={handleUpdatePartnerDeliveryStage}
+                    showToast={showAppToast}
+                  />
+                )}
+
+                {/* TAB CONTENT: ONLINE ROOM & TABLE RESERVATIONS */}
+                {managerTab === 'online_bookings' && (
+                  <StaffOnlineBookingsPanel
+                    mode="manager"
+                    onlineRoomBookings={onlineRoomBookings}
+                    onlineTableReservations={onlineTableReservations}
+                    roomBookings={roomBookings}
+                    currency={currency}
+                    onConfirmRoomBooking={handleConfirmOnlineRoomBooking}
+                    onCheckInRoomBooking={handleCheckInOnlineRoomBooking}
+                    onToggleRoomBookingPaid={handleToggleOnlineRoomBookingPaid}
+                    onCancelRoomBooking={handleCancelOnlineRoomBooking}
+                    onConfirmTableReservation={handleConfirmOnlineTableReservation}
+                    onSendTablePreOrderToKitchen={handleSendTablePreOrderToKitchen}
+                    onUpdateTableStatus={handleUpdateOnlineTableStatus}
+                    onToggleTableReservationPaid={handleToggleOnlineTablePaid}
+                  />
+                )}
+
+                {/* MANAGER RECEIPT VERIFICATION LIGHTBOX MODAL */}
+                {managerReceiptPreviewUrl && (
+                  <div
+                    className="fixed inset-0 z-[9995] bg-black/85 backdrop-blur-sm flex items-center justify-center p-4"
+                    onClick={() => {
+                      setManagerReceiptPreviewUrl(null);
+                      setManagerReceiptPreviewOrder(null);
+                    }}
+                  >
+                    <div
+                      className="bg-[#181818] border border-white/20 rounded-2xl max-w-2xl w-full p-5 space-y-4 shadow-2xl"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <div className="flex items-center justify-between border-b border-white/10 pb-3">
+                        <div>
+                          <h4 className="text-sm font-black text-white uppercase">
+                            🧾 የደረሰኝ ማረጋገጫ ፎቶ (Receipt Preview)
+                          </h4>
+                          {managerReceiptPreviewOrder && (
+                            <p className="text-xs text-stone-400 font-mono mt-0.5">
+                              {managerReceiptPreviewOrder.id} · {managerReceiptPreviewOrder.location} · {managerReceiptPreviewOrder.total} {currency}
+                              {managerReceiptPreviewOrder.bankRef ? ` · Ref: ${managerReceiptPreviewOrder.bankRef}` : ''}
+                              {managerReceiptPreviewOrder.cashPaymentCode ? ` · Cash Code: ${managerReceiptPreviewOrder.cashPaymentCode}` : ''}
+                            </p>
+                          )}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setManagerReceiptPreviewUrl(null);
+                            setManagerReceiptPreviewOrder(null);
+                          }}
+                          className="w-8 h-8 rounded-lg bg-white/10 hover:bg-red-600 text-white font-black flex items-center justify-center cursor-pointer"
+                        >
+                          ✕
+                        </button>
+                      </div>
+
+                      <div className="bg-black rounded-xl border border-white/10 p-2 flex items-center justify-center max-h-[65vh] overflow-auto">
+                        <img
+                          src={managerReceiptPreviewUrl}
+                          alt="Full receipt verification"
+                          className="max-h-[60vh] w-auto object-contain rounded"
+                          referrerPolicy="no-referrer"
+                        />
+                      </div>
+
+                      {managerReceiptPreviewOrder?.receiptComment && (
+                        <p className="text-xs text-amber-300 bg-black/40 border border-amber-500/20 rounded-lg p-2.5 italic">
+                          “{managerReceiptPreviewOrder.receiptComment}”
+                        </p>
+                      )}
+
+                      <div className="flex flex-wrap justify-end gap-2 pt-1">
+                        {managerReceiptPreviewOrder && !managerReceiptPreviewOrder.confirmed && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                handleConfirmOrderPayment(managerReceiptPreviewOrder.id, true);
+                                setManagerReceiptPreviewUrl(null);
+                                setManagerReceiptPreviewOrder(null);
+                              }}
+                              className="px-4 py-2 bg-[#C1FF00] hover:bg-white text-black font-mono text-xs font-black uppercase rounded-lg cursor-pointer"
+                            >
+                              ✔ ደረሰኙን አረጋግጥ (Verify Payment)
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                handleConfirmOrderPayment(managerReceiptPreviewOrder.id, false);
+                                setManagerReceiptPreviewUrl(null);
+                                setManagerReceiptPreviewOrder(null);
+                              }}
+                              className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white font-mono text-xs font-black uppercase rounded-lg cursor-pointer"
+                            >
+                              ✗ ውድቅ አድርግ (Reject)
+                            </button>
+                          </>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setManagerReceiptPreviewUrl(null);
+                            setManagerReceiptPreviewOrder(null);
+                          }}
+                          className="px-4 py-2 bg-white/10 hover:bg-white/20 text-white font-mono text-xs font-bold uppercase rounded-lg cursor-pointer"
+                        >
+                          ዝጋ (Close)
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
               </motion.div>
             )}
 
@@ -16949,6 +19185,22 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
 
                 {renderWiFiClockInWidget()}
 
+                <StaffOnlineBookingsPanel
+                  mode="receptionist"
+                  onlineRoomBookings={onlineRoomBookings}
+                  onlineTableReservations={onlineTableReservations}
+                  roomBookings={roomBookings}
+                  currency={currency}
+                  onConfirmRoomBooking={handleConfirmOnlineRoomBooking}
+                  onCheckInRoomBooking={handleCheckInOnlineRoomBooking}
+                  onToggleRoomBookingPaid={handleToggleOnlineRoomBookingPaid}
+                  onCancelRoomBooking={handleCancelOnlineRoomBooking}
+                  onConfirmTableReservation={handleConfirmOnlineTableReservation}
+                  onSendTablePreOrderToKitchen={handleSendTablePreOrderToKitchen}
+                  onUpdateTableStatus={handleUpdateOnlineTableStatus}
+                  onToggleTableReservationPaid={handleToggleOnlineTablePaid}
+                />
+
                 {/* Main dynamic workspace split */}
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
                   
@@ -16970,6 +19222,8 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                               type="text"
                               id="booking-room-number"
                               required 
+                              value={receptionRoomDraft}
+                              onChange={(e) => setReceptionRoomDraft(e.target.value)}
                               placeholder="e.g. 104"
                               className="w-full bg-[#121212] border border-white/10 text-white font-mono text-center text-sm p-2.5 outline-none focus:border-emerald-400"
                             />
@@ -17022,11 +19276,10 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                 type="button" 
                                 onClick={() => {
                                   setBookingGuestCount(num);
-                                  // Re-populate guestIds array based on the selected count
                                   setGuestIdsState(prev => {
                                     const next = [...prev];
                                     while (next.length < num) {
-                                      next.push({ fullName: '', idNumber: '' });
+                                      next.push({ fullName: '', idNumber: '', idPhotoUrl: '' });
                                     }
                                     return next.slice(0, num);
                                   });
@@ -17043,9 +19296,9 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                           </div>
                         </div>
 
-                        {/* Guest names and ID sections as requested */}
-                        <div className="space-y-3 pt-2 bg-white/2 p-3 border border-indigo-500/5 rounded-lg">
-                          <p className="text-[10px] font-sans font-black uppercase text-white/45 tracking-wide mb-1 flex items-center gap-1">
+                        {/* Guest names and ID sections */}
+                        <div className="space-y-3 pt-2 bg-white/5 p-3 border border-indigo-500/15 rounded-lg">
+                          <p className="text-[10px] font-sans font-black uppercase text-white/65 tracking-wide mb-1 flex items-center gap-1">
                             <span>👥 የነዋሪዎች መረጃዎች / GUEST DETAILS </span>
                             <span className="text-emerald-400 font-mono text-[9px]">({bookingGuestCount} Record Forms)</span>
                           </p>
@@ -17080,15 +19333,16 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                 />
                               </div>
 
-                              {/* ID DOCUMENT CAPTURE DOCK */}
+                              {/* ID DOCUMENT CAPTURE DOCK (Real Camera + File Upload) */}
                               <div className="space-y-1.5">
-                                <label className="text-[8.5px] font-mono text-white/50 uppercase block">🪪 መታወቂያ ፎቶ ፒዲኤፍ (ID Scan Card / Document Attachment)</label>
+                                <label className="text-[8.5px] font-mono text-white/60 uppercase block">🪪 መታወቂያ ፎቶ (Real Camera / Upload ID Scan)</label>
                                 <div className="flex items-center gap-3 bg-[#121212] border border-white/10 p-2 rounded">
                                   {guest.idPhotoUrl ? (
-                                    <div className="relative group shrink-0 space-y-1">
+                                    <div className="relative group shrink-0">
                                       <img 
                                         src={guest.idPhotoUrl} 
-                                        className="w-14 h-10 object-cover rounded border border-[#10B981]" 
+                                        onClick={() => setReceptionPreviewIdPhoto({ url: guest.idPhotoUrl!, guestName: guest.fullName || `Guest ${gIdx + 1}`, roomNumber: receptionRoomDraft || '?' })}
+                                        className="w-14 h-10 object-cover rounded border border-[#10B981] cursor-pointer" 
                                         alt="ID document thumbnail" 
                                         referrerPolicy="no-referrer"
                                       />
@@ -17099,61 +19353,74 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                           updated[gIdx] = { ...updated[gIdx], idPhotoUrl: '' };
                                           setGuestIdsState(updated);
                                         }}
-                                        className="absolute -top-1 -right-1 bg-red-500 text-white text-[7px] w-3.5 h-3.5 rounded-full flex items-center justify-center cursor-pointer font-black animate-bounce"
+                                        className="absolute -top-1 -right-1 bg-red-500 text-white text-[7px] w-3.5 h-3.5 rounded-full flex items-center justify-center cursor-pointer font-black"
                                       >
                                         ×
                                       </button>
-                                      {guest.idPhotoUrl.startsWith('data:') && (
-                                        <div className="absolute top-12 left-0 w-48 bg-yellow-400/90 text-black text-[7px] font-bold p-1 rounded border border-yellow-500 z-10 leading-tight shadow-md">
-                                          ⚠️ መታወቂያ ተጭኗል! ለማስቀመጥ ከታች ያለውን SUBMIT ቁልፍ ይጫኑ!
-                                        </div>
-                                      )}
                                     </div>
                                   ) : (
-                                    <div className="w-14 h-10 border border-white/5 bg-white/5 rounded flex items-center justify-center text-lg text-white/30 shrink-0">
+                                    <div className="w-14 h-10 border border-white/10 bg-white/5 rounded flex items-center justify-center text-lg text-white/30 shrink-0">
                                       🪪
                                     </div>
                                   )}
 
-                                  <div className="flex-1 flex gap-2">
+                                  <div className="flex-1 flex flex-wrap gap-2">
                                     <input 
-                                      type="file"
+                                      type="file" 
                                       accept="image/*"
                                       id={`guest-id-upload-r-${gIdx}`}
                                       className="hidden"
-                                      onChange={(e) => {
+                                      onChange={async (e) => {
                                         const file = e.target.files?.[0];
                                         if (file) {
-                                          processFileWithCompression(file, (base64) => {
+                                          try {
+                                            const url = await processAndUploadReceiptImage(file);
                                             const updated = [...guestIdsState];
-                                            updated[gIdx] = { ...updated[gIdx], idPhotoUrl: base64 };
+                                            updated[gIdx] = { ...updated[gIdx], idPhotoUrl: url };
                                             setGuestIdsState(updated);
-                                          });
+                                            showAppToast('🪪 የእንግዳው መታወቂያ ፎቶ ተጭኗል!');
+                                          } catch {
+                                            showAppToast('⚠️ ፎቶ መጫን አልተቻለም።');
+                                          }
                                         }
+                                        e.target.value = '';
+                                      }}
+                                    />
+                                    <input
+                                      type="file"
+                                      accept="image/*"
+                                      capture="environment"
+                                      id={`guest-id-camera-r-${gIdx}`}
+                                      className="hidden"
+                                      onChange={async (e) => {
+                                        const file = e.target.files?.[0];
+                                        if (file) {
+                                          try {
+                                            const url = await processAndUploadReceiptImage(file);
+                                            const updated = [...guestIdsState];
+                                            updated[gIdx] = { ...updated[gIdx], idPhotoUrl: url };
+                                            setGuestIdsState(updated);
+                                            showAppToast('📷 የመታወቂያ ካሜራ ፎቶ ተይዟል!');
+                                          } catch {
+                                            showAppToast('⚠️ ፎቶ መጫን አልተቻለም።');
+                                          }
+                                        }
+                                        e.target.value = '';
                                       }}
                                     />
                                     <button
                                       type="button"
-                                      onClick={() => document.getElementById(`guest-id-upload-r-${gIdx}`)?.click()}
-                                      className="text-[9px] font-mono font-bold bg-white/5 hover:bg-white/10 text-white/80 border border-white/20 py-1.5 px-2.5 rounded cursor-pointer transition-all uppercase"
+                                      onClick={() => document.getElementById(`guest-id-camera-r-${gIdx}`)?.click()}
+                                      className="inline-flex items-center gap-1 text-[9px] font-mono font-bold bg-[#10B981]/15 hover:bg-[#10B981]/25 text-[#10B981] border border-[#10B981]/40 py-1.5 px-2.5 rounded cursor-pointer transition-all uppercase"
                                     >
-                                      Upload Document
+                                      <Camera className="w-3 h-3" /> Camera Scan
                                     </button>
                                     <button
                                       type="button"
-                                      onClick={() => {
-                                        const presets = [
-                                          'https://images.unsplash.com/photo-1554774853-aae0a22c8aa4?w=200',
-                                          'https://images.unsplash.com/photo-1544256718-3bcf237f3974?w=200'
-                                        ];
-                                        const randomPreset = presets[Math.floor(Math.random() * presets.length)];
-                                        const updated = [...guestIdsState];
-                                        updated[gIdx] = { ...updated[gIdx], idPhotoUrl: randomPreset };
-                                        setGuestIdsState(updated);
-                                      }}
-                                      className="text-[9px] font-mono font-bold bg-[#10B981]/10 hover:bg-[#10B981]/20 text-[#10B981] border border-[#10B981]/30 py-1.5 px-2.5 rounded cursor-pointer transition-all uppercase"
+                                      onClick={() => document.getElementById(`guest-id-upload-r-${gIdx}`)?.click()}
+                                      className="inline-flex items-center gap-1 text-[9px] font-mono font-bold bg-white/10 hover:bg-white/20 text-white border border-white/25 py-1.5 px-2.5 rounded cursor-pointer transition-all uppercase"
                                     >
-                                      Mock Scan
+                                      <Upload className="w-3 h-3" /> Upload ID
                                     </button>
                                   </div>
                                 </div>
@@ -17162,15 +19429,39 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                           ))}
                         </div>
 
-                        <div>
-                          <label className="text-[9px] font-mono text-white/50 uppercase block mb-1">መግቢያ ቀን (CHECK IN DATE)</label>
-                          <input 
-                            type="date"
-                            id="booking-date"
-                            required 
-                            defaultValue={new Date().toISOString().split('T')[0]}
-                            className="w-full bg-[#121212] border border-white/10 text-[#C1FF00] font-mono text-xs p-2.5 outline-none focus:border-emerald-400"
-                          />
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                          <div>
+                            <label className="text-[9px] font-mono text-white/50 uppercase block mb-1">መግቢያ ቀን (CHECK IN)</label>
+                            <input 
+                              type="date"
+                              id="booking-date"
+                              required 
+                              defaultValue={getLocalTodayIso()}
+                              className="w-full bg-[#121212] border border-white/10 text-[#C1FF00] font-mono text-xs p-2.5 outline-none focus:border-emerald-400"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-[9px] font-mono text-white/50 uppercase block mb-1">የቆይታ ቀናት (NIGHTS)</label>
+                            <input 
+                              type="number"
+                              id="booking-nights"
+                              min={1}
+                              defaultValue={1}
+                              required
+                              className="w-full bg-[#121212] border border-white/10 text-white font-mono text-xs text-center p-2.5 outline-none focus:border-emerald-400"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-[9px] font-mono text-white/50 uppercase block mb-1">ክፍያ (PAYMENT)</label>
+                            <select 
+                              id="booking-payment-status"
+                              defaultValue="Pending"
+                              className="w-full bg-[#121212] border border-white/10 text-white text-xs font-bold p-2.5 outline-none focus:border-emerald-400"
+                            >
+                              <option value="Pending">⏳ በሂደት (Pending)</option>
+                              <option value="Paid">✔ ተከፍሏል (Paid)</option>
+                            </select>
+                          </div>
                         </div>
 
                         <div>
@@ -17193,8 +19484,73 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                     </div>
                   </div>
 
-                  {/* Right Column: Allocation status grid */}
+                  {/* Right Column: Interactive Room Matrix + Allocation status grid */}
                   <div className="lg:col-span-7 space-y-6">
+                    {/* Interactive Room Availability Matrix (101-112 + Custom Active Rooms) */}
+                    <div className="bg-black/40 border border-emerald-500/20 rounded-xl p-4 space-y-3 shadow-lg">
+                      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/5 pb-2">
+                        <div>
+                          <h4 className="text-xs font-black uppercase text-emerald-400 tracking-wider">
+                            🗺️ የክፍሎች ቀጥታ ሁኔታ (Live Room Availability Matrix)
+                          </h4>
+                          <p className="text-[10px] text-white/50">ነጻ ክፍልን ሲጫኑ ቁጥሩ በራሱ ወደ መመዝገቢያው ይገባል።</p>
+                        </div>
+                        <div className="flex items-center gap-3 text-[10px] font-mono">
+                          <span className="flex items-center gap-1 text-emerald-300"><span className="w-2 h-2 rounded-full bg-emerald-400 inline-block"></span> ነጻ (Vacant)</span>
+                          <span className="flex items-center gap-1 text-red-300"><span className="w-2 h-2 rounded-full bg-red-500 inline-block"></span> የተያዘ (Occupied)</span>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2">
+                        {(() => {
+                          const baseRooms = ['101', '102', '103', '104', '105', '106', '107', '108', '109', '110', '111', '112'];
+                          const customRooms = roomBookings
+                            .filter((b) => b.status === 'Active' && b.roomNumber && !baseRooms.includes(b.roomNumber.trim()))
+                            .map((b) => b.roomNumber.trim());
+                          const allRoomNums = Array.from(new Set([...baseRooms, ...customRooms]));
+
+                          return allRoomNums.map((roomNum) => {
+                            const activeOccupant = roomBookings.find(
+                              (b) => b.status === 'Active' && b.roomNumber.trim().toLowerCase() === roomNum.toLowerCase()
+                            );
+                            const isOccupied = Boolean(activeOccupant);
+                            return (
+                              <button
+                                key={roomNum}
+                                type="button"
+                                onClick={() => {
+                                  if (!isOccupied) {
+                                    setReceptionRoomDraft(roomNum);
+                                    document.getElementById('booking-room-number')?.focus();
+                                    showAppToast(`✓ ክፍል ${roomNum} ለመመዝገብ ተመርጧል!`);
+                                  } else {
+                                    setReceptionSearch(roomNum);
+                                  }
+                                }}
+                                className={`p-2 rounded-lg border text-left transition-all cursor-pointer ${
+                                  isOccupied
+                                    ? 'bg-red-950/35 border-red-500/40 text-red-200 hover:border-red-400'
+                                    : receptionRoomDraft === roomNum
+                                      ? 'bg-emerald-500/25 border-emerald-400 text-emerald-200 ring-1 ring-emerald-400'
+                                      : 'bg-emerald-950/20 border-emerald-500/25 text-emerald-300 hover:bg-emerald-900/30'
+                                }`}
+                              >
+                                <div className="flex items-center justify-between">
+                                  <span className="font-mono text-xs font-black">#{roomNum}</span>
+                                  <span className="text-[10px]">{isOccupied ? '🔴' : '🟢'}</span>
+                                </div>
+                                <p className="text-[9px] truncate mt-0.5 font-bold">
+                                  {isOccupied
+                                    ? activeOccupant?.guestIds?.[0]?.fullName || `${activeOccupant?.guestCount || 1} እንግዳ`
+                                    : 'ነጻ (Vacant)'}
+                                </p>
+                              </button>
+                            );
+                          });
+                        })()}
+                      </div>
+                    </div>
+
                     {/* Shift Selector Banner for Receptionist */}
                     <div className="bg-[#181818] border border-emerald-500/30 p-3 rounded-xl flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
                       <div className="flex items-center gap-2">
@@ -17217,148 +19573,240 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                     </div>
 
                     {/* Active allocations list */}
-                    <div className="bg-black/40 border border-white/5 rounded-xl p-5 shadow-lg">
-                      <div className="flex justify-between items-center border-b border-white/5 pb-2.5 mb-4">
+                    <div className="bg-black/40 border border-white/5 rounded-xl p-5 shadow-lg space-y-4">
+                      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 border-b border-white/5 pb-3">
                         <div>
                           <h3 className="text-sm font-black uppercase text-white tracking-widest">
-                            🛏️ ንቁ የአልጋ ምዝገባዎች (Active Bedroom Allocations)
+                            🛏️ የአልጋ ምዝገባዎች እና ፎሊዮ (Room Allocations & Folio)
                           </h3>
-                          <p className="text-[10px] text-white/40 mt-0.5">በአሁኑ ሰዓት በሆቴሉ ውስጥ ያሉ እንግዶች ዝርዝር መዝገብ።</p>
+                          <p className="text-[10px] text-white/40 mt-0.5">ክፍሎችን፣ የምግብ/መጠጥ ሂሳብን እና የእንግዳ መታወቂያዎችን እዚህ ያስተዳድሩ።</p>
                         </div>
-                        <span className="bg-[#121212] border border-white/10 px-2 py-1 rounded text-xs text-[#C1FF00] font-mono font-bold">
-                          {roomBookings.filter(b => {
-                            if (b.status !== 'Active') return false;
-                            if (selectedReceptionistShiftStaff === 'my_shift') {
-                              const myName = (currentUser?.name || '').toLowerCase();
-                              const recName = (b.receptionistName || '').toLowerCase();
-                              return !recName || recName === myName;
-                            } else if (selectedReceptionistShiftStaff !== 'all') {
-                              const recName = (b.receptionistName || '').toLowerCase();
-                              return recName === selectedReceptionistShiftStaff.toLowerCase();
-                            }
-                            return true;
-                          }).length} Rooms Occupied
+                        <span className="bg-[#121212] border border-white/10 px-2.5 py-1 rounded text-xs text-[#C1FF00] font-mono font-bold shrink-0">
+                          {roomBookings.filter(b => b.status === 'Active').length} Rooms Occupied
                         </span>
                       </div>
 
-                      {roomBookings.filter(b => {
-                        if (selectedReceptionistShiftStaff === 'my_shift') {
-                          const myName = (currentUser?.name || '').toLowerCase();
-                          const recName = (b.receptionistName || '').toLowerCase();
-                          return !recName || recName === myName;
-                        } else if (selectedReceptionistShiftStaff !== 'all') {
-                          const recName = (b.receptionistName || '').toLowerCase();
-                          return recName === selectedReceptionistShiftStaff.toLowerCase();
-                        }
-                        return true;
-                      }).length === 0 ? (
-                        <div className="text-center py-10 text-white/30 border border-dashed border-white/5">
-                          <p className="text-xs font-bold font-mono">🛎️ ምንም ንቁ አልጋ/ክፍል ምዝገባ አልተገኘም! (No Occupied Rooms)</p>
-                          <p className="text-[9px] mt-1 text-white/20">አዲስ እንግዳ ለመመዝገብ በስተግራ በኩል ያለውን ቅጽ ይጠቀሙ。</p>
+                      {/* Search & Status Filters */}
+                      <div className="flex flex-col sm:flex-row gap-2.5 items-stretch sm:items-center justify-between">
+                        <input
+                          type="text"
+                          value={receptionSearch}
+                          onChange={(e) => setReceptionSearch(e.target.value)}
+                          placeholder="🔍 ክፍል #, እንግዳ ስም, መታወቂያ ወይም ስልክ ይፈልጉ..."
+                          className="flex-1 bg-[#121212] border border-white/15 rounded-lg px-3 py-2 text-xs text-white placeholder:text-stone-400 outline-none focus:border-emerald-400"
+                        />
+                        <div className="flex gap-1 bg-[#121212] p-1 rounded-lg border border-white/10 font-mono text-[10px]">
+                          {(['Active', 'Checked Out', 'all'] as const).map((st) => (
+                            <button
+                              key={st}
+                              type="button"
+                              onClick={() => setReceptionFilterStatus(st)}
+                              className={`px-2.5 py-1 rounded font-bold uppercase cursor-pointer transition-colors ${
+                                receptionFilterStatus === st
+                                  ? 'bg-emerald-500 text-black'
+                                  : 'text-white/60 hover:text-white'
+                              }`}
+                            >
+                              {st === 'Active' ? '🟢 ንቁ (Active)' : st === 'Checked Out' ? '🔑 የወጡ' : '🌐 ሁሉም'}
+                            </button>
+                          ))}
                         </div>
-                      ) : (
-                        <div className="space-y-4">
-                          {roomBookings.filter(b => {
-                            if (selectedReceptionistShiftStaff === 'my_shift') {
-                              const myName = (currentUser?.name || '').toLowerCase();
-                              const recName = (b.receptionistName || '').toLowerCase();
-                              return !recName || recName === myName;
-                            } else if (selectedReceptionistShiftStaff !== 'all') {
-                              const recName = (b.receptionistName || '').toLowerCase();
-                              return recName === selectedReceptionistShiftStaff.toLowerCase();
-                            }
-                            return true;
-                          }).map((b, idx) => (
-                            <div key={b.id || idx} className={`p-4 border ${b.status === 'Active' ? 'border-emerald-500/15 bg-emerald-950/5' : 'border-white/5 bg-white/2'} flex flex-col md:flex-row justify-between gap-4 transition-all relative group`}>
-                              
-                              <div className="space-y-2 flex-1">
-                                <div className="flex items-center gap-2">
-                                  <span className="px-2.5 py-1 bg-[#121212] border border-white/10 text-white font-mono text-xs font-black">
-                                    ክፍል (ROOM): {b.roomNumber}
-                                  </span>
-                                  <span className="text-[9px] font-bold text-white/50 bg-white/5 px-2 py-0.5 uppercase tracking-wide">
-                                    {b.roomType || 'Single Bed'}
-                                  </span>
-                                  <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full ${
-                                    b.status === 'Active' ? 'bg-emerald-950 text-emerald-400 border border-emerald-900/30' : 'bg-white/10 text-white/55'
-                                  }`}>
-                                    {b.status}
-                                  </span>
-                                </div>
+                      </div>
 
-                                <div className="space-y-1.5 pt-1">
-                                  {/* Render residents name and IDs */}
-                                  <div className="text-xs text-white/80 space-y-1">
-                                    <p className="font-bold text-white/50 text-[10px] uppercase font-mono tracking-wider">Residents / ነዋሪዎች (ID verified):</p>
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2 pl-1 pt-0.5 font-sans">
-                                      {b.guestIds?.map((idRef, idIdx) => (
-                                        <div key={idIdx} className="bg-[#121212] p-1.5 border border-white/5 text-[11px] leading-tight">
-                                          <p className="font-bold text-white">{idRef.fullName}</p>
-                                          <p className="text-[9px] text-[#00f5ff] font-mono">ID / መታወቂያ- {idRef.idNumber}</p>
+                      {(() => {
+                        const qRec = receptionSearch.trim().toLowerCase();
+                        const filteredBookings = roomBookings.filter((b) => {
+                          if (receptionFilterStatus !== 'all' && b.status !== receptionFilterStatus) return false;
+                          if (selectedReceptionistShiftStaff === 'my_shift') {
+                            const myName = (currentUser?.name || '').toLowerCase();
+                            const recName = (b.receptionistName || '').toLowerCase();
+                            if (recName && recName !== myName) return false;
+                          } else if (selectedReceptionistShiftStaff !== 'all') {
+                            const recName = (b.receptionistName || '').toLowerCase();
+                            if (recName !== selectedReceptionistShiftStaff.toLowerCase()) return false;
+                          }
+                          if (qRec) {
+                            const guestMatch = b.guestIds?.some(
+                              (g) =>
+                                (g.fullName || '').toLowerCase().includes(qRec) ||
+                                (g.idNumber || '').toLowerCase().includes(qRec)
+                            );
+                            return (
+                              (b.roomNumber || '').toLowerCase().includes(qRec) ||
+                              (b.contactPhone || '').toLowerCase().includes(qRec) ||
+                              Boolean(guestMatch)
+                            );
+                          }
+                          return true;
+                        });
+
+                        if (filteredBookings.length === 0) {
+                          return (
+                            <div className="text-center py-10 text-white/40 border border-dashed border-white/10 rounded-xl">
+                              <p className="text-xs font-bold font-mono">🛎️ ምንም ተዛማጅ የክፍል ምዝገባ አልተገኘም! (No Room Bookings Found)</p>
+                              <p className="text-[9px] mt-1 text-white/30">አዲስ እንግዳ ለመመዝገብ በስተግራ በኩል ያለውን ቅጽ ይጠቀሙ።</p>
+                            </div>
+                          );
+                        }
+
+                        return (
+                          <div className="space-y-4">
+                            {filteredBookings.map((b, idx) => {
+                              const nights = Math.max(1, b.nights || 1);
+                              const roomSubtotal = nights * (b.pricePerNight || 0);
+                              const linkedOrders = orders.filter(
+                                (o) =>
+                                  o.status !== 'Cancelled' &&
+                                  locationsMatch(o.location || '', `Room ${b.roomNumber}`)
+                              );
+                              const ordersTotal = linkedOrders.reduce((s, o) => s + (o.total || 0), 0);
+                              const grandTotal = roomSubtotal + ordersTotal;
+                              const isPaid = b.paymentStatus === 'Paid';
+
+                              return (
+                                <div key={b.id || idx} className={`p-4 border rounded-xl ${b.status === 'Active' ? 'border-emerald-500/20 bg-emerald-950/10' : 'border-white/10 bg-white/5'} flex flex-col md:flex-row justify-between gap-4 transition-all relative group`}>
+                                  <div className="space-y-2 flex-1">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <span className="px-2.5 py-1 bg-[#121212] border border-white/15 text-white font-mono text-xs font-black rounded">
+                                        ክፍል (ROOM): {b.roomNumber}
+                                      </span>
+                                      <span className="text-[9px] font-bold text-white/70 bg-white/10 px-2 py-0.5 uppercase tracking-wide rounded">
+                                        {b.roomType || 'Single Bed'}
+                                      </span>
+                                      <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full ${
+                                        b.status === 'Active' ? 'bg-emerald-950 text-emerald-400 border border-emerald-700/40' : 'bg-white/10 text-white/60'
+                                      }`}>
+                                        {b.status}
+                                      </span>
+                                      <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full border ${
+                                        isPaid ? 'bg-[#C1FF00]/15 text-[#C1FF00] border-[#C1FF00]/40' : 'bg-amber-950/50 text-amber-300 border-amber-500/30'
+                                      }`}>
+                                        {isPaid ? '✔ PAID' : '⏳ PAYMENT PENDING'}
+                                      </span>
+                                    </div>
+
+                                    <div className="space-y-1.5 pt-1">
+                                      {/* Render residents name, IDs & clickable ID scan thumbnails */}
+                                      <div className="text-xs text-white/80 space-y-1">
+                                        <p className="font-bold text-white/50 text-[10px] uppercase font-mono tracking-wider">Residents / ነዋሪዎች (ID verified):</p>
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2 pl-1 pt-0.5 font-sans">
+                                          {b.guestIds?.map((idRef, idIdx) => (
+                                            <div key={idIdx} className="bg-[#121212] p-2 border border-white/10 rounded flex items-center justify-between gap-2 text-[11px] leading-tight">
+                                              <div className="min-w-0">
+                                                <p className="font-bold text-white truncate">{idRef.fullName}</p>
+                                                <p className="text-[9px] text-[#00f5ff] font-mono">ID / መታወቂያ: {idRef.idNumber}</p>
+                                              </div>
+                                              {idRef.idPhotoUrl && (
+                                                <button
+                                                  type="button"
+                                                  onClick={() =>
+                                                    setReceptionPreviewIdPhoto({
+                                                      url: idRef.idPhotoUrl!,
+                                                      guestName: idRef.fullName,
+                                                      roomNumber: b.roomNumber,
+                                                    })
+                                                  }
+                                                  className="shrink-0 group/img relative rounded overflow-hidden border border-emerald-400/50 cursor-pointer"
+                                                  title="መታወቂያ ፎቶውን በትልቁ እይ"
+                                                >
+                                                  <img
+                                                    src={idRef.idPhotoUrl}
+                                                    alt="Guest ID"
+                                                    className="w-11 h-8 object-cover"
+                                                    referrerPolicy="no-referrer"
+                                                  />
+                                                </button>
+                                              )}
+                                            </div>
+                                          ))}
                                         </div>
-                                      ))}
+                                      </div>
+
+                                      {/* Live Room Folio Summary */}
+                                      <div className="bg-black/50 border border-white/10 rounded-lg p-2.5 grid grid-cols-2 sm:grid-cols-4 gap-2 text-[10px] font-mono mt-1">
+                                        <div>
+                                          <span className="text-white/40 block text-[8px]">NIGHTS / RATE</span>
+                                          <span className="text-white font-bold">{nights} × {b.pricePerNight} {currency}</span>
+                                        </div>
+                                        <div>
+                                          <span className="text-white/40 block text-[8px]">ROOM SUBTOTAL</span>
+                                          <span className="text-emerald-300 font-bold">{roomSubtotal} {currency}</span>
+                                        </div>
+                                        <div>
+                                          <span className="text-white/40 block text-[8px]">ORDERS ({linkedOrders.length})</span>
+                                          <span className="text-sky-300 font-bold">{ordersTotal} {currency}</span>
+                                        </div>
+                                        <div>
+                                          <span className="text-white/40 block text-[8px]">TOTAL FOLIO</span>
+                                          <span className="text-[#C1FF00] font-black">{grandTotal} {currency}</span>
+                                        </div>
+                                      </div>
+
+                                      <div className="flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-white/60 pt-1 font-sans border-t border-white/5">
+                                        <p>📞 ስልክ: <span className="font-mono text-[#C1FF00]">{b.contactPhone}</span></p>
+                                        <p>📅 Check-In: <span className="font-mono text-[#00f5ff]">{b.checkInDate}</span></p>
+                                        {b.checkOutDate && (
+                                          <p>🔑 Check-Out: <span className="font-mono text-amber-300">{b.checkOutDate}</span></p>
+                                        )}
+                                      </div>
+
+                                      {b.notes && (
+                                        <p className="text-[10px] text-white/50 italic bg-black/40 p-1.5 border-l-2 border-white/10">
+                                          "{b.notes}"
+                                        </p>
+                                      )}
                                     </div>
                                   </div>
 
-                                  <div className="flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-white/50 pt-1.5 font-sans border-t border-white/5">
-                                    <p>📞 ስልክ: <span className="font-mono text-[#C1FF00]">{b.contactPhone}</span></p>
-                                    <p>💰 {tText({ am: 'ክፍያ', en: 'Rate', or: 'Kaffaltii', ti: 'ክፍሊት', sid: 'Baato', fr: 'Tarif', de: 'Preis', it: 'Tariffa', zh: '房费', ar: 'التعرفة' })}: <span className="font-mono text-white font-bold">{b.pricePerNight} {currency} / {tText({ am: 'ቀን', en: 'Night', or: 'Halkan', ti: 'ለይቲ', sid: 'Hashsha', fr: 'Nuit', de: 'Nacht', it: 'Notte', zh: '晚', ar: 'ليلة' })}</span></p>
-                                    <p>📅 {tText({ am: 'የገባው', en: 'Check-In', or: 'Seensa', ti: 'ዝኣተወሉ', sid: 'Ea', fr: 'Arrivée', de: 'Check-in', it: 'Check-in', zh: '入住', ar: 'تسجيل الوصول' })}: <span className="font-mono text-[#00f5ff]">{b.checkInDate}</span></p>
+                                  <div className="flex flex-col justify-end gap-2 shrink-0">
+                                    {b.status === 'Active' && (
+                                      <>
+                                        <button
+                                          type="button"
+                                          onClick={() => handleExtendBookingNights(b.id)}
+                                          className="bg-sky-950/40 hover:bg-sky-600 text-sky-300 hover:text-white border border-sky-500/30 px-3 py-1.5 rounded font-mono text-[9px] uppercase font-black cursor-pointer transition-colors"
+                                        >
+                                          🌙 +1 ሌሊት (+1 Night)
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => handleToggleBookingPaymentStatus(b.id)}
+                                          className="bg-emerald-950/40 hover:bg-emerald-600 text-emerald-300 hover:text-white border border-emerald-500/30 px-3 py-1.5 rounded font-mono text-[9px] uppercase font-black cursor-pointer transition-colors"
+                                        >
+                                          {isPaid ? '⏳ Mark Pending' : '💳 Mark Paid'}
+                                        </button>
+                                        <button 
+                                          type="button"
+                                          onClick={() => {
+                                            askConfirmAndRun(
+                                              tText({
+                                                am: 'እንግዳው ክፍሉን መልቀቁን እርግጠኛ ነዎት?',
+                                                en: 'Confirm guest check-out?',
+                                                or: 'Keessummaan kutaa gadhiisuu mirkaneessitaa?',
+                                                ti: 'ጋሻ ክፍሊ ምልቃቑ እርግጸኛ ዲኹም?',
+                                                sid: 'Wosinchu mine fula buuxxootto?',
+                                                fr: 'Confirmer le départ du client ?',
+                                                de: 'Check-out des Gastes bestätigen?',
+                                                it: 'Confermare il check-out dell’ospite?',
+                                                zh: '确认客人退房吗？',
+                                                ar: 'هل تؤكد تسجيل مغادرة الضيف؟'
+                                              }),
+                                              () => handleCheckoutBooking(b.id)
+                                            );
+                                          }}
+                                          className="bg-amber-950/30 hover:bg-amber-500 hover:text-black text-amber-400 border border-amber-500/40 px-3 py-2 rounded font-mono text-[9px] uppercase font-black tracking-widest cursor-pointer transition-colors"
+                                        >
+                                          {tText({ am: 'ልቀቅ (Check Out)', en: 'Check Out', or: 'Gadhiisi', ti: 'ልቐቕ', sid: 'Fushi', fr: 'Départ', de: 'Check-out', it: 'Check-out', zh: '退房', ar: 'مغادرة' })} 🔑
+                                        </button>
+                                      </>
+                                    )}
                                   </div>
-
-                                  {b.notes && (
-                                    <p className="text-[10px] text-white/40 italic bg-black/40 p-1.5 border-l-2 border-white/10">
-                                      "{b.notes}"
-                                    </p>
-                                  )}
                                 </div>
-                              </div>
-
-                              {b.status === 'Active' && (
-                                <div className="flex flex-col justify-end">
-                                  <button 
-                                    onClick={() => {
-                                      askConfirmAndRun(
-                                        tText({
-                                          am: 'እንግዳው ክፍሉን መልቀቁን እርግጠኛ ነዎት?',
-                                          en: 'Confirm guest check-out?',
-                                          or: 'Keessummaan kutaa gadhiisuu mirkaneessitaa?',
-                                          ti: 'ጋሻ ክፍሊ ምልቃቑ እርግጸኛ ዲኹም?',
-                                          sid: 'Wosinchu mine fula buuxxootto?',
-                                          fr: 'Confirmer le départ du client ?',
-                                          de: 'Check-out des Gastes bestätigen?',
-                                          it: 'Confermare il check-out dell’ospite?',
-                                          zh: '确认客人退房吗？',
-                                          ar: 'هل تؤكد تسجيل مغادرة الضيف؟'
-                                        }),
-                                        () => {
-                                          setRoomBookings(prev => prev.map(item => item.id === b.id ? { ...item, status: 'Checked Out' } : item));
-                                          setAccessibleToast(tText({
-                                            am: '🔑 እንግዳው በተሳካ ሁኔታ ቼክ-አውት ሆኗል!',
-                                            en: '🔑 Guest checked out successfully!',
-                                            or: '🔑 Keessummaan milkaa’inaan ba’eera!',
-                                            ti: '🔑 ጋሻ ብዓወት ቼክ-ኣውት ኮይኑ!',
-                                            sid: '🔑 Wosinchu keere fulino!',
-                                            fr: '🔑 Départ enregistré avec succès !',
-                                            de: '🔑 Check-out erfolgreich abgeschlossen!',
-                                            it: '🔑 Check-out completato con successo!',
-                                            zh: '🔑 客人已成功办理退房！',
-                                            ar: '🔑 تم تسجيل مغادرة الضيف بنجاح!'
-                                          }));
-                                          setTimeout(() => setAccessibleToast(''), 4000);
-                                        }
-                                      );
-                                    }}
-                                    className="bg-amber-950/20 hover:bg-amber-500 hover:text-black text-amber-400 border border-amber-500/30 px-3 py-2 font-mono text-[9px] uppercase font-black tracking-widest cursor-pointer transition-colors"
-                                  >
-                                    {tText({ am: 'ልቀቅ (Check Out)', en: 'Check Out', or: 'Gadhiisi', ti: 'ልቐቕ', sid: 'Fushi', fr: 'Départ', de: 'Check-out', it: 'Check-out', zh: '退房', ar: 'مغادرة' })} 🔑
-                                  </button>
-                                </div>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      )}
+                              );
+                            })}
+                          </div>
+                        );
+                      })()}
                     </div>
 
                     {/* Buzzer Assist calls inside receptionist desk */}
@@ -17453,7 +19901,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
 
               const unsettledBills = orders.filter((o) => o.status !== 'Paid' && o.status !== 'Cancelled');
               const cashRequestOrders = unsettledBills.filter(
-                (o) => o.payment === 'cash' || Boolean(o.cashPaymentRequested)
+                (o) => o.payment === 'cash' || Boolean(o.cashPaymentRequested) || Boolean(o.receiptScreenshot)
               );
 
               const queryLower = cashierSearchQuery.trim().toLowerCase();
@@ -17474,6 +19922,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                 if (cashierBillFilter === 'cash_requests') {
                   return o.payment === 'cash' || Boolean(o.cashPaymentRequested);
                 }
+                if (cashierBillFilter === 'with_receipt') return Boolean(o.receiptScreenshot);
                 if (cashierBillFilter === 'cash') return o.payment === 'cash';
                 if (cashierBillFilter === 'bank') return o.payment === 'bank';
                 if (cashierBillFilter === 'chapa') return o.payment === 'chapa';
@@ -17490,6 +19939,10 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                 if (!matchesCashierScope(o)) return false;
                 return matchesSearch(o);
               });
+              const completedWithReceiptCount = completedOrders.filter((o) => Boolean(o.receiptScreenshot)).length;
+              const displayedCompletedOrders = cashierCompletedReceiptOnly
+                ? completedOrders.filter((o) => Boolean(o.receiptScreenshot))
+                : completedOrders;
 
               const posSubtotal = cashierCart.reduce((sum, item) => sum + item.qty * item.price, 0);
               const posServiceCharge = cashierPosIncludeTax ? Math.round((posSubtotal * serviceChargeRate) / 100) : 0;
@@ -17781,6 +20234,29 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                     {ord.receiptComment && (
                                       <p className="text-[11px] text-white/60 italic">📝 "{ord.receiptComment}"</p>
                                     )}
+                                    {ord.receiptScreenshot && (
+                                      <div className="pt-1.5 flex items-center gap-2.5">
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setCashierReceiptPreviewUrl(ord.receiptScreenshot || null);
+                                            setCashierReceiptPreviewOrder(ord);
+                                          }}
+                                          className="flex items-center gap-2 bg-sky-500/15 hover:bg-sky-500/30 border border-sky-400/40 rounded-lg p-1.5 pr-3 cursor-pointer transition-colors"
+                                        >
+                                          <img
+                                            src={ord.receiptScreenshot}
+                                            alt="Customer receipt proof"
+                                            className="w-10 h-10 object-cover rounded border border-sky-400/40 shrink-0"
+                                            referrerPolicy="no-referrer"
+                                          />
+                                          <span className="text-[10.5px] font-mono font-bold text-sky-200 text-left">
+                                            🖼️ የደንበኛ ደረሰኝ ፎቶ አረጋግጥ
+                                            <span className="block text-[9px] text-sky-300/70">Click to inspect proof</span>
+                                          </span>
+                                        </button>
+                                      </div>
+                                    )}
                                   </div>
 
                                   <div className="flex flex-col items-start md:items-end gap-2 shrink-0 w-full md:w-auto">
@@ -17797,19 +20273,50 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                       <button
                                         type="button"
                                         onClick={() => {
-                                          if (isSettlingThis) {
-                                            setCashierActiveSettleOrderId(null);
-                                            setCashierSettleTenderedInput('');
+                                          if (ord.payment === 'cash') {
+                                            if (isSettlingThis) {
+                                              setCashierActiveSettleOrderId(null);
+                                              setCashierSettleTenderedInput('');
+                                            } else {
+                                              setCashierActiveSettleOrderId(`req-${ord.id}`);
+                                              setCashierSettleTenderedInput(
+                                                String(ord.cashTenderedAmount ?? billTotal)
+                                              );
+                                            }
                                           } else {
-                                            setCashierActiveSettleOrderId(`req-${ord.id}`);
-                                            setCashierSettleTenderedInput(
-                                              String(ord.cashTenderedAmount ?? billTotal)
+                                            askConfirmAndRun(
+                                              `${ord.location} · ${billTotal} ${currency} (${ord.payment.toUpperCase()}) — ክፍያውንና ደረሰኙን አረጋግጠው ሂሳቡን ይዘጋሉ?`,
+                                              () => {
+                                                const timeNow = new Date().toLocaleTimeString('en-US', {
+                                                  hour12: false,
+                                                  hour: '2-digit',
+                                                  minute: '2-digit',
+                                                });
+                                                setOrders((prev) =>
+                                                  prev.map((o) =>
+                                                    o.id === ord.id
+                                                      ? {
+                                                          ...o,
+                                                          status: 'Paid',
+                                                          paymentVerified: true,
+                                                          cashConfirmedAt: timeNow,
+                                                          updatedAt: Date.now(),
+                                                          cashierName: activeCashierName,
+                                                        }
+                                                      : o
+                                                  )
+                                                );
+                                                resolveOrderAssistanceCalls(ord.id, activeCashierName, ['cash_request']);
+                                                showAppToast(`✅ የደረሰኝ ማረጋገጫ (${ord.id}) እንደተከፈለ ተዘግቷል!`);
+                                              }
                                             );
                                           }
                                         }}
                                         className="flex-1 sm:flex-none bg-amber-400 hover:bg-amber-300 text-black text-[10.5px] font-black uppercase px-3 py-2 rounded-lg cursor-pointer transition-colors font-mono"
                                       >
-                                        {isSettlingThis ? '✕ ዝጋ' : '💵 ካሽ ተቀበል & ዝጋ'}
+                                        {ord.payment === 'cash'
+                                          ? (isSettlingThis ? '✕ ዝጋ' : '💵 ካሽ ተቀበል & ዝጋ')
+                                          : '✅ ደረሰኝ አረጋግጥ & ዝጋ'}
                                       </button>
                                       <button
                                         type="button"
@@ -17845,52 +20352,89 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                 </div>
 
                                 {isSettlingThis && (
-                                  <div className="bg-amber-950/35 border border-amber-500/35 p-3 rounded-xl flex flex-col sm:flex-row items-stretch sm:items-end gap-3">
-                                    <div className="flex-1">
-                                      <label className="text-[10px] font-mono text-amber-200 block uppercase mb-1">
-                                        ከደንበኛው የተቀበሉት ብር (Cash Received in {currency})
+                                  <div className="bg-amber-950/35 border border-amber-500/35 p-3 rounded-xl space-y-2.5">
+                                    <div className="flex flex-col sm:flex-row items-stretch sm:items-end gap-3">
+                                      <div className="flex-1">
+                                        <label className="text-[10px] font-mono text-amber-200 block uppercase mb-1">
+                                          ከደንበኛው የተቀበሉት ብር (Cash Received in {currency})
+                                        </label>
+                                        <input
+                                          type="number"
+                                          min={0}
+                                          value={cashierSettleTenderedInput}
+                                          onChange={(e) => setCashierSettleTenderedInput(e.target.value)}
+                                          className="w-full bg-black border border-amber-500/40 rounded-lg px-3 py-2 text-sm font-mono font-black text-white outline-none focus:border-amber-300"
+                                        />
+                                      </div>
+                                      <div className="px-3 py-2 rounded-lg bg-black/50 border border-white/10 text-xs font-mono">
+                                        <span className="text-white/50 block text-[9px] uppercase">መልስ (Change Due)</span>
+                                        <span
+                                          className={`font-black text-sm ${
+                                            computedChange !== null && computedChange < 0
+                                              ? 'text-red-400'
+                                              : 'text-emerald-400'
+                                          }`}
+                                        >
+                                          {computedChange !== null ? `${computedChange.toFixed(2)} ${currency}` : '—'}
+                                        </span>
+                                      </div>
+                                      <label className="px-3 py-2.5 rounded-lg bg-sky-500/20 hover:bg-sky-500/30 border border-sky-400/40 text-sky-200 font-mono font-bold text-[10.5px] cursor-pointer flex items-center justify-center gap-1.5">
+                                        {cashierUploadingOrderId === ord.id ? (
+                                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                        ) : (
+                                          <Camera className="w-3.5 h-3.5" />
+                                        )}
+                                        <span>{cashierSettleReceiptUrl ? '✓ ደረሰኝ ተያይዟል' : '📸 ደረሰኝ/ስሊፕ አያይዝ'}</span>
+                                        <input
+                                          type="file"
+                                          accept="image/*"
+                                          className="hidden"
+                                          onChange={async (e) => {
+                                            const f = e.target.files?.[0];
+                                            if (!f) return;
+                                            setCashierUploadingOrderId(ord.id);
+                                            try {
+                                              const url = await processAndUploadReceiptImage(f);
+                                              setCashierSettleReceiptUrl(url);
+                                              showAppToast('🖼️ የክፍያ ደረሰኝ ፎቶ ተዘጋጅቷል — አረጋግጥን ይጫኑ!');
+                                            } finally {
+                                              setCashierUploadingOrderId(null);
+                                              e.target.value = '';
+                                            }
+                                          }}
+                                        />
                                       </label>
-                                      <input
-                                        type="number"
-                                        min={0}
-                                        value={cashierSettleTenderedInput}
-                                        onChange={(e) => setCashierSettleTenderedInput(e.target.value)}
-                                        className="w-full bg-black border border-amber-500/40 rounded-lg px-3 py-2 text-sm font-mono font-black text-white outline-none focus:border-amber-300"
-                                      />
-                                    </div>
-                                    <div className="px-3 py-2 rounded-lg bg-black/50 border border-white/10 text-xs font-mono">
-                                      <span className="text-white/50 block text-[9px] uppercase">መልስ (Change Due)</span>
-                                      <span
-                                        className={`font-black text-sm ${
-                                          computedChange !== null && computedChange < 0
-                                            ? 'text-red-400'
-                                            : 'text-emerald-400'
-                                        }`}
+                                      <button
+                                        type="button"
+                                        disabled={cashierUploadingOrderId === ord.id}
+                                        onClick={() => {
+                                          const settled = handleCashierConfirmCashPayment(
+                                            ord.id,
+                                            cashierSettleTenderedInput,
+                                            cashierSettleReceiptUrl
+                                          );
+                                          if (settled) {
+                                            downloadOrderReceiptPdf(settled, {
+                                              cashierName: activeCashierName,
+                                              serviceChargeRate,
+                                              vatRate,
+                                              hotline: contactHotline1,
+                                              address: contactAddress,
+                                            });
+                                          }
+                                        }}
+                                        className="bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-black font-black text-xs uppercase px-4 py-2.5 rounded-lg cursor-pointer font-mono"
                                       >
-                                        {computedChange !== null ? `${computedChange.toFixed(2)} ${currency}` : '—'}
-                                      </span>
+                                        ✅ አረጋግጥ &amp; ደረሰኝ አትም
+                                      </button>
                                     </div>
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        const settled = handleCashierConfirmCashPayment(
-                                          ord.id,
-                                          cashierSettleTenderedInput
-                                        );
-                                        if (settled) {
-                                          downloadOrderReceiptPdf(settled, {
-                                            cashierName: activeCashierName,
-                                            serviceChargeRate,
-                                            vatRate,
-                                            hotline: contactHotline1,
-                                            address: contactAddress,
-                                          });
-                                        }
-                                      }}
-                                      className="bg-emerald-500 hover:bg-emerald-400 text-black font-black text-xs uppercase px-4 py-2.5 rounded-lg cursor-pointer font-mono"
-                                    >
-                                      ✅ አረጋግጥ &amp; ደረሰኝ አትም
-                                    </button>
+                                    {cashierSettleReceiptUrl && (
+                                      <div className="flex items-center gap-2.5 bg-black/50 border border-sky-400/35 rounded-lg p-2">
+                                        <img src={cashierSettleReceiptUrl} alt="Cashier receipt draft" className="w-12 h-12 object-cover rounded border border-white/15" referrerPolicy="no-referrer" />
+                                        <span className="text-[10.5px] font-mono text-sky-200 flex-1">ይህ የደረሰኝ ፎቶ ከትዕዛዙ እና ከሪፖርቱ ጋር በቋሚነት ይጣመራል።</span>
+                                        <button type="button" onClick={() => setCashierSettleReceiptUrl('')} className="text-red-300 text-[10px] font-mono font-bold cursor-pointer px-2 py-1">አስወግድ</button>
+                                      </div>
+                                    )}
                                   </div>
                                 )}
                               </div>
@@ -18195,6 +20739,54 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                               </div>
                             )}
 
+                            {/* Optional Paired Receipt / Slip Screenshot for POS Transaction */}
+                            <div className="space-y-1.5">
+                              <div className="flex items-center gap-2">
+                                <label className="flex-1 bg-sky-500/15 hover:bg-sky-500/25 border border-sky-400/35 text-sky-200 rounded px-2.5 py-1.5 text-[10px] font-mono font-bold cursor-pointer flex items-center justify-center gap-1.5">
+                                  {cashierUploadingPosReceipt ? (
+                                    <Loader2 className="w-3 h-3 animate-spin" />
+                                  ) : (
+                                    <Camera className="w-3 h-3" />
+                                  )}
+                                  <span>{cashierPosReceiptUrl ? '✓ ደረሰኝ ፎቶ ተያይዟል' : '📸 የደረሰኝ/ስሊፕ ፎቶ አያይዝ'}</span>
+                                  <input
+                                    type="file"
+                                    accept="image/*"
+                                    className="hidden"
+                                    onChange={async (e) => {
+                                      const f = e.target.files?.[0];
+                                      if (!f) return;
+                                      setCashierUploadingPosReceipt(true);
+                                      try {
+                                        const url = await processAndUploadReceiptImage(f);
+                                        setCashierPosReceiptUrl(url);
+                                      } finally {
+                                        setCashierUploadingPosReceipt(false);
+                                        e.target.value = '';
+                                      }
+                                    }}
+                                  />
+                                </label>
+                                {cashierPosReceiptUrl && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setCashierPosReceiptUrl('')}
+                                    className="text-[10px] font-mono text-red-300 bg-red-500/15 px-2 py-1.5 rounded cursor-pointer"
+                                  >
+                                    ✕
+                                  </button>
+                                )}
+                              </div>
+                              {cashierPosReceiptUrl && (
+                                <img
+                                  src={cashierPosReceiptUrl}
+                                  alt="POS receipt preview"
+                                  className="h-12 w-full object-contain rounded bg-black/50 border border-sky-400/30 p-0.5"
+                                  referrerPolicy="no-referrer"
+                                />
+                              )}
+                            </div>
+
                             <div className="space-y-1 text-[10px] font-mono border-b border-dashed border-white/10 pb-2">
                               {cashierPosIncludeTax && posSubtotal > 0 && (
                                 <div className="flex justify-between text-white/50">
@@ -18225,7 +20817,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
 
                             <button
                               type="button"
-                              disabled={cashierCart.length === 0}
+                              disabled={cashierCart.length === 0 || cashierUploadingPosReceipt}
                               onClick={() => {
                                 if (cashierPosPayment === 'cash' && parsedPosTendered !== null && parsedPosTendered < posGrandTotal) {
                                   showAppToast(`⚠️ የተቀበሉት ገንዘብ (${parsedPosTendered} ${currency}) ከሂሳቡ (${posGrandTotal} ${currency}) ማነስ የለበትም!`);
@@ -18272,6 +20864,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                   checkedByWaiter: false,
                                   payment: cashierPosPayment,
                                   bankRef: cashierPosPayment !== 'cash' ? cashierPosBankRef.trim() || undefined : undefined,
+                                  receiptScreenshot: cashierPosReceiptUrl || undefined,
                                   receiptComment: cashierOrderType !== 'Dine-In' ? cashierOrderType : undefined,
                                   cashPayMode: cashierPosPayment === 'cash' ? 'cashier_desk' : undefined,
                                   cashPaymentRequested: false,
@@ -18326,6 +20919,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                 setCashierCart([]);
                                 setCashierPosTendered('');
                                 setCashierPosBankRef('');
+                                setCashierPosReceiptUrl('');
                                 setCashierLocation('Walk-In');
                               }}
                               className={`w-full py-2.5 px-3 text-[10.5px] font-mono font-black uppercase text-center rounded transition-all flex items-center justify-center gap-1.5 focus:outline-none ${
@@ -18405,6 +20999,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                             [
                               { id: 'all', label: 'ሁሉም (All)' },
                               { id: 'cash_requests', label: '💵 ካሽ ጥያቄ' },
+                              { id: 'with_receipt', label: '🖼️ ደረሰኝ ያላቸው' },
                               { id: 'cash', label: 'Cash' },
                               { id: 'bank', label: '🏦 Bank' },
                               { id: 'chapa', label: '⚡ Chapa' },
@@ -18437,7 +21032,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                             const billTotal = getOrderGrandTotal(ord);
                             const tableWaiter = getAssignedWaiterForTable(ord.location) || ord.waiter;
                             const cookStage = getEffectiveCookingStatus(ord);
-                            const matchedBank = ord.bankId ? bankAccounts.find((b) => b.id === ord.bankId) : null;
+                            const matchedBank = ord.bankId ? banks.find((b) => b.id === ord.bankId) : null;
                             const isSettlingInline = cashierActiveSettleOrderId === `bill-${ord.id}`;
                             const inlineCashVal =
                               isSettlingInline && cashierSettleTenderedInput.trim() !== ''
@@ -18493,21 +21088,46 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                       </span>
                                     </div>
 
-                                    {(ord.bankRef || matchedBank || ord.receiptScreenshot) && (
-                                      <div className="flex flex-wrap items-center gap-2 text-[10px] font-mono text-sky-300">
-                                        {matchedBank && <span>🏦 {matchedBank.name}</span>}
-                                        {ord.bankRef && <span>Ref: {ord.bankRef}</span>}
-                                        {ord.receiptScreenshot && (
-                                          <button
-                                            type="button"
-                                            onClick={() => setCashierReceiptPreviewUrl(ord.receiptScreenshot || null)}
-                                            className="bg-sky-500/20 hover:bg-sky-500/35 border border-sky-400/40 text-sky-200 px-2 py-0.5 rounded cursor-pointer font-bold"
-                                          >
-                                            🖼️ የባንክ ደረሰኝ እይ (View Screenshot)
-                                          </button>
+                                    <div className="flex flex-wrap items-center gap-2 text-[10px] font-mono text-sky-300">
+                                      {matchedBank && <span>🏦 {matchedBank.name}</span>}
+                                      {ord.bankRef && <span>Ref: {ord.bankRef}</span>}
+                                      {ord.receiptScreenshot && (
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setCashierReceiptPreviewUrl(ord.receiptScreenshot || null);
+                                            setCashierReceiptPreviewOrder(ord);
+                                          }}
+                                          className="flex items-center gap-1.5 bg-sky-500/20 hover:bg-sky-500/35 border border-sky-400/40 text-sky-200 px-2 py-1 rounded cursor-pointer font-bold"
+                                        >
+                                          <img
+                                            src={ord.receiptScreenshot}
+                                            alt="Receipt thumbnail"
+                                            className="w-7 h-7 object-cover rounded border border-sky-400/40"
+                                            referrerPolicy="no-referrer"
+                                          />
+                                          <span>🖼️ የደረሰኝ ፎቶ እይ (Verify Screenshot)</span>
+                                        </button>
+                                      )}
+                                      <label className="flex items-center gap-1 bg-white/5 hover:bg-emerald-500/20 border border-white/15 hover:border-emerald-400/40 text-white/80 hover:text-emerald-200 px-2 py-1 rounded cursor-pointer font-bold">
+                                        {cashierUploadingOrderId === ord.id ? (
+                                          <Loader2 className="w-3 h-3 animate-spin" />
+                                        ) : (
+                                          <Camera className="w-3 h-3" />
                                         )}
-                                      </div>
-                                    )}
+                                        <span>{ord.receiptScreenshot ? 'ፎቶ ቀይር' : '📷 ደረሰኝ ፎቶ አያይዝ'}</span>
+                                        <input
+                                          type="file"
+                                          accept="image/*"
+                                          className="hidden"
+                                          onChange={(e) => {
+                                            const f = e.target.files?.[0];
+                                            if (f) handleCashierAttachOrderReceipt(ord.id, f);
+                                            e.target.value = '';
+                                          }}
+                                        />
+                                      </label>
+                                    </div>
 
                                     <div className="space-y-1 pl-3 border-l-2 border-white/10">
                                       {ord.items.map((it, idx) => (
@@ -18578,11 +21198,13 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                             if (isSettlingInline) {
                                               setCashierActiveSettleOrderId(null);
                                               setCashierSettleTenderedInput('');
+                                              setCashierSettleReceiptUrl('');
                                             } else {
                                               setCashierActiveSettleOrderId(`bill-${ord.id}`);
                                               setCashierSettleTenderedInput(
                                                 String(ord.cashTenderedAmount ?? billTotal)
                                               );
+                                              setCashierSettleReceiptUrl(ord.receiptScreenshot || '');
                                             }
                                           }}
                                           className="bg-cyan-500 hover:bg-cyan-400 text-black text-[10px] font-black uppercase px-3 py-2 rounded-lg cursor-pointer transition-colors font-mono"
@@ -18672,36 +21294,72 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                 </div>
 
                                 {isSettlingInline && (
-                                  <div className="bg-cyan-950/35 border border-cyan-500/35 p-3 rounded-xl flex flex-col sm:flex-row items-stretch sm:items-end gap-3">
-                                    <div className="flex-1">
-                                      <label className="text-[10px] font-mono text-cyan-200 block uppercase mb-1">
-                                        የተቀበሉት ጥሬ ገንዘብ (Cash Tendered · {currency})
+                                  <div className="bg-cyan-950/35 border border-cyan-500/35 p-3 rounded-xl space-y-2.5">
+                                    <div className="flex flex-col sm:flex-row items-stretch sm:items-end gap-3">
+                                      <div className="flex-1">
+                                        <label className="text-[10px] font-mono text-cyan-200 block uppercase mb-1">
+                                          የተቀበሉት ጥሬ ገንዘብ (Cash Tendered · {currency})
+                                        </label>
+                                        <input
+                                          type="number"
+                                          min={0}
+                                          value={cashierSettleTenderedInput}
+                                          onChange={(e) => setCashierSettleTenderedInput(e.target.value)}
+                                          className="w-full bg-black border border-cyan-500/40 rounded-lg px-3 py-2 text-sm font-mono font-black text-white outline-none focus:border-cyan-300"
+                                        />
+                                      </div>
+                                      <div className="px-3 py-2 rounded-lg bg-black/50 border border-white/10 text-xs font-mono">
+                                        <span className="text-white/50 block text-[9px] uppercase">መልስ (Change Due)</span>
+                                        <span
+                                          className={`font-black text-sm ${
+                                            inlineChange !== null && inlineChange < 0 ? 'text-red-400' : 'text-emerald-400'
+                                          }`}
+                                        >
+                                          {inlineChange !== null ? `${inlineChange.toFixed(2)} ${currency}` : '—'}
+                                        </span>
+                                      </div>
+                                      <label className="px-3 py-2.5 rounded-lg bg-sky-500/20 hover:bg-sky-500/30 border border-sky-400/40 text-sky-200 font-mono font-bold text-[10.5px] cursor-pointer flex items-center justify-center gap-1.5">
+                                        {cashierUploadingOrderId === ord.id ? (
+                                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                        ) : (
+                                          <Camera className="w-3.5 h-3.5" />
+                                        )}
+                                        <span>{cashierSettleReceiptUrl ? '✓ ደረሰኝ ተያይዟል' : '📸 ደረሰኝ/ስሊፕ አያይዝ'}</span>
+                                        <input
+                                          type="file"
+                                          accept="image/*"
+                                          className="hidden"
+                                          onChange={async (e) => {
+                                            const f = e.target.files?.[0];
+                                            if (!f) return;
+                                            setCashierUploadingOrderId(ord.id);
+                                            try {
+                                              const url = await processAndUploadReceiptImage(f);
+                                              setCashierSettleReceiptUrl(url);
+                                              showAppToast('🖼️ የክፍያ ደረሰኝ ፎቶ ተዘጋጅቷል — ክፍያውን ዝጋ ይጫኑ!');
+                                            } finally {
+                                              setCashierUploadingOrderId(null);
+                                              e.target.value = '';
+                                            }
+                                          }}
+                                        />
                                       </label>
-                                      <input
-                                        type="number"
-                                        min={0}
-                                        value={cashierSettleTenderedInput}
-                                        onChange={(e) => setCashierSettleTenderedInput(e.target.value)}
-                                        className="w-full bg-black border border-cyan-500/40 rounded-lg px-3 py-2 text-sm font-mono font-black text-white outline-none focus:border-cyan-300"
-                                      />
-                                    </div>
-                                    <div className="px-3 py-2 rounded-lg bg-black/50 border border-white/10 text-xs font-mono">
-                                      <span className="text-white/50 block text-[9px] uppercase">መልስ (Change Due)</span>
-                                      <span
-                                        className={`font-black text-sm ${
-                                          inlineChange !== null && inlineChange < 0 ? 'text-red-400' : 'text-emerald-400'
-                                        }`}
+                                      <button
+                                        type="button"
+                                        disabled={cashierUploadingOrderId === ord.id}
+                                        onClick={() => handleCashierConfirmCashPayment(ord.id, cashierSettleTenderedInput, cashierSettleReceiptUrl)}
+                                        className="bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-black font-black text-xs uppercase px-4 py-2.5 rounded-lg cursor-pointer font-mono"
                                       >
-                                        {inlineChange !== null ? `${inlineChange.toFixed(2)} ${currency}` : '—'}
-                                      </span>
+                                        💵 ክፍያውን ዝጋ (Mark Cash Paid)
+                                      </button>
                                     </div>
-                                    <button
-                                      type="button"
-                                      onClick={() => handleCashierConfirmCashPayment(ord.id, cashierSettleTenderedInput)}
-                                      className="bg-emerald-500 hover:bg-emerald-400 text-black font-black text-xs uppercase px-4 py-2.5 rounded-lg cursor-pointer font-mono"
-                                    >
-                                      💵 ክፍያውን ዝጋ (Mark Cash Paid)
-                                    </button>
+                                    {cashierSettleReceiptUrl && (
+                                      <div className="flex items-center gap-2.5 bg-black/50 border border-sky-400/35 rounded-lg p-2">
+                                        <img src={cashierSettleReceiptUrl} alt="Cashier inline receipt draft" className="w-12 h-12 object-cover rounded border border-white/15" referrerPolicy="no-referrer" />
+                                        <span className="text-[10.5px] font-mono text-sky-200 flex-1">የደረሰኝ ፎቶ ከክፍያው ጋር በቋሚነት ይቀመጣል።</span>
+                                        <button type="button" onClick={() => setCashierSettleReceiptUrl('')} className="text-red-300 text-[10px] font-mono font-bold cursor-pointer px-2 py-1">አስወግድ</button>
+                                      </div>
+                                    )}
                                   </div>
                                 )}
                               </div>
@@ -18711,30 +21369,53 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                       )}
                     </div>
 
-                    {/* Completed & Paid Orders — PDF Receipt Printing Desk */}
+                    {/* Completed & Paid Orders — PDF Receipt & Paired Screenshot Archive */}
                     <div className="bg-[#101010] border border-emerald-500/25 p-5 rounded-2xl space-y-4">
                       <div className="flex flex-wrap justify-between items-center gap-2 border-b border-white/5 pb-3">
                         <div>
                           <h3 className="text-xs font-black uppercase text-emerald-400 flex items-center gap-2">
                             <Printer className="w-4 h-4" />
-                            <span>🧾 የተጠናቀቁ እና የተከፈሉ ትዕዛዞች (Completed Orders &amp; PDF Receipts)</span>
+                            <span>🧾 የተጠናቀቁ እና የተከፈሉ ደረሰኞች ከስክሪንሻት ጋር (Paid Receipts &amp; Screenshot Archive)</span>
                           </h3>
                           <p className="text-[10px] text-white/50 font-mono mt-0.5">
-                            Generate and download a PDF customer receipt for any completed or settled order
+                            የተከፈሉ ትዕዛዞች ደረሰኝ እና የተያያዘው የክፍያ ስክሪንሻት ፎቶ በአንድ ላይ እዚህ ይቀመጣሉ
                           </p>
                         </div>
-                        <span className="font-mono text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2.5 py-1 rounded font-black uppercase tabular-nums">
-                          {completedOrders.length} Completed
-                        </span>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => setCashierCompletedReceiptOnly(false)}
+                            className={`font-mono text-[10px] px-2.5 py-1 rounded font-black uppercase cursor-pointer border transition-colors ${
+                              !cashierCompletedReceiptOnly
+                                ? 'bg-emerald-500 text-black border-emerald-400'
+                                : 'bg-white/5 text-white/60 border-white/10 hover:text-white'
+                            }`}
+                          >
+                            ሁሉም ({completedOrders.length})
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setCashierCompletedReceiptOnly(true)}
+                            className={`font-mono text-[10px] px-2.5 py-1 rounded font-black uppercase cursor-pointer border transition-colors ${
+                              cashierCompletedReceiptOnly
+                                ? 'bg-sky-500 text-black border-sky-400'
+                                : 'bg-sky-500/10 text-sky-300 border-sky-500/30 hover:bg-sky-500/20'
+                            }`}
+                          >
+                            🖼️ ፎቶ/ስክሪንሻት ያላቸው ({completedWithReceiptCount})
+                          </button>
+                        </div>
                       </div>
 
-                      {completedOrders.length === 0 ? (
+                      {displayedCompletedOrders.length === 0 ? (
                         <div className="text-center py-8 border border-dashed border-white/10 rounded-xl text-white/35 text-xs">
-                          No completed or paid orders matching filter yet.
+                          {cashierCompletedReceiptOnly
+                            ? 'ስክሪንሻት ፎቶ የተያያዘበት የተከፈለ ደረሰኝ ገና የለም።'
+                            : 'No completed or paid orders matching filter yet.'}
                         </div>
                       ) : (
                         <div className="space-y-3">
-                          {completedOrders.map((ord) => {
+                          {displayedCompletedOrders.map((ord) => {
                             const displayTotal = getOrderGrandTotal(ord);
                             const isDownloaded = receiptDownloadedId === ord.id;
 
@@ -18743,14 +21424,14 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                 key={`completed-${ord.id}`}
                                 className="bg-black/50 border border-white/10 hover:border-emerald-500/40 p-4 rounded-xl flex flex-col md:flex-row justify-between items-start md:items-center gap-4 transition-all"
                               >
-                                <div className="space-y-1.5 flex-1">
+                                <div className="space-y-2 flex-1 min-w-0">
                                   <div className="flex flex-wrap items-center gap-2">
                                     <span className="text-xs font-mono font-black text-white">{ord.id}</span>
                                     <span className="text-xs font-bold text-cyan-400 bg-cyan-950/45 px-2 py-0.5 rounded font-mono uppercase">
                                       🍽️ {ord.location || 'WALK-IN'}
                                     </span>
                                     <span className="text-[9.5px] px-2 py-0.5 rounded font-mono font-black uppercase bg-emerald-950 text-emerald-400 border border-emerald-500/25">
-                                      {ord.status === 'Paid' ? 'PAID' : 'COMPLETED'}
+                                      {ord.status === 'Paid' ? 'PAID ✓' : 'COMPLETED'}
                                     </span>
                                     {ord.cashPaymentCode && (
                                       <span className="text-[9.5px] px-2 py-0.5 rounded font-mono font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">
@@ -18763,7 +21444,8 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                       </span>
                                     )}
                                     <span className="text-[10px] font-mono text-white/50">
-                                      {String(ord.payment || 'cash').toUpperCase()} · {ord.time || ''}
+                                      {String(ord.payment || 'cash').toUpperCase()} · {ord.cashConfirmedAt || ord.time || ''}
+                                      {ord.cashierName ? ` · 💵 ${ord.cashierName}` : ''}
                                     </span>
                                   </div>
 
@@ -18782,6 +21464,69 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                         </span>
                                       </p>
                                     ))}
+                                  </div>
+
+                                  {/* Paired Payment Screenshot / Proof Box inline with Paid Receipt */}
+                                  <div className="pt-1 flex flex-wrap items-center gap-2.5">
+                                    {ord.receiptScreenshot ? (
+                                      <div className="flex items-center gap-2.5 bg-sky-950/35 border border-sky-400/35 rounded-xl p-2 pr-3">
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setCashierReceiptPreviewUrl(ord.receiptScreenshot || null);
+                                            setCashierReceiptPreviewOrder(ord);
+                                          }}
+                                          className="flex items-center gap-2.5 cursor-pointer text-left group"
+                                        >
+                                          <img
+                                            src={ord.receiptScreenshot}
+                                            alt={`Paid receipt proof ${ord.id}`}
+                                            className="w-14 h-14 object-cover rounded-lg border border-sky-400/50 shrink-0 group-hover:scale-105 transition-transform"
+                                            referrerPolicy="no-referrer"
+                                          />
+                                          <div>
+                                            <span className="text-[10px] font-mono font-black text-emerald-300 block">
+                                              ✅ የተረጋገጠ የክፍያ ስክሪንሻት (Paired Proof)
+                                            </span>
+                                            <span className="text-[9.5px] font-mono text-sky-200/80 block">
+                                              {ord.bankRef ? `Ref: ${ord.bankRef} · ` : ''}🔍 አጉልተህ እይ (Inspect)
+                                            </span>
+                                          </div>
+                                        </button>
+                                        <label className="text-[9.5px] font-mono font-bold text-white/70 hover:text-white bg-white/10 hover:bg-white/20 px-2 py-1 rounded cursor-pointer">
+                                          🔄 ቀይር
+                                          <input
+                                            type="file"
+                                            accept="image/*"
+                                            className="hidden"
+                                            onChange={(e) => {
+                                              const f = e.target.files?.[0];
+                                              if (f) handleCashierAttachOrderReceipt(ord.id, f);
+                                              e.target.value = '';
+                                            }}
+                                          />
+                                        </label>
+                                      </div>
+                                    ) : (
+                                      <label className="inline-flex items-center gap-1.5 bg-white/5 hover:bg-sky-500/20 border border-dashed border-white/20 hover:border-sky-400/50 text-white/70 hover:text-sky-200 px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold cursor-pointer transition-colors">
+                                        {cashierUploadingOrderId === ord.id ? (
+                                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                        ) : (
+                                          <Camera className="w-3.5 h-3.5" />
+                                        )}
+                                        <span>📷 የደረሰኝ/ስክሪንሻት ፎቶ አያይዝ (Attach Proof to Receipt)</span>
+                                        <input
+                                          type="file"
+                                          accept="image/*"
+                                          className="hidden"
+                                          onChange={(e) => {
+                                            const f = e.target.files?.[0];
+                                            if (f) handleCashierAttachOrderReceipt(ord.id, f);
+                                            e.target.value = '';
+                                          }}
+                                        />
+                                      </label>
+                                    )}
                                   </div>
                                 </div>
 
@@ -18810,7 +21555,10 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                                     {ord.receiptScreenshot && (
                                       <button
                                         type="button"
-                                        onClick={() => setCashierReceiptPreviewUrl(ord.receiptScreenshot || null)}
+                                        onClick={() => {
+                                          setCashierReceiptPreviewUrl(ord.receiptScreenshot || null);
+                                          setCashierReceiptPreviewOrder(ord);
+                                        }}
                                         className="bg-sky-500/20 hover:bg-sky-500/35 border border-sky-400/35 text-sky-300 text-[10px] font-mono font-bold px-2.5 py-2 rounded-lg cursor-pointer"
                                       >
                                         🖼️ Proof
@@ -19052,24 +21800,42 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                   </div>
                 </div>
 
-                {/* Bank / Telebirr Receipt Screenshot Lightbox Modal */}
+                {/* Bank / Telebirr / Cash Receipt Verification Lightbox Modal */}
                 {cashierReceiptPreviewUrl && (
                   <div
                     className="fixed inset-0 z-[120] bg-black/85 backdrop-blur-sm flex items-center justify-center p-4"
-                    onClick={() => setCashierReceiptPreviewUrl(null)}
+                    onClick={() => {
+                      setCashierReceiptPreviewUrl(null);
+                      setCashierReceiptPreviewOrder(null);
+                    }}
                   >
                     <div
                       className="bg-[#121212] border border-white/15 rounded-2xl max-w-lg w-full p-4 space-y-3"
                       onClick={(e) => e.stopPropagation()}
                     >
                       <div className="flex justify-between items-center border-b border-white/10 pb-2">
-                        <span className="text-xs font-mono font-black text-white uppercase">
-                          🖼️ የባንክ / ቴሌብር ደረሰኝ ማረጋገጫ (Payment Proof)
-                        </span>
+                        <div>
+                          <span className="text-xs font-mono font-black text-white uppercase block">
+                            🖼️ የደረሰኝ ፎቶ ማረጋገጫ (Cashier Receipt Verification)
+                          </span>
+                          {cashierReceiptPreviewOrder && (
+                            <span className="text-[10.5px] font-mono text-cyan-300">
+                              {cashierReceiptPreviewOrder.id} · {cashierReceiptPreviewOrder.location} ·{' '}
+                              {getOrderGrandTotal(cashierReceiptPreviewOrder).toFixed(2)} {currency} (
+                              {cashierReceiptPreviewOrder.payment.toUpperCase()})
+                              {cashierReceiptPreviewOrder.bankRef
+                                ? ` · Ref: ${cashierReceiptPreviewOrder.bankRef}`
+                                : ''}
+                            </span>
+                          )}
+                        </div>
                         <button
                           type="button"
-                          onClick={() => setCashierReceiptPreviewUrl(null)}
-                          className="px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-white text-xs font-bold cursor-pointer"
+                          onClick={() => {
+                            setCashierReceiptPreviewUrl(null);
+                            setCashierReceiptPreviewOrder(null);
+                          }}
+                          className="px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-white text-xs font-bold cursor-pointer shrink-0"
                         >
                           ✕ Close
                         </button>
@@ -19077,14 +21843,110 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                       <img
                         src={cashierReceiptPreviewUrl}
                         alt="Payment Receipt Proof"
-                        className="w-full max-h-[70vh] object-contain rounded-xl bg-black"
+                        className="w-full max-h-[65vh] object-contain rounded-xl bg-black border border-white/10"
+                        referrerPolicy="no-referrer"
                       />
+                      {cashierReceiptPreviewOrder &&
+                        cashierReceiptPreviewOrder.status !== 'Paid' &&
+                        cashierReceiptPreviewOrder.status !== 'Cancelled' && (
+                          <div className="flex flex-wrap gap-2 pt-1 border-t border-white/10">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const targetOrd = cashierReceiptPreviewOrder;
+                                const timeNow = new Date().toLocaleTimeString('en-US', {
+                                  hour12: false,
+                                  hour: '2-digit',
+                                  minute: '2-digit',
+                                });
+                                if (targetOrd.payment === 'cash') {
+                                  handleCashierConfirmCashPayment(targetOrd.id);
+                                } else {
+                                  setOrders((prev) =>
+                                    prev.map((o) =>
+                                      o.id === targetOrd.id
+                                        ? {
+                                            ...o,
+                                            status: 'Paid',
+                                            paymentVerified: true,
+                                            cashConfirmedAt: timeNow,
+                                            updatedAt: Date.now(),
+                                            cashierName: activeCashierName,
+                                          }
+                                        : o
+                                    )
+                                  );
+                                  resolveOrderAssistanceCalls(targetOrd.id, activeCashierName, ['cash_request']);
+                                  showAppToast(
+                                    `✅ ደረሰኙ ተረጋግጧል! ${targetOrd.id} (${targetOrd.location}) እንደተከፈለ ተዘግቷል።`
+                                  );
+                                }
+                                setCashierReceiptPreviewUrl(null);
+                                setCashierReceiptPreviewOrder(null);
+                              }}
+                              className="flex-1 bg-emerald-500 hover:bg-emerald-400 text-black font-black text-xs uppercase py-2.5 px-4 rounded-xl cursor-pointer font-mono"
+                            >
+                              ✅ ደረሰኙን አረጋግጥ እና ሂሳብ ዝጋ (Verify Receipt &amp; Mark Paid)
+                            </button>
+                          </div>
+                        )}
                     </div>
                   </div>
                 )}
               </motion.div>
               );
             })()}
+
+            {/* VIEW_7B: DELIVERY COURIER PORTAL */}
+            {activeRole === 'delivery' && (
+              <motion.div
+                key="delivery_portal"
+                initial={{ opacity: 0, y: 15 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -15 }}
+                transition={{ duration: 0.2 }}
+                className="max-w-6xl mx-auto w-full pb-20 relative"
+              >
+                <DeliveryDriverPortal
+                  currentUser={
+                    currentUser ||
+                    staff.find((s) => (s.role || '').toLowerCase() === 'delivery') || {
+                      name: 'ብሩክ ታደሰ (Delivery)',
+                      role: 'delivery',
+                      pin: '6666',
+                      phone: '0916889900',
+                    }
+                  }
+                  orders={orders}
+                  driverStates={deliveryDriverStates}
+                  currency={currency}
+                  onLogout={handleLogout}
+                  onToggleMyDuty={(st) =>
+                    handleToggleDriverDuty(
+                      currentUser?.name ||
+                        staff.find((s) => (s.role || '').toLowerCase() === 'delivery')?.name ||
+                        'ብሩክ ታደሰ (Delivery)',
+                      st
+                    )
+                  }
+                  onAcceptPickupOrder={handleAcceptPickupOrder}
+                  onMarkArrived={handleMarkDeliveryArrived}
+                  onCompleteVerifiedHandover={handleCompleteVerifiedHandover}
+                  onReturnToLodge={(orderId) =>
+                    handleMarkDriverReturned(
+                      currentUser?.name ||
+                        staff.find((s) => (s.role || '').toLowerCase() === 'delivery')?.name ||
+                        'ብሩክ ታደሰ (Delivery)',
+                      orderId
+                    )
+                  }
+                  wifiWidget={renderWiFiClockInWidget()}
+                  assistanceCalls={assistanceCalls}
+                  onResolveAlert={handleResolveBuzzer}
+                  showToast={showAppToast}
+                />
+              </motion.div>
+            )}
 
             {/* VIEW_8: GUARD PORTAL */}
             {activeRole === 'guard' && (
@@ -19802,6 +22664,145 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
                 </div>
               </motion.div>
             )}
+
+            {/* VIEW_9: DYNAMIC CUSTOM ROLE PORTAL FOR NEWLY CREATED POSITIONS */}
+            {!['entry', 'customer', 'vault', 'shader_demo', 'waiter', 'chef', 'admin', 'manager', 'receptionist', 'cashier', 'delivery', 'guard'].includes(activeRole) && (() => {
+              const portalTitle = activeRole.toUpperCase();
+              const customActiveOrders = orders.filter((o) => o.status !== 'Paid' && o.status !== 'Cancelled');
+              const customActiveBookings = roomBookings.filter((b) => b.status === 'Active');
+              const customRelevantCalls = deduplicateAssistanceCalls(assistanceCalls).filter(
+                (c) =>
+                  c.active &&
+                  (!c.targetRole ||
+                    c.targetRole.toLowerCase() === activeRole.toLowerCase() ||
+                    c.targetRole === 'waiter')
+              );
+
+              return (
+                <motion.div
+                  key={`custom_portal_${activeRole}`}
+                  initial={{ opacity: 0, y: 15 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -15 }}
+                  transition={{ duration: 0.2 }}
+                  className="max-w-6xl mx-auto w-full space-y-6 pb-20 relative z-10 text-white"
+                >
+                  <div className="papyrus-menu-hero border-b-4 p-6 rounded-3xl space-y-4">
+                    <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                      <div className="space-y-1">
+                        <span className="hero-gold-badge text-[10px] font-mono font-black px-2.5 py-0.5 rounded-lg uppercase tracking-widest border">
+                          🪪 CUSTOM WORKSPACE PORTAL · {portalTitle}
+                        </span>
+                        <h2 className="text-xl sm:text-2xl font-black text-white uppercase">
+                          የ{portalTitle} የስራ መቆጣጠሪያ ፖርታል ({portalTitle} Desk)
+                        </h2>
+                        <p className="text-xs text-white/85">
+                          በሲስተም አስኪያጅ የተፈጠረ ንቁ የስራ ክፍል • ተጠቃሚ:{' '}
+                          <strong className="text-[#f4c22b]">{currentUser?.name || portalTitle}</strong> ({currentUser?.role || activeRole})
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleLogout}
+                        className="hero-logout-btn border px-4 py-2 text-xs font-mono font-black uppercase rounded-xl transition-colors flex items-center gap-1.5 cursor-pointer shrink-0 shadow-xs"
+                      >
+                        🚪 Logout Staff (መውጫ)
+                      </button>
+                    </div>
+                  </div>
+
+                  {renderWiFiClockInWidget()}
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div className="bg-[#111111] border border-white/10 p-4 rounded-2xl">
+                      <span className="text-[10px] font-mono text-white/50 uppercase block">🍽️ ንቁ ትዕዛዞች (Active Orders)</span>
+                      <span className="text-2xl font-black text-[#C1FF00] font-mono">{customActiveOrders.length}</span>
+                    </div>
+                    <div className="bg-[#111111] border border-white/10 p-4 rounded-2xl">
+                      <span className="text-[10px] font-mono text-white/50 uppercase block">🛎️ የተያዙ ክፍሎች (Active Rooms)</span>
+                      <span className="text-2xl font-black text-cyan-400 font-mono">{customActiveBookings.length}</span>
+                    </div>
+                    <div className="bg-[#111111] border border-white/10 p-4 rounded-2xl">
+                      <span className="text-[10px] font-mono text-white/50 uppercase block">🔔 ገባሪ ጥሪዎች (Active Alerts)</span>
+                      <span className="text-2xl font-black text-amber-400 font-mono">{customRelevantCalls.length}</span>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    <div className="bg-[#101010] border border-white/10 p-5 rounded-2xl space-y-3">
+                      <h3 className="text-xs font-black uppercase text-[#C1FF00] border-b border-white/10 pb-2">
+                        🔔 የስራ መልዕክቶች እና ጥሪዎች (Alerts &amp; Coordination)
+                      </h3>
+                      {customRelevantCalls.length === 0 ? (
+                        <p className="text-xs text-white/40 py-6 text-center">ምንም ገባሪ ጥሪ የለም / No pending alerts.</p>
+                      ) : (
+                        <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                          {customRelevantCalls.map((call) => (
+                            <div key={call.id} className="bg-black/50 border border-white/10 p-3 rounded-xl flex justify-between items-start gap-2">
+                              <div>
+                                <p className="text-xs font-black text-white">{call.location} · <span className="text-[#00f5ff] font-mono">{call.time}</span></p>
+                                {call.message && <p className="text-[11px] text-white/75 mt-0.5">{call.message}</p>}
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => markAssistanceCallInactive(call.id)}
+                                className="bg-emerald-500/20 hover:bg-emerald-500 text-emerald-300 hover:text-black border border-emerald-500/40 px-2.5 py-1 rounded text-[10px] font-mono font-black cursor-pointer shrink-0"
+                              >
+                                ✔ Ack
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="bg-[#101010] border border-white/10 p-5 rounded-2xl space-y-3">
+                      <h3 className="text-xs font-black uppercase text-amber-400 border-b border-white/10 pb-2">
+                        📩 ለማናጀር / አስኪያጅ ሪፖርት ላክ (Send Shift Note)
+                      </h3>
+                      <form
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          const inputEl = e.currentTarget.querySelector('#custom-portal-note') as HTMLInputElement | null;
+                          const msgText = inputEl?.value.trim() || '';
+                          if (!msgText) return;
+                          const now = new Date();
+                          const newMsg: LeadershipMessage = {
+                            id: 'lm-custom-' + now.getTime(),
+                            target: 'manager',
+                            location: `${portalTitle} Desk`,
+                            senderName: currentUser?.name || portalTitle,
+                            topic: `${portalTitle} Update`,
+                            message: msgText,
+                            time: now.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' }),
+                            date: getLocalTodayIso(),
+                            status: 'Pending',
+                          };
+                          setLeadershipMessages((prev) => [newMsg, ...prev]);
+                          if (inputEl) inputEl.value = '';
+                          showAppToast('✅ መልዕክትዎ ወደ ማናጀር እና አስኪያጅ ተልኳል!');
+                        }}
+                        className="space-y-3"
+                      >
+                        <input
+                          id="custom-portal-note"
+                          type="text"
+                          required
+                          placeholder="የዕለት ሁኔታ ወይም ጥያቄዎን እዚህ ይጻፉ..."
+                          className="w-full bg-black border border-white/15 rounded-xl px-3 py-2.5 text-xs text-white outline-none focus:border-[#C1FF00]"
+                        />
+                        <button
+                          type="submit"
+                          className="w-full bg-[#C1FF00] hover:bg-white text-black font-black text-xs uppercase py-2.5 rounded-xl font-mono cursor-pointer transition-colors"
+                        >
+                          📤 ለማናጀር ላክ (SUBMIT REPORT)
+                        </button>
+                      </form>
+                    </div>
+                  </div>
+                </motion.div>
+              );
+            })()}
           </AnimatePresence>
 
         </section>
@@ -19876,6 +22877,14 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
         vatRate={vatRate}
         banks={banks}
         initialLocation={guestLocation}
+        initialOrderType={customerOrderMode}
+        initialPhone={customerDeliveryPhone}
+        initialAddress={customerDeliveryAddress}
+        onDeliveryProfileChange={(profile) => {
+          if (profile.orderType) setCustomerOrderMode(profile.orderType);
+          if (profile.phone !== undefined) setCustomerDeliveryPhone(profile.phone);
+          if (profile.address !== undefined) setCustomerDeliveryAddress(profile.address);
+        }}
         chapaKey={chapaKey}
         chapaActive={chapaActive}
         chapaMode={chapaMode}
@@ -19896,6 +22905,7 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
         onClose={() => setIsLiveTrackerOpen(false)}
         orders={orders}
         guestLocation={guestLocation}
+        guestPhone={customerDeliveryPhone}
         trackedOrderIds={trackedOrderIds}
         highlightedOrderId={lastPlacedOrderId}
         appLang={appLang}
@@ -19939,7 +22949,79 @@ CREATE POLICY "Allow public update of system settings" ON system_settings FOR UP
         onRefresh={handleRefreshLiveOrders}
         onConfirmOrderReceived={handleCustomerConfirmOrderReceived}
         onRequestCashierPayment={handleGuestRequestCashierPayment}
+        onUploadOrderReceipt={handleGuestUploadOrderReceipt}
       />
+
+      {/* ONLINE ROOM / BED BOOKING & TABLE + FOOD PRE-ORDER MODAL */}
+      <OnlineBookingModal
+        isOpen={onlineBookingModalTab !== null}
+        initialTab={onlineBookingModalTab || 'room'}
+        onClose={() => setOnlineBookingModalTab(null)}
+        roomBookings={roomBookings}
+        onlineRoomBookings={onlineRoomBookings}
+        onlineTableReservations={onlineTableReservations}
+        menuItems={menuItems}
+        categories={categories}
+        banks={banks}
+        serviceChargeRate={serviceChargeRate}
+        vatRate={vatRate}
+        chapaActive={chapaActive}
+        currency={currency}
+        appLang={appLang}
+        onSubmitRoomBooking={handleSubmitOnlineRoomBooking}
+        onSubmitTableReservation={handleSubmitOnlineTableReservation}
+        onCancelRoomBooking={handleCancelOnlineRoomBooking}
+        onCancelTableReservation={(resId) => handleUpdateOnlineTableStatus(resId, 'Cancelled')}
+        showToast={showAppToast}
+      />
+
+      {/* RECEPTIONIST / ADMIN GUEST ID PHOTO LIGHTBOX MODAL */}
+      {receptionPreviewIdPhoto && (
+        <div
+          className="fixed inset-0 z-[9996] bg-black/85 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={() => setReceptionPreviewIdPhoto(null)}
+        >
+          <div
+            className="bg-[#181818] border border-emerald-400/30 rounded-2xl max-w-xl w-full p-5 space-y-4 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-white/10 pb-3">
+              <div>
+                <h4 className="text-sm font-black text-white uppercase">
+                  🪪 የእንግዳ መታወቂያ ፎቶ (Guest ID Verification)
+                </h4>
+                <p className="text-xs text-emerald-300 font-mono mt-0.5">
+                  {receptionPreviewIdPhoto.guestName} · ክፍል (Room) {receptionPreviewIdPhoto.roomNumber}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setReceptionPreviewIdPhoto(null)}
+                className="w-8 h-8 rounded-lg bg-white/10 hover:bg-red-600 text-white font-black flex items-center justify-center cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="bg-black rounded-xl border border-white/10 p-2 flex items-center justify-center max-h-[65vh] overflow-auto">
+              <img
+                src={receptionPreviewIdPhoto.url}
+                alt={receptionPreviewIdPhoto.guestName}
+                className="max-h-[60vh] w-auto object-contain rounded"
+                referrerPolicy="no-referrer"
+              />
+            </div>
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={() => setReceptionPreviewIdPhoto(null)}
+                className="px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-black font-mono text-xs font-black uppercase rounded-lg cursor-pointer"
+              >
+                ዝጋ (Close)
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* PRINTABLE STAFF CERTIFICATE OVERLAY */}
       {printingStaffMember && (

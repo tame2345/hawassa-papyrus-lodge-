@@ -206,6 +206,18 @@ const ROLE_LABELS: Record<string, LangDict> = {
     zh: '👑 总管理员',
     ar: '👑 المسؤول العام',
   },
+  delivery: {
+    am: '🛵 ዴሊቨሪ አድራሽ (Delivery Courier)',
+    en: '🛵 Delivery Courier',
+    or: '🛵 Geessaa Deelivarii (Delivery)',
+    ti: '🛵 ዴሊቨሪ መብጻሒ (Delivery)',
+    sid: '🛵 Daqqiishaanchu (Delivery)',
+    fr: '🛵 Livreur',
+    de: '🛵 Lieferkurier',
+    it: '🛵 Corriere',
+    zh: '🛵 配送员',
+    ar: '🛵 مندوب التوصيل',
+  },
 };
 
 export function translateRoleLabel(lang: string, role: string): string {

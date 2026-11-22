@@ -928,98 +928,112 @@ body:not(.light-mode) :not(.staff-menu-theme) .bg-\[\#0b1319\] {
    BULLETPROOF TEXT VISIBILITY INSIDE CRIMSON CARDS vs WHITE/LIGHT CARDS
    ========================================================================== */
 
-/* 1. White & Light Text stays BRIGHT WHITE everywhere inside Red cards */
-.staff-menu-theme .text-white:not(header *):not(.bg-white):not(.bg-white *):not(.bg-stone-50):not(.bg-stone-50 *):not(.bg-stone-100 *):not(.bg-amber-50 *):not(.bg-emerald-50 *):not(.bg-red-50 *):not(.bg-\[\#f4c22b\] *):not(.bg-yellow-400 *):not(.bg-yellow-300 *):not(.bg-amber-400 *):not(.bg-\[\#C1FF00\] *):not(.bg-\[\#00f5ff\] *),
-.staff-menu-theme .text-white\/95:not(.bg-white *):not(.bg-stone-50 *),
-.staff-menu-theme .text-white\/90:not(.bg-white *):not(.bg-stone-50 *),
-.staff-menu-theme .text-white\/85:not(.bg-white *):not(.bg-stone-50 *),
-.staff-menu-theme .text-white\/80:not(.bg-white *):not(.bg-stone-50 *) {
+/* 1. White & Light Text stays BRIGHT WHITE inside dark/crimson cards (zero-specificity :where() so inputs & white cards never lose dark ink!) */
+.staff-menu-theme .text-white:where(:not(header *):not(input):not(select):not(textarea):not(.bg-white):not(.bg-white *):not([class*="bg-white/9"] *):not(.bg-stone-50):not(.bg-stone-50 *):not(.bg-stone-100):not(.bg-stone-100 *):not(.bg-slate-50):not(.bg-slate-50 *):not(.bg-amber-50):not(.bg-amber-50 *):not(.bg-emerald-50):not(.bg-emerald-50 *):not(.bg-red-50):not(.bg-red-50 *):not(.bg-\[\#FFFDF9\]):not(.bg-\[\#FFFDF9\] *):not(.bg-\[\#FAF6F0\]):not(.bg-\[\#FAF6F0\] *):not(.bg-\[\#f4c22b\] *):not(.bg-yellow-400 *):not(.bg-yellow-300 *):not(.bg-amber-400 *):not(.bg-\[\#C1FF00\] *):not(.bg-\[\#00f5ff\] *):not(#printable-area *):not(#printable-parking-cards *)),
+.staff-menu-theme .text-white\/95:where(:not(input):not(select):not(textarea):not(.bg-white *):not(.bg-stone-50 *):not(.bg-stone-100 *):not(.bg-\[\#FFFDF9\] *):not(.bg-\[\#FAF6F0\] *)),
+.staff-menu-theme .text-white\/90:where(:not(input):not(select):not(textarea):not(.bg-white *):not(.bg-stone-50 *):not(.bg-stone-100 *):not(.bg-\[\#FFFDF9\] *):not(.bg-\[\#FAF6F0\] *)),
+.staff-menu-theme .text-white\/85:where(:not(input):not(select):not(textarea):not(.bg-white *):not(.bg-stone-50 *):not(.bg-stone-100 *):not(.bg-\[\#FFFDF9\] *):not(.bg-\[\#FAF6F0\] *)),
+.staff-menu-theme .text-white\/80:where(:not(input):not(select):not(textarea):not(.bg-white *):not(.bg-stone-50 *):not(.bg-stone-100 *):not(.bg-\[\#FFFDF9\] *):not(.bg-\[\#FAF6F0\] *)) {
   color: #FFFFFF !important;
 }
 
-.staff-menu-theme .text-white\/75:not(.bg-white *),
-.staff-menu-theme .text-white\/70:not(.bg-white *),
-.staff-menu-theme .text-white\/60:not(.bg-white *),
-.staff-menu-theme .text-stone-100:not(.bg-white *),
-.staff-menu-theme .text-stone-200:not(.bg-white *),
-.staff-menu-theme .text-stone-300:not(.bg-white *),
-.staff-menu-theme .text-slate-200:not(.bg-white *),
-.staff-menu-theme .text-slate-300:not(.bg-white *),
-.staff-menu-theme .text-zinc-200:not(.bg-white *),
-.staff-menu-theme .text-zinc-300:not(.bg-white *) {
+.staff-menu-theme .text-white\/75:where(:not(input):not(select):not(textarea):not(.bg-white *):not(.bg-stone-50 *):not(.bg-stone-100 *):not(.bg-amber-50 *):not(.bg-\[\#FFFDF9\] *)),
+.staff-menu-theme .text-white\/70:where(:not(input):not(select):not(textarea):not(.bg-white *):not(.bg-stone-50 *):not(.bg-stone-100 *):not(.bg-amber-50 *):not(.bg-\[\#FFFDF9\] *)),
+.staff-menu-theme .text-white\/60:where(:not(input):not(select):not(textarea):not(.bg-white *):not(.bg-stone-50 *):not(.bg-stone-100 *):not(.bg-amber-50 *):not(.bg-\[\#FFFDF9\] *)),
+.staff-menu-theme .text-stone-100:where(:not(input):not(select):not(textarea):not(.bg-white *):not(.bg-stone-50 *):not(.bg-stone-100 *)),
+.staff-menu-theme .text-stone-200:where(:not(input):not(select):not(textarea):not(.bg-white *):not(.bg-stone-50 *):not(.bg-stone-100 *)),
+.staff-menu-theme .text-stone-300:where(:not(input):not(select):not(textarea):not(.bg-white *):not(.bg-stone-50 *):not(.bg-stone-100 *)),
+.staff-menu-theme .text-slate-200:where(:not(input):not(select):not(textarea):not(.bg-white *):not(.bg-stone-50 *):not(.bg-stone-100 *)),
+.staff-menu-theme .text-slate-300:where(:not(input):not(select):not(textarea):not(.bg-white *):not(.bg-stone-50 *):not(.bg-stone-100 *)),
+.staff-menu-theme .text-zinc-200:where(:not(input):not(select):not(textarea):not(.bg-white *):not(.bg-stone-50 *):not(.bg-stone-100 *)),
+.staff-menu-theme .text-zinc-300:where(:not(input):not(select):not(textarea):not(.bg-white *):not(.bg-stone-50 *):not(.bg-stone-100 *)) {
   color: #F5F5F4 !important;
 }
 
-/* Muted white/gray text on Crimson Red cards -> Bright Warm Cream (7:1+ contrast, never dim!) */
-.staff-menu-theme .text-white\/50:not(.bg-white *):not(.bg-stone-50 *),
-.staff-menu-theme .text-white\/45:not(.bg-white *):not(.bg-stone-50 *),
-.staff-menu-theme .text-white\/40:not(.bg-white *):not(.bg-stone-50 *),
-.staff-menu-theme .text-white\/30:not(.bg-white *):not(.bg-stone-50 *),
-.staff-menu-theme .text-white\/20:not(.bg-white *):not(.bg-stone-50 *),
-.staff-menu-theme .text-stone-400:not(header *):not(.bg-white):not(.bg-white *):not(.bg-stone-50 *):not(.bg-stone-100 *):not(.bg-amber-50 *):not(.bg-emerald-50 *):not(.bg-red-50 *):not(#printable-area *):not(#printable-parking-cards *),
-.staff-menu-theme .text-stone-500:not(header *):not(.bg-white):not(.bg-white *):not(.bg-stone-50 *):not(.bg-stone-100 *):not(.bg-amber-50 *):not(.bg-emerald-50 *):not(.bg-red-50 *):not(#printable-area *):not(#printable-parking-cards *),
-.staff-menu-theme .text-stone-600:not(header *):not(.bg-white):not(.bg-white *):not(.bg-stone-50 *):not(.bg-stone-100 *):not(.bg-amber-50 *):not(.bg-emerald-50 *):not(.bg-red-50 *):not(#printable-area *):not(#printable-parking-cards *),
-.staff-menu-theme .text-slate-400:not(.bg-white *),
-.staff-menu-theme .text-zinc-400:not(.bg-white *),
-.staff-menu-theme .text-zinc-500:not(.bg-white *) {
+/* Muted white/gray text on Crimson Red cards -> Bright Warm Cream (7:1+ contrast, never overrides white cards or inputs!) */
+.staff-menu-theme .text-white\/50:where(:not(input):not(select):not(textarea):not(.bg-white *):not(.bg-stone-50 *):not(.bg-stone-100 *):not(.bg-amber-50 *):not(.bg-\[\#FFFDF9\] *)),
+.staff-menu-theme .text-white\/45:where(:not(input):not(select):not(textarea):not(.bg-white *):not(.bg-stone-50 *):not(.bg-stone-100 *):not(.bg-amber-50 *):not(.bg-\[\#FFFDF9\] *)),
+.staff-menu-theme .text-white\/40:where(:not(input):not(select):not(textarea):not(.bg-white *):not(.bg-stone-50 *):not(.bg-stone-100 *):not(.bg-amber-50 *):not(.bg-\[\#FFFDF9\] *)),
+.staff-menu-theme .text-white\/30:where(:not(input):not(select):not(textarea):not(.bg-white *):not(.bg-stone-50 *):not(.bg-stone-100 *):not(.bg-amber-50 *):not(.bg-\[\#FFFDF9\] *)),
+.staff-menu-theme .text-white\/20:where(:not(input):not(select):not(textarea):not(.bg-white *):not(.bg-stone-50 *):not(.bg-stone-100 *):not(.bg-amber-50 *):not(.bg-\[\#FFFDF9\] *)),
+.staff-menu-theme .text-stone-400:where(:not(header *):not(input):not(select):not(textarea):not(.bg-white):not(.bg-white *):not(.bg-stone-50 *):not(.bg-stone-100 *):not(.bg-amber-50 *):not(.bg-emerald-50 *):not(.bg-red-50 *):not(.bg-\[\#FFFDF9\] *):not(#printable-area *):not(#printable-parking-cards *)),
+.staff-menu-theme .text-stone-500:where(:not(header *):not(input):not(select):not(textarea):not(.bg-white):not(.bg-white *):not(.bg-stone-50 *):not(.bg-stone-100 *):not(.bg-amber-50 *):not(.bg-emerald-50 *):not(.bg-red-50 *):not(.bg-\[\#FFFDF9\] *):not(#printable-area *):not(#printable-parking-cards *)),
+.staff-menu-theme .text-stone-600:where(:not(header *):not(input):not(select):not(textarea):not(.bg-white):not(.bg-white *):not(.bg-stone-50 *):not(.bg-stone-100 *):not(.bg-amber-50 *):not(.bg-emerald-50 *):not(.bg-red-50 *):not(.bg-\[\#FFFDF9\] *):not(#printable-area *):not(#printable-parking-cards *)),
+.staff-menu-theme .text-slate-400:where(:not(input):not(select):not(textarea):not(.bg-white *):not(.bg-stone-50 *):not(.bg-stone-100 *)),
+.staff-menu-theme .text-zinc-400:where(:not(input):not(select):not(textarea):not(.bg-white *):not(.bg-stone-50 *):not(.bg-stone-100 *)),
+.staff-menu-theme .text-zinc-500:where(:not(input):not(select):not(textarea):not(.bg-white *):not(.bg-stone-50 *):not(.bg-stone-100 *)) {
   color: #FDE68A !important;
 }
 
 /* Semantic Accent Text on Red cards -> Bright Gold / Crisp White / Light Mint / Ice Sky */
-.staff-menu-theme .text-\[\#C1FF00\]:not(.bg-white *):not(.bg-\[\#f4c22b\] *):not(.bg-yellow-400 *),
-.staff-menu-theme .text-yellow-400:not(.bg-white *):not(.bg-amber-50 *):not(.bg-yellow-400 *),
-.staff-menu-theme .text-yellow-300:not(.bg-white *):not(.bg-amber-50 *),
-.staff-menu-theme .text-yellow-200:not(.bg-white *):not(.bg-amber-50 *),
-.staff-menu-theme .text-amber-300:not(.bg-white *):not(.bg-amber-50 *),
-.staff-menu-theme .text-amber-400:not(.bg-white *):not(.bg-amber-50 *),
-.staff-menu-theme .text-orange-400:not(.bg-white *):not(.bg-amber-50 *) {
+.staff-menu-theme .text-\[\#C1FF00\]:where(:not(input):not(select):not(textarea):not(.bg-white *):not(.bg-\[\#f4c22b\] *):not(.bg-yellow-400 *):not(.bg-stone-50 *)),
+.staff-menu-theme .text-yellow-400:where(:not(input):not(select):not(textarea):not(.bg-white *):not(.bg-amber-50 *):not(.bg-yellow-400 *):not(.bg-stone-50 *)),
+.staff-menu-theme .text-yellow-300:where(:not(input):not(select):not(textarea):not(.bg-white *):not(.bg-amber-50 *):not(.bg-stone-50 *)),
+.staff-menu-theme .text-yellow-200:where(:not(input):not(select):not(textarea):not(.bg-white *):not(.bg-amber-50 *):not(.bg-stone-50 *)),
+.staff-menu-theme .text-amber-300:where(:not(input):not(select):not(textarea):not(.bg-white *):not(.bg-amber-50 *):not(.bg-stone-50 *)),
+.staff-menu-theme .text-amber-400:where(:not(input):not(select):not(textarea):not(.bg-white *):not(.bg-amber-50 *):not(.bg-stone-50 *)),
+.staff-menu-theme .text-orange-400:where(:not(input):not(select):not(textarea):not(.bg-white *):not(.bg-amber-50 *):not(.bg-stone-50 *)) {
   color: #F4C22B !important;
 }
 
 /* Red text inside Red cards would vanish -> Turn into Crisp Warm Gold-Yellow (#FEF08A) */
-.staff-menu-theme .text-red-200:not(.bg-white *):not(.bg-red-50 *):not(.bg-amber-50 *),
-.staff-menu-theme .text-red-300:not(.bg-white *):not(.bg-red-50 *):not(.bg-amber-50 *),
-.staff-menu-theme .text-red-400:not(.bg-white *):not(.bg-red-50 *):not(.bg-amber-50 *),
-.staff-menu-theme .text-red-500:not(.bg-white *):not(.bg-red-50 *):not(.bg-amber-50 *),
-.staff-menu-theme .text-rose-400:not(.bg-white *):not(.bg-red-50 *):not(.bg-amber-50 *),
-.staff-menu-theme .text-\[\#ff007f\]:not(.bg-white *),
-.staff-menu-theme .text-\[\#FF5D5D\]:not(.bg-white *) {
+.staff-menu-theme .text-red-200:where(:not(input):not(select):not(textarea):not(.bg-white *):not(.bg-red-50 *):not(.bg-amber-50 *)),
+.staff-menu-theme .text-red-300:where(:not(input):not(select):not(textarea):not(.bg-white *):not(.bg-red-50 *):not(.bg-amber-50 *)),
+.staff-menu-theme .text-red-400:where(:not(input):not(select):not(textarea):not(.bg-white *):not(.bg-red-50 *):not(.bg-amber-50 *)),
+.staff-menu-theme .text-red-500:where(:not(input):not(select):not(textarea):not(.bg-white *):not(.bg-red-50 *):not(.bg-amber-50 *)),
+.staff-menu-theme .text-rose-400:where(:not(input):not(select):not(textarea):not(.bg-white *):not(.bg-red-50 *):not(.bg-amber-50 *)),
+.staff-menu-theme .text-\[\#ff007f\]:where(:not(input):not(select):not(textarea):not(.bg-white *)),
+.staff-menu-theme .text-\[\#FF5D5D\]:where(:not(input):not(select):not(textarea):not(.bg-white *)) {
   color: #FEF08A !important;
 }
 
-.staff-menu-theme .text-\[\#00f5ff\]:not(.bg-white *),
-.staff-menu-theme .text-\[\#00F5FF\]:not(.bg-white *),
-.staff-menu-theme .text-cyan-300:not(.bg-white *),
-.staff-menu-theme .text-cyan-400:not(.bg-white *),
-.staff-menu-theme .text-sky-300:not(.bg-white *),
-.staff-menu-theme .text-sky-400:not(.bg-white *),
-.staff-menu-theme .text-blue-400:not(.bg-white *) {
+.staff-menu-theme .text-\[\#00f5ff\]:where(:not(input):not(select):not(textarea):not(.bg-white *):not(.bg-stone-50 *)),
+.staff-menu-theme .text-\[\#00F5FF\]:where(:not(input):not(select):not(textarea):not(.bg-white *):not(.bg-stone-50 *)),
+.staff-menu-theme .text-cyan-300:where(:not(input):not(select):not(textarea):not(.bg-white *):not(.bg-stone-50 *)),
+.staff-menu-theme .text-cyan-400:where(:not(input):not(select):not(textarea):not(.bg-white *):not(.bg-stone-50 *)),
+.staff-menu-theme .text-sky-300:where(:not(input):not(select):not(textarea):not(.bg-white *):not(.bg-stone-50 *)),
+.staff-menu-theme .text-sky-400:where(:not(input):not(select):not(textarea):not(.bg-white *):not(.bg-stone-50 *)),
+.staff-menu-theme .text-blue-400:where(:not(input):not(select):not(textarea):not(.bg-white *):not(.bg-stone-50 *)) {
   color: #E0F2FE !important;
 }
 
-.staff-menu-theme .text-emerald-200:not(.bg-white *):not(.bg-emerald-50 *),
-.staff-menu-theme .text-emerald-300:not(.bg-white *):not(.bg-emerald-50 *),
-.staff-menu-theme .text-emerald-400:not(.bg-white *):not(.bg-emerald-50 *) {
+.staff-menu-theme .text-emerald-200:where(:not(input):not(select):not(textarea):not(.bg-white *):not(.bg-emerald-50 *)),
+.staff-menu-theme .text-emerald-300:where(:not(input):not(select):not(textarea):not(.bg-white *):not(.bg-emerald-50 *)),
+.staff-menu-theme .text-emerald-400:where(:not(input):not(select):not(textarea):not(.bg-white *):not(.bg-emerald-50 *)) {
   color: #A7F3D0 !important;
 }
 
-.staff-menu-theme .text-purple-300:not(.bg-white *),
-.staff-menu-theme .text-purple-400:not(.bg-white *),
-.staff-menu-theme .text-pink-300:not(.bg-white *),
-.staff-menu-theme .text-pink-400:not(.bg-white *) {
+.staff-menu-theme .text-purple-300:where(:not(input):not(select):not(textarea):not(.bg-white *)),
+.staff-menu-theme .text-purple-400:where(:not(input):not(select):not(textarea):not(.bg-white *)),
+.staff-menu-theme .text-pink-300:where(:not(input):not(select):not(textarea):not(.bg-white *)),
+.staff-menu-theme .text-pink-400:where(:not(input):not(select):not(textarea):not(.bg-white *)) {
   color: #FCE7F3 !important;
 }
 
-/* 2. Dark ink inside explicitly White / Light / Print surfaces stays Dark Charcoal (#1C1917),
-   while colored/dark buttons nested inside white wrappers keep crisp White ink */
-.staff-menu-theme .bg-white .text-white:not([class*="bg-red-"]):not([class*="bg-[#"]):not([class*="bg-emerald-"]):not([class*="bg-blue-"]):not([class*="bg-sky-"]):not([class*="bg-amber-"]):not([class*="bg-orange-"]):not([class*="bg-stone-9"]):not([class*="bg-black"]):not(.bg-red-600 *):not(.bg-emerald-600 *):not(.bg-\[\#b21f1f\] *),
-.staff-menu-theme .bg-stone-50 .text-white:not([class*="bg-red-"]):not([class*="bg-[#"]):not([class*="bg-emerald-"]):not([class*="bg-blue-"]):not(.bg-red-600 *):not(.bg-\[\#b21f1f\] *),
-.staff-menu-theme .bg-amber-50 .text-white:not([class*="bg-red-"]):not([class*="bg-[#"]):not([class*="bg-emerald-"]):not(.bg-red-600 *):not(.bg-\[\#b21f1f\] *),
-.staff-menu-theme .bg-emerald-50 .text-white:not([class*="bg-emerald-"]):not([class*="bg-red-"]):not([class*="bg-[#"]) {
+/* 2. GLOBAL WHITE & LIGHT SURFACE INK ENFORCEMENT (Zero white/pale text on white surfaces anywhere!) */
+:where(.bg-white, .bg-stone-50, .bg-stone-100, .bg-slate-50, .bg-amber-50, .bg-emerald-50, .bg-red-50, .bg-\[\#FFFDF9\], .bg-\[\#FAF6F0\], .bg-\[\#F5F5F4\], #printable-area, #printable-parking-cards) {
+  color: #1C1917;
+}
+
+:where(.bg-white, .bg-stone-50, .bg-stone-100, .bg-slate-50, .bg-amber-50, .bg-emerald-50, .bg-red-50, .bg-\[\#FFFDF9\], .bg-\[\#FAF6F0\], .bg-\[\#F5F5F4\], #printable-area, #printable-parking-cards)
+  :where(.text-white, .text-white\/95, .text-white\/90, .text-white\/85, .text-white\/80, .text-white\/75, .text-white\/70, .text-stone-100, .text-stone-200, .text-slate-100, .text-slate-200, .text-yellow-100, .text-yellow-200, .text-\[\#C1FF00\], .text-\[\#00f5ff\], .text-\[\#00F5FF\])
+  :where(:not([class*="bg-red-"]):not([class*="bg-emerald-"]):not([class*="bg-blue-"]):not([class*="bg-sky-"]):not([class*="bg-amber-6"]):not([class*="bg-amber-7"]):not([class*="bg-orange-"]):not([class*="bg-stone-8"]):not([class*="bg-stone-9"]):not([class*="bg-black"]):not([class*="bg-\[#b21f1f\]"]):not([class*="bg-\[#8c1414\]"]):not([class*="bg-\[#991B1B\]"]):not([class*="bg-\[#FF5A1F\]"]):not([class*="bg-\[#EA580C\]"]):not([class*="bg-\[#7A1212\]"])) {
   color: #1C1917 !important;
 }
 
-.staff-menu-theme .bg-white:not(.hero-logout-btn):not([class*="bg-[#b21f1f]"]),
+:where(.bg-white, .bg-stone-50, .bg-stone-100, .bg-slate-50, .bg-amber-50, .bg-emerald-50, .bg-red-50, .bg-\[\#FFFDF9\], .bg-\[\#FAF6F0\], .bg-\[\#F5F5F4\], #printable-area, #printable-parking-cards)
+  :where(.text-white\/60, .text-white\/50, .text-white\/45, .text-white\/40, .text-white\/30, .text-stone-300) {
+  color: #57534E !important;
+}
+
+.staff-menu-theme .bg-white .text-white:where(:not([class*="bg-red-"]):not([class*="bg-[#"]):not([class*="bg-emerald-"]):not([class*="bg-blue-"]):not([class*="bg-sky-"]):not([class*="bg-amber-"]):not([class*="bg-orange-"]):not([class*="bg-stone-9"]):not([class*="bg-black"]):not(.bg-red-600 *):not(.bg-emerald-600 *):not(.bg-\[\#b21f1f\] *):not(.bg-\[\#991B1B\] *)),
+.staff-menu-theme .bg-stone-50 .text-white:where(:not([class*="bg-red-"]):not([class*="bg-[#"]):not([class*="bg-emerald-"]):not([class*="bg-blue-"]):not(.bg-red-600 *):not(.bg-\[\#b21f1f\] *)),
+.staff-menu-theme .bg-amber-50 .text-white:where(:not([class*="bg-red-"]):not([class*="bg-[#"]):not([class*="bg-emerald-"]):not(.bg-red-600 *):not(.bg-\[\#b21f1f\] *)),
+.staff-menu-theme .bg-emerald-50 .text-white:where(:not([class*="bg-emerald-"]):not([class*="bg-red-"]):not([class*="bg-[#"])) {
+  color: #1C1917 !important;
+}
+
+.staff-menu-theme .bg-white:where(:not(.hero-logout-btn):not([class*="bg-[#b21f1f]"])),
 .staff-menu-theme .bg-stone-50,
 .staff-menu-theme .bg-stone-100,
 .staff-menu-theme .bg-amber-50,
@@ -1031,26 +1045,36 @@ body:not(.light-mode) :not(.staff-menu-theme) .bg-\[\#0b1319\] {
 }
 
 /* Warm gold borders replacing faint white/5..30 & black hairlines on crimson surfaces */
-.staff-menu-theme .border-white\/5:not(.papyrus-menu-hero *),
-.staff-menu-theme .border-white\/10:not(.papyrus-menu-hero *),
-.staff-menu-theme .border-white\/15:not(.papyrus-menu-hero *),
-.staff-menu-theme .border-white\/20:not(.papyrus-menu-hero *),
-.staff-menu-theme .border-white\/30:not(.papyrus-menu-hero *),
-.staff-menu-theme .border-black:not(#printable-area):not(#printable-area *):not(#printable-parking-cards):not(#printable-parking-cards *) {
+.staff-menu-theme .border-white\/5:where(:not(.papyrus-menu-hero *)),
+.staff-menu-theme .border-white\/10:where(:not(.papyrus-menu-hero *)),
+.staff-menu-theme .border-white\/15:where(:not(.papyrus-menu-hero *)),
+.staff-menu-theme .border-white\/20:where(:not(.papyrus-menu-hero *)),
+.staff-menu-theme .border-white\/30:where(:not(.papyrus-menu-hero *)),
+.staff-menu-theme .border-black:where(:not(#printable-area):not(#printable-area *):not(#printable-parking-cards):not(#printable-parking-cards *)) {
   border-color: rgba(244, 194, 43, 0.38) !important;
 }
 
-/* Crisp white inputs, selects & textareas inside staff portals for crystal-clear typing */
+/* Crisp white inputs, selects & textareas inside staff portals for crystal-clear typing (High contrast guaranteed!) */
 .staff-menu-theme input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
 .staff-menu-theme select:not(header select),
-.staff-menu-theme textarea {
+.staff-menu-theme textarea,
+.staff-menu-theme input:not([type="checkbox"]):not([type="radio"]):not([type="file"]).text-white,
+.staff-menu-theme select:not(header select).text-white,
+.staff-menu-theme textarea.text-white,
+.staff-menu-theme input:not([type="checkbox"]):not([type="radio"]):not([type="file"]).text-\[\#C1FF00\],
+.staff-menu-theme input:not([type="checkbox"]):not([type="radio"]):not([type="file"]).text-\[\#00f5ff\],
+:where(.bg-white, .bg-stone-50, .bg-stone-100, .bg-\[\#FFFDF9\], .bg-\[\#FAF6F0\], .bg-\[\#F5F5F4\]) input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+:where(.bg-white, .bg-stone-50, .bg-stone-100, .bg-\[\#FFFDF9\], .bg-\[\#FAF6F0\], .bg-\[\#F5F5F4\]) select,
+:where(.bg-white, .bg-stone-50, .bg-stone-100, .bg-\[\#FFFDF9\], .bg-\[\#FAF6F0\], .bg-\[\#F5F5F4\]) textarea {
   background-color: #FFFFFF !important;
   color: #1C1917 !important;
+  caret-color: #B21F1F;
   border-color: #F4C22B !important;
   color-scheme: light;
 }
 
-.staff-menu-theme select option {
+.staff-menu-theme select option,
+:where(.bg-white, .bg-stone-50, .bg-stone-100, .bg-\[\#FFFDF9\], .bg-\[\#FAF6F0\], .bg-\[\#F5F5F4\]) select option {
   background-color: #FFFFFF !important;
   color: #1C1917 !important;
 }
@@ -1062,8 +1086,11 @@ body:not(.light-mode) :not(.staff-menu-theme) .bg-\[\#0b1319\] {
 }
 
 .staff-menu-theme input::placeholder,
-.staff-menu-theme textarea::placeholder {
+.staff-menu-theme textarea::placeholder,
+:where(.bg-white, .bg-stone-50, .bg-stone-100, .bg-\[\#FFFDF9\], .bg-\[\#FAF6F0\], .bg-\[\#F5F5F4\]) input::placeholder,
+:where(.bg-white, .bg-stone-50, .bg-stone-100, .bg-\[\#FFFDF9\], .bg-\[\#FAF6F0\], .bg-\[\#F5F5F4\]) textarea::placeholder {
   color: #78716C !important;
+  opacity: 1 !important;
 }
 
 /* Preserve vibrant Crimson Red & Gold Hero Banners inside Staff Portals */

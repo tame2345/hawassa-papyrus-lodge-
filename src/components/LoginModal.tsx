@@ -11,7 +11,7 @@ import { useLanguage } from '../context/LanguageContext';
 interface LoginModalProps {
   isOpen: boolean;
   onClose: () => void;
-  role: string | 'waiter' | 'chef' | 'admin' | 'manager' | 'receptionist' | 'cashier' | '';
+  role: string | 'waiter' | 'chef' | 'admin' | 'manager' | 'receptionist' | 'cashier' | 'delivery' | '';
   staffList: StaffMember[];
   onSuccess: (staff: StaffMember) => void;
   onResetCredentials?: (name: string, pin: string, password?: string, username?: string) => void;
@@ -57,7 +57,13 @@ export default function LoginModal({ isOpen, onClose, role, staffList, onSuccess
       setIsResetMode(false);
       setRecoveryStatus(null);
       if (staffList.length > 0) {
-        const eligible = role ? staffList.filter(s => s.role === role || s.accessPrivilege === role) : staffList;
+        const targetRole = String(role || '').trim().toLowerCase();
+        const eligible = targetRole
+          ? staffList.filter(s =>
+              String(s.role || '').trim().toLowerCase() === targetRole ||
+              String(s.accessPrivilege || '').trim().toLowerCase() === targetRole
+            )
+          : staffList;
         setRecoveryStaff(eligible[0]?.name || staffList[0].name);
       }
     }
@@ -93,7 +99,13 @@ export default function LoginModal({ isOpen, onClose, role, staffList, onSuccess
       }));
       return;
     }
-    const matched = staffList.find(s => s.pin === pinBuffer && (s.role === role || s.accessPrivilege === role));
+    const targetRole = String(role || '').trim().toLowerCase();
+    const matched = staffList.find(s =>
+      String(s.pin || '').trim() === pinBuffer.trim() &&
+      (!targetRole ||
+        String(s.role || '').trim().toLowerCase() === targetRole ||
+        String(s.accessPrivilege || '').trim().toLowerCase() === targetRole)
+    );
     if (matched) {
       onSuccess(matched);
       onClose();
@@ -131,10 +143,16 @@ export default function LoginModal({ isOpen, onClose, role, staffList, onSuccess
       }));
       return;
     }
+    const targetRole = String(role || '').trim().toLowerCase();
+    const normInputUser = usernameInput.trim().toLowerCase();
+    const normInputPass = passwordInput.trim();
     const matched = staffList.find(s =>
-      s.username?.toLowerCase() === usernameInput.toLowerCase().trim() &&
-      s.password === passwordInput &&
-      (s.role === role || s.accessPrivilege === role)
+      (String(s.username || '').trim().toLowerCase() === normInputUser ||
+        String(s.name || '').trim().toLowerCase() === normInputUser) &&
+      String(s.password || s.pin || '').trim() === normInputPass &&
+      (!targetRole ||
+        String(s.role || '').trim().toLowerCase() === targetRole ||
+        String(s.accessPrivilege || '').trim().toLowerCase() === targetRole)
     );
     if (matched) {
       onSuccess(matched);
@@ -571,9 +589,16 @@ export default function LoginModal({ isOpen, onClose, role, staffList, onSuccess
                     }}
                     className="w-full bg-white border-2 border-[#F4C22B] text-stone-900 text-xs font-bold p-2.5 rounded-xl outline-none"
                   >
-                    {staffList.filter(s => !role || s.role === role || s.accessPrivilege === role).map((s, idx) => (
-                      <option key={idx} value={s.name}>{s.name} ({tRole(s.role)})</option>
-                    ))}
+                    {staffList
+                      .filter(s => {
+                        const tr = String(role || '').trim().toLowerCase();
+                        return !tr ||
+                          String(s.role || '').trim().toLowerCase() === tr ||
+                          String(s.accessPrivilege || '').trim().toLowerCase() === tr;
+                      })
+                      .map((s, idx) => (
+                        <option key={idx} value={s.name}>{s.name} ({tRole(s.role)})</option>
+                      ))}
                   </select>
                 </div>
 

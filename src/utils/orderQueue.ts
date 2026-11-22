@@ -240,6 +240,22 @@ function resolveOrderCookingStage(order: Order): 'Pending' | 'Preparing' | 'Comp
   return 'Pending';
 }
 
+const DELIVERY_RANK: Record<'Waiting Driver' | 'Assigned' | 'Picked Up' | 'Arrived' | 'Delivered', number> = {
+  'Waiting Driver': 0,
+  Assigned: 1,
+  'Picked Up': 2,
+  Arrived: 3,
+  Delivered: 4,
+};
+
+function resolveOrderDeliveryStage(order: Order): 'Waiting Driver' | 'Assigned' | 'Picked Up' | 'Arrived' | 'Delivered' {
+  if (order.deliveryStatus === 'Delivered' || order.deliveryDeliveredAt) return 'Delivered';
+  if (order.deliveryStatus === 'Arrived' || order.deliveryArrivedAt) return 'Arrived';
+  if (order.deliveryStatus === 'Picked Up' || order.deliveryPickedUpAt) return 'Picked Up';
+  if (order.deliveryStatus === 'Assigned' || order.deliveryDriverName) return 'Assigned';
+  return 'Waiting Driver';
+}
+
 export function mergeSingleOrder(localOrd: Order, remoteOrd: Order): Order {
   const localUpdated = typeof localOrd.updatedAt === 'number' ? localOrd.updatedAt : getOrderSortTimestamp(localOrd);
   const remoteUpdated = typeof remoteOrd.updatedAt === 'number' ? remoteOrd.updatedAt : getOrderSortTimestamp(remoteOrd);
@@ -260,7 +276,12 @@ export function mergeSingleOrder(localOrd: Order, remoteOrd: Order): Order {
   const mergedCook =
     COOKING_RANK[remoteCook] >= COOKING_RANK[localCook] ? remoteCook : localCook;
 
-  const servedByWaiter = Boolean(localOrd.servedByWaiter || remoteOrd.servedByWaiter);
+  const localDelivery = resolveOrderDeliveryStage(localOrd);
+  const remoteDelivery = resolveOrderDeliveryStage(remoteOrd);
+  const mergedDeliveryStatus =
+    DELIVERY_RANK[remoteDelivery] >= DELIVERY_RANK[localDelivery] ? remoteDelivery : localDelivery;
+
+  const servedByWaiter = Boolean(localOrd.servedByWaiter || remoteOrd.servedByWaiter || mergedDeliveryStatus === 'Delivered');
   const checkedByWaiter = Boolean(localOrd.checkedByWaiter || remoteOrd.checkedByWaiter || servedByWaiter);
   const customerConfirmedReceipt = Boolean(localOrd.customerConfirmedReceipt || remoteOrd.customerConfirmedReceipt);
 
@@ -298,7 +319,20 @@ export function mergeSingleOrder(localOrd: Order, remoteOrd: Order): Order {
     cashRequestedAt: base.cashRequestedAt || secondary.cashRequestedAt,
     cashConfirmedAt: base.cashConfirmedAt || secondary.cashConfirmedAt,
     paymentVerified: Boolean(localOrd.paymentVerified || remoteOrd.paymentVerified || isPaid),
-    waiter: base.waiter || secondary.waiter,
+    deliveryStatus: (base.orderType === 'delivery' || secondary.orderType === 'delivery') ? mergedDeliveryStatus : base.deliveryStatus,
+    deliveryDriverName: base.deliveryDriverName || secondary.deliveryDriverName,
+    deliveryDriverPhone: base.deliveryDriverPhone || secondary.deliveryDriverPhone,
+    deliveryVehicleInfo: base.deliveryVehicleInfo || secondary.deliveryVehicleInfo,
+    deliveryPinCode: base.deliveryPinCode || secondary.deliveryPinCode,
+    deliveryAssignedAt: base.deliveryAssignedAt || secondary.deliveryAssignedAt,
+    deliveryPickedUpAt: base.deliveryPickedUpAt || secondary.deliveryPickedUpAt,
+    deliveryArrivedAt: base.deliveryArrivedAt || secondary.deliveryArrivedAt,
+    deliveryDeliveredAt: base.deliveryDeliveredAt || secondary.deliveryDeliveredAt,
+    deliveryReturnedAt: base.deliveryReturnedAt || secondary.deliveryReturnedAt,
+    deliveryProofPhoto: base.deliveryProofPhoto || secondary.deliveryProofPhoto,
+    deliveryVerifiedByPin: Boolean(localOrd.deliveryVerifiedByPin || remoteOrd.deliveryVerifiedByPin),
+    deliveryCashCollected: Boolean(localOrd.deliveryCashCollected || remoteOrd.deliveryCashCollected),
+    waiter: (base.orderType === 'delivery' || secondary.orderType === 'delivery') ? undefined : (base.waiter || secondary.waiter),
     chefName: base.chefName || secondary.chefName,
     cashierName: base.cashierName || secondary.cashierName,
     readyAt: base.readyAt || secondary.readyAt,
@@ -577,6 +611,8 @@ export function subscribeSettingSync(
       if (parsed.assistanceCalls) onMessage('assistanceCalls', parsed.assistanceCalls);
       if (parsed.shift_assignments) onMessage('shift_assignments', parsed.shift_assignments);
       if (parsed.table_assignments) onMessage('table_assignments', parsed.table_assignments);
+      if (parsed.online_room_bookings) onMessage('online_room_bookings', parsed.online_room_bookings);
+      if (parsed.online_table_reservations) onMessage('online_table_reservations', parsed.online_table_reservations);
     } catch {
       // ignore malformed storage cache
     }

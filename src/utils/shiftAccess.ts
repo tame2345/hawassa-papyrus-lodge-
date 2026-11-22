@@ -197,6 +197,12 @@ export function canStaffAccessOrder(
   }
 
   if (role === 'waiter') {
+    if (order.orderType === 'delivery') {
+      return {
+        allowed: false,
+        reason: 'Delivery orders are handled exclusively by Kitchen and Delivery Couriers',
+      };
+    }
     const hasExplicitWaiter = !isGenericWaiterLabel(order.waiter);
     const explicitWaiterClean = (order.waiter || '').trim().toLowerCase();
 

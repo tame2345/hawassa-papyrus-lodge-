@@ -282,7 +282,7 @@ export default function ShiftManagementModule({
   }, [roomBookings, shiftAssignments, orders]);
 
   const activeOrders = useMemo(
-    () => orders.filter((o) => o.status !== 'Paid' && (!o.servedByWaiter || o.cookingStatus !== 'Completed')),
+    () => orders.filter((o) => o.orderType !== 'delivery' && o.status !== 'Paid' && o.status !== 'Cancelled' && (!o.servedByWaiter || o.cookingStatus !== 'Completed')),
     [orders]
   );
 

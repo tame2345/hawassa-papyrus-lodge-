@@ -57,6 +57,7 @@ export default function AdminRevenueReports({
   const [activeTimeframe, setActiveTimeframe] = useState<'all' | 'q1' | 'q2' | 'this-month'>('all');
   const [selectedMetric, setSelectedMetric] = useState<'all' | 'revenue' | 'expenses' | 'net'>('all');
   const [hoveredPoint, setHoveredPoint] = useState<number | null>(null);
+  const [adminReceiptPreview, setAdminReceiptPreview] = useState<{ url: string; order: Order } | null>(null);
 
   const todayIso = getLocalTodayIso();
   const currentMonthKey = todayIso.substring(0, 7);
@@ -1654,74 +1655,86 @@ export default function AdminRevenueReports({
                                       {ord.tip > 0 && <span className="text-[8px] text-emerald-400 block">+ {ord.tip} {tText({ am: 'ጉርሻ', or: 'Kennoo', ti: 'ቲፕ', sid: 'Hirphino', en: 'Tip', fr: 'Pourboire', de: 'Trinkgeld', it: 'Mancia', zh: '小费', ar: 'بقشيش' })}</span>}
                                     </td>
                                     <td className="p-3 text-center">
-                                      {ord.payment === 'cash' ? (
-                                        <span className="text-stone-500 text-[9px] font-mono font-bold uppercase block">-</span>
-                                      ) : (
-                                        <div className="inline-flex flex-col gap-1 items-center justify-center p-1.5 bg-black/40 border border-white/5 rounded-xl w-full max-w-[150px]">
-                                          {ord.receiptScreenshot ? (
-                                            <div className="space-y-1 w-full text-center">
-                                              <div className="relative group overflow-hidden border border-white/10 bg-black max-h-10 flex justify-center rounded">
-                                                <img 
-                                                  src={ord.receiptScreenshot} 
-                                                  className="h-8 object-contain" 
-                                                  alt="Receipt" 
-                                                  referrerPolicy="no-referrer"
-                                                />
-                                              </div>
-                                              <a 
-                                                href={ord.receiptScreenshot} 
-                                                target="_blank"
+                                      <div className="inline-flex flex-col gap-1.5 items-center justify-center p-1.5 bg-black/40 border border-white/5 rounded-xl w-full max-w-[165px]">
+                                        {ord.receiptScreenshot ? (
+                                          <div className="space-y-1 w-full text-center">
+                                            <button
+                                              type="button"
+                                              onClick={() => setAdminReceiptPreview({ url: ord.receiptScreenshot!, order: ord })}
+                                              className="w-full relative group overflow-hidden border border-white/15 hover:border-[#C1FF00] bg-black max-h-12 flex justify-center rounded cursor-pointer transition-colors"
+                                            >
+                                              <img
+                                                src={ord.receiptScreenshot}
+                                                className="h-10 object-contain"
+                                                alt="Receipt"
                                                 referrerPolicy="no-referrer"
-                                                className="text-[7.5px] text-[#C1FF00] hover:underline font-bold block font-mono uppercase"
-                                              >
-                                                🔍 {tText({ am: 'ሙሉ እይታ', or: 'Guutuu Ilaali', ti: 'ምሉእ ርአ', sid: 'Wo’ma La’i', en: 'Full', fr: 'Agrandir', de: 'Vollbild', it: 'Intero', zh: '查看大图', ar: 'عرض كامل' })}
-                                              </a>
-                                            </div>
-                                          ) : (
-                                            <span className="text-[7.5px] text-stone-400 block">
-                                              {tText({ am: 'ፎቶ የለም', or: 'Suuraan hin jiru', ti: 'ስእሊ የለን', sid: 'Misile dino', en: 'No photo', fr: 'Pas de photo', de: 'Kein Foto', it: 'Nessuna foto', zh: '无照片', ar: 'لا توجد صورة' })}
-                                            </span>
-                                          )}
-                                          {ord.confirmed ? (
-                                            <span className="text-[7.5px] font-mono uppercase bg-emerald-950 text-emerald-400 border border-emerald-500/20 px-1.5 py-0.5 rounded-full block font-bold">
-                                              ✔️ {tText({ am: 'ተረጋግጧል', or: 'Mirkanaa’e', ti: 'ተረጋጊጹ', sid: 'Buuxamino', en: 'Verified', fr: 'Vérifié', de: 'Geprüft', it: 'Verificato', zh: '已核实', ar: 'تم التحقق' })}
-                                            </span>
-                                          ) : (
-                                            <div className="grid grid-cols-2 gap-1 w-full pt-1">
-                                              <button
-                                                onClick={() => handleConfirmOrderPayment(ord.id, true)}
-                                                className="bg-[#C1FF00] hover:bg-white text-black font-mono font-black text-[7px] py-1 px-1 rounded-lg transition-colors cursor-pointer text-center"
-                                              >
-                                                {tText({ am: 'እሺ', or: 'EYYEE', ti: 'ሕራይ', sid: 'EE', en: 'OK', fr: 'OK', de: 'OK', it: 'OK', zh: '通过', ar: 'موافق' })}
-                                              </button>
-                                              <button
-                                                onClick={() => {
-                                                  askConfirmAndRun(
-                                                    tText({
-                                                      am: 'ባንክ ክፍያው ውድቅ ይደረግ?',
-                                                      or: 'Kaffaltiin baankii haa haqamu?',
-                                                      ti: 'እቲ ናይ ባንኪ ክፍሊት ይነጸግ ዶ?',
-                                                      sid: 'Baankete baatooshshe gibbinoonni?',
-                                                      en: 'Reject bank transfer payment?',
-                                                      fr: 'Rejeter le virement bancaire ?',
-                                                      de: 'Banküberweisung ablehnen?',
-                                                      it: 'Rifiutare il bonifico bancario?',
-                                                      zh: '拒绝该银行转账付款？',
-                                                      ar: 'رفض التحويل البنكي؟'
-                                                    }),
-                                                    () => {
-                                                      handleConfirmOrderPayment(ord.id, false);
-                                                    }
-                                                  );
-                                                }}
-                                                className="bg-red-950 hover:bg-red-600 border border-red-900/10 font-mono text-red-500 hover:text-white text-[7px] py-1 px-1 rounded-lg transition-all cursor-pointer text-center"
-                                              >
-                                                {tText({ am: 'አይ', or: 'LAKKI', ti: 'ኣይኮነን', sid: 'DEE’NI', en: 'NO', fr: 'NON', de: 'NEIN', it: 'NO', zh: '拒绝', ar: 'رفض' })}
-                                              </button>
-                                            </div>
-                                          )}
-                                        </div>
-                                      )}
+                                              />
+                                            </button>
+                                            <button
+                                              type="button"
+                                              onClick={() => setAdminReceiptPreview({ url: ord.receiptScreenshot!, order: ord })}
+                                              className="text-[8px] text-[#C1FF00] hover:underline font-bold block w-full font-mono uppercase cursor-pointer"
+                                            >
+                                              🔍 {tText({ am: 'ሙሉ እይታ', or: 'Guutuu Ilaali', ti: 'ምሉእ ርአ', sid: 'Wo’ma La’i', en: 'Full View', fr: 'Agrandir', de: 'Vollbild', it: 'Intero', zh: '查看大图', ar: 'عرض كامل' })}
+                                            </button>
+                                          </div>
+                                        ) : (
+                                          <span className="text-[7.5px] text-stone-400 block">
+                                            {tText({ am: 'ፎቶ የለም', or: 'Suuraan hin jiru', ti: 'ስእሊ የለን', sid: 'Misile dino', en: 'No photo', fr: 'Pas de photo', de: 'Kein Foto', it: 'Nessuna foto', zh: '无照片', ar: 'لا توجد صورة' })}
+                                          </span>
+                                        )}
+
+                                        {ord.payment === 'cash' && (ord.cashierName || ord.cashPaymentCode || typeof ord.cashTenderedAmount === 'number') && (
+                                          <div className="w-full text-[7.5px] font-mono text-emerald-300/90 bg-emerald-950/30 border border-emerald-500/20 rounded px-1.5 py-1 text-left space-y-0.5">
+                                            {ord.cashPaymentCode && <div className="truncate">Code: {ord.cashPaymentCode}</div>}
+                                            {typeof ord.cashTenderedAmount === 'number' && (
+                                              <div>
+                                                Paid: {ord.cashTenderedAmount} · Chg: {ord.cashChangeAmount ?? Math.max(0, ord.cashTenderedAmount - ord.total)}
+                                              </div>
+                                            )}
+                                            {ord.cashierName && <div className="truncate text-white/75">By: {ord.cashierName}</div>}
+                                          </div>
+                                        )}
+
+                                        {(ord.confirmed || ord.status === 'Paid' || ord.paymentVerified) ? (
+                                          <span className="text-[7.5px] font-mono uppercase bg-emerald-950 text-emerald-400 border border-emerald-500/20 px-1.5 py-0.5 rounded-full block font-bold">
+                                            ✔️ {tText({ am: 'ተረጋግጧል', or: 'Mirkanaa’e', ti: 'ተረጋጊጹ', sid: 'Buuxamino', en: 'Verified', fr: 'Vérifié', de: 'Geprüft', it: 'Verificato', zh: '已核实', ar: 'تم التحقق' })}
+                                          </span>
+                                        ) : ord.payment !== 'cash' ? (
+                                          <div className="grid grid-cols-2 gap-1 w-full pt-1">
+                                            <button
+                                              onClick={() => handleConfirmOrderPayment(ord.id, true)}
+                                              className="bg-[#C1FF00] hover:bg-white text-black font-mono font-black text-[7px] py-1 px-1 rounded-lg transition-colors cursor-pointer text-center"
+                                            >
+                                              {tText({ am: 'እሺ', or: 'EYYEE', ti: 'ሕራይ', sid: 'EE', en: 'OK', fr: 'OK', de: 'OK', it: 'OK', zh: '通过', ar: 'موافق' })}
+                                            </button>
+                                            <button
+                                              onClick={() => {
+                                                askConfirmAndRun(
+                                                  tText({
+                                                    am: 'ባንክ ክፍያው ውድቅ ይደረግ?',
+                                                    or: 'Kaffaltiin baankii haa haqamu?',
+                                                    ti: 'እቲ ናይ ባንኪ ክፍሊት ይነጸግ ዶ?',
+                                                    sid: 'Baankete baatooshshe gibbinoonni?',
+                                                    en: 'Reject bank transfer payment?',
+                                                    fr: 'Rejeter le virement bancaire ?',
+                                                    de: 'Banküberweisung ablehnen?',
+                                                    it: 'Rifiutare il bonifico bancario?',
+                                                    zh: '拒绝该银行转账付款？',
+                                                    ar: 'رفض التحويل البنكي؟'
+                                                  }),
+                                                  () => {
+                                                    handleConfirmOrderPayment(ord.id, false);
+                                                  }
+                                                );
+                                              }}
+                                              className="bg-red-950 hover:bg-red-600 border border-red-900/10 font-mono text-red-500 hover:text-white text-[7px] py-1 px-1 rounded-lg transition-all cursor-pointer text-center"
+                                            >
+                                              {tText({ am: 'አይ', or: 'LAKKI', ti: 'ኣይኮነን', sid: 'DEE’NI', en: 'NO', fr: 'NON', de: 'NEIN', it: 'NO', zh: '拒绝', ar: 'رفض' })}
+                                            </button>
+                                          </div>
+                                        ) : null}
+                                      </div>
                                     </td>
                                   </tr>
                                 ))}
@@ -2013,6 +2026,48 @@ export default function AdminRevenueReports({
         </div>
       </div>
 
+      {/* Receipt Verification In-App Lightbox Modal */}
+      {adminReceiptPreview && (
+        <div
+          onClick={() => setAdminReceiptPreview(null)}
+          className="fixed inset-0 bg-black/85 backdrop-blur-sm z-[130] flex items-center justify-center p-4"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-[#121212] border-2 border-[#C1FF00]/60 rounded-2xl max-w-lg w-full p-4 space-y-3 text-white shadow-2xl"
+          >
+            <div className="flex items-start justify-between gap-2 border-b border-white/10 pb-2.5">
+              <div>
+                <h4 className="text-sm font-black text-[#C1FF00]">
+                  🧾 ደረሰኝ / የክፍያ ማረጋገጫ — {adminReceiptPreview.order.id}
+                </h4>
+                <p className="text-[11px] font-mono text-stone-300 mt-0.5">
+                  {adminReceiptPreview.order.location} · {adminReceiptPreview.order.total.toLocaleString()} {currency} · {String(adminReceiptPreview.order.payment || '').toUpperCase()}
+                  {adminReceiptPreview.order.cashierName ? ` · Cashier: ${adminReceiptPreview.order.cashierName}` : ''}
+                </p>
+                {adminReceiptPreview.order.bankRef && (
+                  <p className="text-[10px] font-mono text-sky-300 mt-0.5">
+                    Ref / Txn: {adminReceiptPreview.order.bankRef}
+                  </p>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => setAdminReceiptPreview(null)}
+                className="px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-xs font-mono font-bold cursor-pointer"
+              >
+                ✕ Close
+              </button>
+            </div>
+            <img
+              src={adminReceiptPreview.url}
+              alt={`Receipt ${adminReceiptPreview.order.id}`}
+              className="w-full max-h-[68vh] object-contain rounded-xl bg-black border border-white/10"
+              referrerPolicy="no-referrer"
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

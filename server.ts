@@ -503,7 +503,7 @@ async function fetchBootstrapFromSupabase(supabase: SupabaseClient | null): Prom
   const settingsMap: Record<string, unknown> = {};
   if (Array.isArray(settingsRes.data)) {
     for (const row of settingsRes.data as Array<{ key?: string; value?: unknown }>) {
-      if (row && typeof row.key === 'string') {
+      if (row && typeof row.key === 'string' && !row.key.startsWith('media_')) {
         settingsMap[row.key] = row.value;
       }
     }
@@ -673,7 +673,7 @@ async function startWorker(workerId: number) {
   });
 
   app.use(createCompressionMiddleware());
-  app.use(express.json({ limit: '2mb' }));
+  app.use(express.json({ limit: '6mb' }));
 
   app.get('/api/health', (_req, res) => {
     const mem = process.memoryUsage();
@@ -1598,6 +1598,173 @@ async function startWorker(workerId: number) {
         provider: 'error',
         error: 'Failed to dispatch stock SMS notification.',
       });
+    }
+  });
+
+  const ALLOWED_IMAGE_MIME_TYPES = new Set([
+    'image/jpeg',
+    'image/png',
+    'image/webp',
+    'image/gif',
+  ]);
+  const mediaMemoryCache = new Map<string, { mimeType: string; buffer: Buffer }>();
+  const setMediaMemoryCache = (id: string, entry: { mimeType: string; buffer: Buffer }) => {
+    if (mediaMemoryCache.size >= 150) {
+      const oldestKey = mediaMemoryCache.keys().next().value;
+      if (oldestKey) mediaMemoryCache.delete(oldestKey);
+    }
+    mediaMemoryCache.set(id, entry);
+  };
+
+  app.get('/api/media/:id', async (req, res) => {
+    try {
+      const rawId = String(req.params.id || '').trim();
+      if (!/^[a-zA-Z0-9_-]{8,64}$/.test(rawId)) {
+        res.status(400).json({ ok: false, error: 'Invalid media identifier' });
+        return;
+      }
+
+      const memHit = mediaMemoryCache.get(rawId);
+      if (memHit) {
+        res.setHeader('Content-Type', memHit.mimeType);
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        res.send(memHit.buffer);
+        return;
+      }
+
+      if (!supabase) {
+        res.status(404).json({ ok: false, error: 'Media store unavailable' });
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from('system_settings')
+        .select('value')
+        .eq('key', `media_${rawId}`)
+        .maybeSingle();
+
+      if (error || !data?.value || typeof data.value !== 'object') {
+        res.status(404).json({ ok: false, error: 'Media not found' });
+        return;
+      }
+
+      const payload = data.value as { mimeType?: unknown; base64?: unknown };
+      const mimeType =
+        typeof payload.mimeType === 'string' && ALLOWED_IMAGE_MIME_TYPES.has(payload.mimeType)
+          ? payload.mimeType
+          : 'image/jpeg';
+      if (typeof payload.base64 !== 'string' || !payload.base64) {
+        res.status(404).json({ ok: false, error: 'Invalid media payload' });
+        return;
+      }
+
+      const buffer = Buffer.from(payload.base64, 'base64');
+      if (!buffer.length) {
+        res.status(404).json({ ok: false, error: 'Empty media buffer' });
+        return;
+      }
+
+      setMediaMemoryCache(rawId, { mimeType, buffer });
+      res.setHeader('Content-Type', mimeType);
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      res.send(buffer);
+    } catch (err) {
+      console.warn('Media serve error:', err);
+      res.status(500).json({ ok: false, error: 'Failed to load media asset' });
+    }
+  });
+
+  app.post('/api/upload-media', async (req, res) => {
+    try {
+      const { fileName, contentType, base64Data, folder } = (req.body || {}) as {
+        fileName?: string;
+        contentType?: string;
+        base64Data?: string;
+        folder?: string;
+      };
+
+      if (!base64Data || typeof base64Data !== 'string') {
+        res.status(400).json({ ok: false, error: 'Missing image payload' });
+        return;
+      }
+
+      const rawBase64 = base64Data.includes(',') ? base64Data.split(',')[1] : base64Data;
+      const buffer = Buffer.from(rawBase64, 'base64');
+      if (!buffer.length || buffer.length > 4 * 1024 * 1024) {
+        res.status(400).json({ ok: false, error: 'Invalid or oversized media buffer' });
+        return;
+      }
+
+      if (!supabase) {
+        res.json({ ok: false, reason: 'supabase_unconfigured' });
+        return;
+      }
+
+      const safeFolder = String(folder || 'images')
+        .replace(/[^a-zA-Z0-9_-]/g, '')
+        .slice(0, 24) || 'images';
+      const cleanName = String(fileName || 'upload.jpg')
+        .replace(/[^a-zA-Z0-9._-]/g, '_')
+        .replace(/_+/g, '_')
+        .slice(0, 64) || 'upload.jpg';
+      const storagePath = `${safeFolder}/${Date.now()}_${cleanName}`;
+      const normalizedMime = typeof contentType === 'string' ? contentType.toLowerCase().trim() : 'image/jpeg';
+      if (!ALLOWED_IMAGE_MIME_TYPES.has(normalizedMime)) {
+        res.status(400).json({ ok: false, error: 'Unsupported image MIME type' });
+        return;
+      }
+      const mimeType = normalizedMime;
+
+      // 1) Try Supabase Storage public bucket first
+      try {
+        await supabase.storage.createBucket('lodge-media', { public: true });
+      } catch {
+        // Bucket likely already exists or anon permissions limit bucket creation
+      }
+
+      const { error: uploadError } = await supabase.storage
+        .from('lodge-media')
+        .upload(storagePath, buffer, {
+          contentType: mimeType,
+          cacheControl: '31536000',
+          upsert: true,
+        });
+
+      if (!uploadError) {
+        const {
+          data: { publicUrl },
+        } = supabase.storage.from('lodge-media').getPublicUrl(storagePath);
+        if (publicUrl) {
+          res.json({ ok: true, publicUrl, storageMode: 'storage' });
+          return;
+        }
+      }
+
+      // 2) Permanent DB fallback in system_settings served via /api/media/:id
+      const mediaId = `${safeFolder}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const { error: dbError } = await supabase.from('system_settings').upsert({
+        key: `media_${mediaId}`,
+        value: {
+          mimeType,
+          base64: buffer.toString('base64'),
+          folder: safeFolder,
+          fileName: cleanName,
+          createdAt: Date.now(),
+        },
+      });
+
+      if (dbError) {
+        res.json({ ok: false, reason: dbError.message || uploadError?.message || 'media_store_failed' });
+        return;
+      }
+
+      setMediaMemoryCache(mediaId, { mimeType, buffer });
+      res.json({ ok: true, publicUrl: `/api/media/${mediaId}`, storageMode: 'db_media' });
+    } catch (err) {
+      console.warn('Media upload endpoint fallback:', err);
+      res.json({ ok: false, reason: 'upload_exception' });
     }
   });
 

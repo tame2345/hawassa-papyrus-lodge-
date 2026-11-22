@@ -5,10 +5,10 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { Order, OrderItem, BankAccount, OrderType, PaymentMethod } from '../types';
-import { Trash2, Smartphone, MapPin, DollarSign, HelpCircle, X, ShoppingCart, Clock, ListOrdered, Volume2 } from 'lucide-react';
-import { supabase } from '../supabaseClient';
+import { Trash2, Smartphone, MapPin, DollarSign, HelpCircle, X, ShoppingCart, Clock, ListOrdered, Volume2, Camera, Upload } from 'lucide-react';
 import { computeLiveOrderQueue } from '../utils/orderQueue';
 import { buildCartSpeechPayload, playAccessibleChime, speakAccessibleText } from '../utils/menuVoiceReader';
+import { processAndUploadReceiptImage } from '../utils/imageUpload';
 import { useLanguage } from '../context/LanguageContext';
 
 interface CartModalProps {
@@ -35,6 +35,10 @@ interface CartModalProps {
   vatRate: number;
   banks: BankAccount[];
   initialLocation?: string;
+  initialOrderType?: OrderType;
+  initialPhone?: string;
+  initialAddress?: string;
+  onDeliveryProfileChange?: (profile: { orderType?: OrderType; phone?: string; address?: string }) => void;
   chapaActive?: boolean;
   chapaKey?: string;
   chapaMode?: 'live' | 'test';
@@ -55,6 +59,10 @@ export default function CartModal({
   vatRate,
   banks,
   initialLocation,
+  initialOrderType = 'dine',
+  initialPhone = '',
+  initialAddress = '',
+  onDeliveryProfileChange,
   chapaActive = true,
   chapaKey = '',
   chapaMode = 'test',
@@ -364,6 +372,7 @@ export default function CartModal({
   const [receiptComment, setReceiptComment] = useState('');
   const [cashPayMode, setCashPayMode] = useState<'cashier_desk' | 'waiter_or_delivery'>('cashier_desk');
   const [cashTenderedInput, setCashTenderedInput] = useState<string>('');
+  const [isUploadingReceipt, setIsUploadingReceipt] = useState(false);
 
   // Chapa specific local states
   const [chapaEmail, setChapaEmail] = useState('guest@papyrus.com');
@@ -382,7 +391,7 @@ export default function CartModal({
     }
   }, [banks, chapaSelectedLodgeBankId]);
 
-  // Auto detect scanned location (QR) when modal opens or initialLocation is available
+  // Auto detect scanned location (QR) & Customer Delivery profile when modal opens
   useEffect(() => {
     if (isOpen) {
       if (initialLocation) {
@@ -390,67 +399,42 @@ export default function CartModal({
       } else {
         setLocation('ROOM NUMBER');
       }
+      setOrderType(initialOrderType || 'dine');
+      if (initialPhone) {
+        setPhone((prev) => prev || initialPhone);
+      }
+      if (initialAddress) {
+        setAddress((prev) => prev || initialAddress);
+      }
     }
-  }, [isOpen, initialLocation]);
+  }, [isOpen, initialLocation, initialOrderType, initialPhone, initialAddress]);
 
-  // Local helper for receipt upload directly to Supabase Storage
+  // Compress via canvas image processing logic and upload to Storage (with compressed base64 fallback)
   const handleReceiptUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      const sanitizeFileName = (name: string): string => {
-        const dotIndex = name.lastIndexOf('.');
-        const ext = dotIndex !== -1 ? name.substring(dotIndex) : '';
-        const base = dotIndex !== -1 ? name.substring(0, dotIndex) : name;
-        const cleanBase = base
-          .replace(/[^a-zA-Z0-9-_]/g, '_')
-          .replace(/_+/g, '_')
-          .replace(/^_+|_+$/g, '');
-        const cleanExt = ext.replace(/[^a-zA-Z0-9.]/g, '');
-        return (cleanBase || 'file') + cleanExt;
-      };
-
-      const cleanName = sanitizeFileName(file.name);
-      const fileName = `receipts/${Date.now()}_${cleanName}`;
-
-      try {
-        const { data, error } = await supabase.storage
-          .from('lodge-media')
-          .upload(fileName, file, {
-            cacheControl: '3600',
-            upsert: true
-          });
-
-        if (error) {
-          console.error("Receipt upload error details:", error);
-          showCartNotice('error', `❌ ${error.message}`);
-          return;
-        }
-
-        const { data: { publicUrl } } = supabase.storage
-          .from('lodge-media')
-          .getPublicUrl(fileName);
-
-        if (!publicUrl) {
-          throw new Error("Could not retrieve public URL for uploaded receipt.");
-        }
-
-        setReceiptScreenshot(publicUrl);
-        showCartNotice('success', tText({
-          am: '📸 ደረሰኝ በተሳካ ሁኔታ ተጭኗል!',
-          or: '📸 Waraqaan kaffaltii milkiin ol-fe\'ameera!',
-          ti: '📸 ደረሰኝ ብዓወት ተዓኒኑ!',
-          sid: '📸 Rasiidete misile keereenni qassamino!',
-          en: '📸 Receipt image uploaded successfully.',
-          fr: '📸 Image du reçu téléversée avec succès.',
-          de: '📸 Belegbild erfolgreich hochgeladen.',
-          it: '📸 Ricevuta caricata con successo.',
-          zh: '📸 付款凭证已成功上传。',
-          ar: '📸 تم رفع صورة الإيصال بنجاح.'
-        }));
-      } catch (err: any) {
-        console.error("Receipt upload failed:", err);
-        showCartNotice('error', `❌ ${err.message || err}`);
-      }
+    if (!file) return;
+    setIsUploadingReceipt(true);
+    try {
+      const processedUrl = await processAndUploadReceiptImage(file);
+      setReceiptScreenshot(processedUrl);
+      showCartNotice('success', tText({
+        am: '📸 ደረሰኝ በተሳካ ሁኔታ ተዘጋጅቶ ተጭኗል!',
+        or: '📸 Waraqaan kaffaltii milkiin ol-fe\'ameera!',
+        ti: '📸 ደረሰኝ ብዓወት ተዓኒኑ!',
+        sid: '📸 Rasiidete misile keereenni qassamino!',
+        en: '📸 Receipt image processed & attached for Cashier verification.',
+        fr: '📸 Reçu traité et joint pour vérification par la caisse.',
+        de: '📸 Beleg verarbeitet und für Kassenprüfung angehängt.',
+        it: '📸 Ricevuta elaborata e allegata per la verifica in cassa.',
+        zh: '📸 收据截图已压缩上传，等待收银台核验。',
+        ar: '📸 تم تجهيز صورة الإيصال وإرفاقها للتحقق من الكاشير.'
+      }));
+    } catch (err: any) {
+      console.error('Receipt upload failed:', err);
+      showCartNotice('error', `❌ ${err?.message || 'Image upload failed'}`);
+    } finally {
+      setIsUploadingReceipt(false);
+      e.target.value = '';
     }
   };
 
@@ -732,7 +716,7 @@ export default function CartModal({
       payment,
       bankId: payment === 'bank' ? (selectedBankId || undefined) : undefined,
       bankRef: payment === 'bank' ? bankRef : (payment === 'chapa' ? (customRef || 'CHAP-TXN-' + Math.floor(100000 + Math.random() * 900000)) : undefined),
-      receiptScreenshot: payment === 'bank' ? (receiptScreenshot || undefined) : (payment === 'chapa' ? 'https://images.unsplash.com/photo-1554774853-aae0a22c8aa4?w=600' : undefined),
+      receiptScreenshot: (payment === 'bank' || payment === 'cash') ? (receiptScreenshot || undefined) : (payment === 'chapa' ? 'https://images.unsplash.com/photo-1554774853-aae0a22c8aa4?w=600' : undefined),
       receiptComment: payment === 'bank' || payment === 'cash'
         ? (receiptComment.trim() || undefined)
         : (payment === 'chapa' ? `Chapa Secure Verified. Billing: ${chapaFirstName} ${chapaLastName} (${chapaEmail})` : undefined),
@@ -1054,6 +1038,7 @@ export default function CartModal({
                 id="btn-type-dine-react"
                 onClick={() => {
                   setOrderType('dine');
+                  onDeliveryProfileChange?.({ orderType: 'dine' });
                   playCartChime('step');
                   const dineMsg = tText({
                     am: 'በሎጁ ወይም ጠረጴዛ ላይ መመገብ ተመርጧል።',
@@ -1081,6 +1066,7 @@ export default function CartModal({
                 id="btn-type-delivery-react"
                 onClick={() => {
                   setOrderType('delivery');
+                  onDeliveryProfileChange?.({ orderType: 'delivery' });
                   playCartChime('step');
                   const delivMsg = tText({
                     am: 'ዴሊቨሪ አገልግሎት ተመርጧል።',
@@ -1090,7 +1076,7 @@ export default function CartModal({
                     en: 'Delivery option selected.',
                     fr: 'Option livraison sélectionnée.',
                     de: 'Lieferoption ausgewählt.',
-                    it: 'Opzione consegna selezionata.',
+                    it: 'Opzione consegna sélectionnée.',
                     zh: '已选择外送配送。',
                     ar: 'تم اختيار خدمة التوصيل.'
                   });
@@ -1146,7 +1132,11 @@ export default function CartModal({
                   type="tel"
                   id="cart-delivery-phone"
                   value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setPhone(val);
+                    onDeliveryProfileChange?.({ phone: val });
+                  }}
                   placeholder="09xxxxxxxx"
                   className="w-full bg-white border border-stone-300 text-stone-900 font-mono text-xs p-2.5 rounded-xl outline-none focus:border-[#b21f1f] focus:ring-1 focus:ring-[#b21f1f]"
                 />
@@ -1158,7 +1148,11 @@ export default function CartModal({
                 <textarea 
                   id="cart-delivery-address"
                   value={address}
-                  onChange={(e) => setAddress(e.target.value)}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setAddress(val);
+                    onDeliveryProfileChange?.({ address: val });
+                  }}
                   placeholder={tText({
                     am: 'የሰፈር ስም፣ የቤት ቁጥር ወይም መለያ ምልክት...',
                     or: 'Maqaa ganda, lakk. manaa ykn mallattoo...',
@@ -1174,6 +1168,36 @@ export default function CartModal({
                   rows={2}
                   className="w-full bg-white border border-stone-300 text-stone-900 text-xs p-2.5 rounded-xl outline-none focus:border-[#b21f1f] focus:ring-1 focus:ring-[#b21f1f] resize-none"
                 />
+              </div>
+              <div className="bg-amber-50 border border-amber-300 rounded-xl p-2.5 text-[11px] text-stone-800 space-y-1">
+                <p className="font-black text-[#b21f1f]">
+                  🔐 {tText({
+                    am: 'የደህንነት እና የእምነት ማረጋገጫ ሲስተም (Verified PIN Handover)',
+                    en: 'Verified PIN & Photo Delivery Protection',
+                    or: 'Mirkaneessa PIN fi Suuraa Amanamaa',
+                    ti: 'ውሑስ ምርግጋጽ PINን ስእልን',
+                    sid: 'PIN-nna Suuru Amanamaano Iillisha',
+                    fr: 'Protection par code PIN & photo de livraison',
+                    de: 'Schutz durch Liefer-PIN & Foto-Nachweis',
+                    it: 'Protezione consegna con PIN e foto',
+                    zh: '安全交付 PIN 码与拍照双重核验',
+                    ar: 'حماية التوصيل برمز PIN وصورة الإثبات',
+                  })}
+                </p>
+                <p className="leading-snug text-stone-700">
+                  {tText({
+                    am: 'ትዕዛዝዎን ሲልኩ በሎጁ አድራሽ ወይም በአጋር የኢትዮጵያ ዴሊቨሪ ካምፓኒዎች በቀጥታ ይከታተላል። ባለ 4 አሃዝ ሚስጥራዊ የርክክብ ኮድ (PIN) ይሰጥዎታል — ምግብዎ በሰላም ሲደርስ ብቻ ያሳዩት።',
+                    en: 'Tracked live across our Internal Lodge Fleet and Ethiopian Delivery Partners. Once placed, share your 4-digit Handover PIN only when your order arrives safely.',
+                    or: 'Geejjibsiisaa keenyaa fi dhaabbilee deelivarii Itoophiyaa waliin kallattiin hordofama; koodii PIN lakkoofsa 4 yeroo gahu qofa kennaa.',
+                    ti: 'ምስ ኣብጻሕቲ ሎጅናን መሻርኽቲ ዴሊቨሪ ኢትዮጵያን ብቀጥታ ይከታተል። ትእዛዝኩም ምስ በጽሐ ጥራይ ባለ 4 ኣሃዝ PIN ሃቡ።',
+                    sid: 'Lojetenna Itiyophiyu iillishshu jaalla ledo laayivi harunsamanno; sagalikki iilliro calla 4-koode PIN uyitto.',
+                    fr: 'Suivi en direct avec notre flotte et nos partenaires éthiopiens. Remettez votre PIN à 4 chiffres uniquement à la réception.',
+                    de: 'Live-Tracking über interne Fahrer & Partner. Geben Sie Ihre 4-stellige PIN erst bei sicherer Übergabe weiter.',
+                    it: 'Tracciamento live con flotta interna e partner. Condividi il PIN a 4 cifre solo alla consegna.',
+                    zh: '全程联动酒店自营及埃塞合作配送公司实时追踪。仅在收餐时向骑手出示 4 位验证码。',
+                    ar: 'تتبع مباشر مع سائقينا وشركاء التوصيل. شارك رمز PIN المكون من 4 أرقام عند الاستلام فقط.',
+                  })}
+                </p>
               </div>
             </div>
           )}
@@ -1564,6 +1588,68 @@ export default function CartModal({
                   })}
                   className="w-full bg-stone-50 border border-stone-200 text-stone-900 text-xs p-2 rounded-xl outline-none focus:border-emerald-600"
                 />
+
+                {/* Receipt / Cash Slip Photo Upload for Cashier Verification */}
+                <div className="pt-2 border-t border-emerald-100 space-y-2">
+                  <span className="text-[10px] font-mono uppercase text-emerald-900 font-black block">
+                    📸 {tText({
+                      am: 'የደረሰኝ ፎቶ ለካሸር ማረጋገጫ ይላኩ (ከተፈለገ)',
+                      en: 'Attach Receipt Screenshot for Cashier Verification (Optional)',
+                      or: 'Suuraa Nagahee Kaasheeraaf Ergi (Filannoo)',
+                      ti: 'ስእሊ ደረሰኝ ንካሸር መረጋገጺ ስደድ (ኣማራጺ)',
+                      sid: 'Kaasheeraho Rasiitete Suura Soyi',
+                      fr: 'Joindre une photo du reçu pour la caisse (Optionnel)',
+                      de: 'Belegfoto für Kassenprüfung anhängen (Optional)',
+                      it: 'Allega foto ricevuta per verifica cassa (Opzionale)',
+                      zh: '上传收据截图供收银台核验（可选）',
+                      ar: 'أرفق صورة الإيصال للتحقق من الكاشير (اختياري)'
+                    })}
+                  </span>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="bg-emerald-700 hover:bg-emerald-800 text-white py-2 px-2.5 text-[10px] font-mono font-black uppercase text-center rounded-xl flex items-center justify-center gap-1.5 cursor-pointer transition-colors shadow-xs">
+                      <Camera className="w-3.5 h-3.5 shrink-0" />
+                      <span>{isUploadingReceipt ? '...' : tText({ am: 'በካሜራ አንሳ', en: 'Take Photo', or: 'Kaameraa', ti: 'ብካሜራ ስኣል', sid: 'Kaameera', fr: 'Caméra', de: 'Kamera', it: 'Fotocamera', zh: '拍照', ar: 'التقاط صورة' })}</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        capture="environment"
+                        disabled={isUploadingReceipt}
+                        onChange={handleReceiptUpload}
+                        className="hidden"
+                      />
+                    </label>
+                    <label className="bg-stone-100 hover:bg-stone-200 text-stone-800 border border-stone-300 py-2 px-2.5 text-[10px] font-mono font-black uppercase text-center rounded-xl flex items-center justify-center gap-1.5 cursor-pointer transition-colors">
+                      <Upload className="w-3.5 h-3.5 shrink-0" />
+                      <span>{isUploadingReceipt ? '...' : tText({ am: 'ፎቶ ጫን', en: 'Upload Receipt', or: 'Suuraa Fe’i', ti: 'ስእሊ ጽዓን', sid: 'Suura Fea', fr: 'Téléverser', de: 'Hochladen', it: 'Carica File', zh: '上传图片', ar: 'رفع صورة' })}</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        disabled={isUploadingReceipt}
+                        onChange={handleReceiptUpload}
+                        className="hidden"
+                      />
+                    </label>
+                  </div>
+
+                  {receiptScreenshot && (
+                    <div className="bg-emerald-50 border border-emerald-300 rounded-xl p-2 relative text-center">
+                      <img
+                        src={receiptScreenshot}
+                        alt="Cash Receipt Proof Preview"
+                        className="max-h-24 mx-auto object-contain rounded-lg border border-emerald-200"
+                        referrerPolicy="no-referrer"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setReceiptScreenshot('')}
+                        className="mt-1 text-[9px] font-mono font-bold text-red-600 hover:underline cursor-pointer"
+                      >
+                        ✕ Remove Photo
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           )}
@@ -1637,26 +1723,51 @@ export default function CartModal({
                   {cartUiLocales.receipt_upload[appLang as keyof typeof cartUiLocales.receipt_upload] || cartUiLocales.receipt_upload.en}
                 </label>
                 
-                {/* Real File Input for upload */}
-                <div className="flex flex-col gap-1.5">
-                  <label className="bg-stone-200 hover:bg-stone-300 text-stone-800 border border-stone-300 hover:border-[#b21f1f] py-2.5 px-3 text-[10px] font-mono font-black uppercase text-center rounded-xl flex items-center justify-center gap-2 cursor-pointer transition-colors shadow-sm">
-                    📸 {tText({
-                      am: 'ፎቶ ወይም እስክሪንሻት ይጫኑ',
-                      or: 'Suuraa / Ragaa Kaffaltii Fe’i',
-                      ti: 'ስእሊ ወይ ስክሪንሾት ጽዓን',
-                      sid: 'Suura Woy Iiskriinshoote Fea',
-                      en: 'Upload Screenshot / Proof',
-                      fr: 'Télécharger une Capture / Preuve',
-                      de: 'Screenshot / Beleg hochladen',
-                      it: 'Carica Screenshot / Ricevuta',
-                      zh: '上传截图 / 付款凭证',
-                      ar: 'تحميل لقطة شاشة / إثبات الدفع'
-                    })}
-                    <input 
-                      type="file" 
-                      accept="image/*" 
-                      onChange={handleReceiptUpload} 
-                      className="hidden" 
+                {/* Real Camera Capture + File Upload inputs */}
+                <div className="grid grid-cols-2 gap-2">
+                  <label className="bg-[#b21f1f] hover:bg-[#8c1414] text-white py-2.5 px-3 text-[10px] font-mono font-black uppercase text-center rounded-xl flex items-center justify-center gap-1.5 cursor-pointer transition-colors shadow-sm">
+                    <Camera className="w-3.5 h-3.5 shrink-0" />
+                    <span>{isUploadingReceipt ? '...' : tText({
+                      am: 'በካሜራ አንሳ',
+                      or: 'Kaameraadhaan Kaasi',
+                      ti: 'ብካሜራ ስኣል',
+                      sid: 'Kaameeranni Kai',
+                      en: 'Take Photo',
+                      fr: 'Prendre Photo',
+                      de: 'Foto aufnehmen',
+                      it: 'Scatta Foto',
+                      zh: '相机拍照',
+                      ar: 'التقاط صورة'
+                    })}</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      capture="environment"
+                      disabled={isUploadingReceipt}
+                      onChange={handleReceiptUpload}
+                      className="hidden"
+                    />
+                  </label>
+                  <label className="bg-stone-200 hover:bg-stone-300 text-stone-800 border border-stone-300 hover:border-[#b21f1f] py-2.5 px-3 text-[10px] font-mono font-black uppercase text-center rounded-xl flex items-center justify-center gap-1.5 cursor-pointer transition-colors shadow-sm">
+                    <Upload className="w-3.5 h-3.5 shrink-0" />
+                    <span>{isUploadingReceipt ? '...' : tText({
+                      am: 'ፎቶ / እስክሪንሻት ጫን',
+                      or: 'Suuraa / Ragaa Fe’i',
+                      ti: 'ስእሊ / ስክሪንሾት ጽዓን',
+                      sid: 'Suura Fea',
+                      en: 'Upload Screenshot',
+                      fr: 'Télécharger Capture',
+                      de: 'Screenshot hochladen',
+                      it: 'Carica Screenshot',
+                      zh: '上传截图',
+                      ar: 'تحميل لقطة شاشة'
+                    })}</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      disabled={isUploadingReceipt}
+                      onChange={handleReceiptUpload}
+                      className="hidden"
                     />
                   </label>
                 </div>
