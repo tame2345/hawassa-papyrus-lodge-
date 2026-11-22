@@ -72,8 +72,12 @@ import {
 } from './utils/menuVoiceReader';
 import {
   BrowserSpeechRecognition,
+  describeMicrophoneError,
   getRecognitionLocale,
   getSpeechRecognitionCtor,
+  getSupportedAudioMimeType,
+  isNativeEthiopianLang,
+  normalizeAudioMimeType,
   supportsMediaRecording,
   transcribeRecordedAudio,
   VoiceOrderResponse,
@@ -1742,23 +1746,12 @@ export default function App() {
     }
   };
 
-  const startEntryMediaRecorderCapture = async () => {
+  const startEntryMediaRecorderCapture = async (targetLang?: string) => {
+    const langToUse = targetLang || appLang || 'en';
     if (!supportsMediaRecording()) {
       setEntryVoiceStatus('idle');
-      setEntryVoiceError(
-        tText({
-          am: 'ቀጥታ ማይክሮፎን አልተገኘም። ከታች በጽሑፍ ወይም በ"ሜኑ ክፈት" ቁልፍ ይጀምሩ።',
-          or: 'Maayikiroofooniin hin argamne. Gadiitti barreessi ykn qabduu "Meenuu Bani" tuqi.',
-          ti: 'ማይክሮፎን ኣይተረኽበን። ኣብ ታሕቲ ጽሓፉ ወይ "ሜኑ ክፈት" ጠውቑ።',
-          sid: 'Mayikiroofone dino. Woroonni borreessi woy "Meenuu Fani" ganni.',
-          en: 'Live microphone is unavailable. Type below or press Open Menu in Voice Mode.',
-          fr: 'Microphone indisponible. Saisissez ci-dessous ou ouvrez le menu vocal.',
-          de: 'Mikrofon nicht verfügbar. Unten eingeben oder Sprachmenü öffnen.',
-          it: 'Microfono non disponibile. Scrivi sotto o apri il menu vocale.',
-          zh: '麦克风不可用，请在下方输入或点击打开语音菜单。',
-          ar: 'الميكروفون غير متوفر. اكتب أدناه أو اضغط لفتح القائمة الصوتية.',
-        }),
-      );
+      const info = describeMicrophoneError(new Error('MediaRecorder or getUserMedia unavailable'), langToUse);
+      setEntryVoiceError(info.message);
       return;
     }
 
@@ -1766,7 +1759,11 @@ export default function App() {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       entryMediaStreamRef.current = stream;
       entryAudioChunksRef.current = [];
-      const recorder = new MediaRecorder(stream);
+      const preferredMime = getSupportedAudioMimeType();
+      const recorder = preferredMime
+        ? new MediaRecorder(stream, { mimeType: preferredMime })
+        : new MediaRecorder(stream);
+      const activeMime = normalizeAudioMimeType(recorder.mimeType || preferredMime || 'audio/webm');
       entryMediaRecorderRef.current = recorder;
 
       recorder.ondataavailable = (ev: BlobEvent) => {
@@ -1775,8 +1772,15 @@ export default function App() {
         }
       };
 
+      recorder.onerror = (ev) => {
+        cleanupEntryMicCapture();
+        setEntryVoiceStatus('idle');
+        const recErr = (ev as unknown as { error?: Error }).error || new Error('MediaRecorder error');
+        setEntryVoiceError(describeMicrophoneError(recErr, langToUse).message);
+      };
+
       recorder.onstop = async () => {
-        const mime = recorder.mimeType || 'audio/webm';
+        const mime = normalizeAudioMimeType(recorder.mimeType || activeMime);
         const chunks = [...entryAudioChunksRef.current];
         entryAudioChunksRef.current = [];
         if (entryMediaStreamRef.current) {
@@ -1784,14 +1788,30 @@ export default function App() {
           entryMediaStreamRef.current = null;
         }
         entryMediaRecorderRef.current = null;
-        if (chunks.length === 0) {
+        const totalBytes = chunks.reduce((sum, c) => sum + c.size, 0);
+        if (chunks.length === 0 || totalBytes < 256) {
           setEntryVoiceStatus('idle');
+          setEntryVoiceError(
+            tText({
+              am: 'ድምፅ አልተቀዳም (0 ባይት)። እባክዎ ማይክሮፎኑ ሲበራ ቢያንስ ለ1 ሴኮንድ ይናገሩ ወይም "ሜኑ ክፈት" ይጫኑ።',
+              or: 'Sagaleen hin waraabamne. Maaloo yeroo sagaleen banamu sekondii 1 ol dubbadhaa.',
+              ti: 'ድምጺ ኣይተቐድሐን። ብንጹር ተዛረቡ ወይ "ሜኑ ክፈት" ጠውቑ።',
+              sid: 'Huurro di-qadamino. Xawaabbe hasaawi woy "Meenuu Fani" ganni.',
+              en: 'No audio was captured (recording too short or empty). Speak for at least 1 second or press Open Menu.',
+              fr: 'Aucun audio capturé. Parlez au moins 1 seconde ou ouvrez le menu.',
+              de: 'Kein Audio aufgenommen. Bitte mindestens 1 Sekunde sprechen oder Menü öffnen.',
+              it: 'Nessun audio acquisito. Parla per almeno 1 secondo o apri il menu.',
+              zh: '未录制到音频（录音过短或为空）。请说话至少1秒或点击打开菜单。',
+              ar: 'لم يتم التقاط أي صوت. تحدث لمدة ثانية على الأقل أو افتح القائمة.',
+            }),
+          );
           return;
         }
 
         setEntryVoiceStatus('transcribing');
         try {
-          const text = await transcribeRecordedAudio(new Blob(chunks, { type: mime }), appLang);
+          const blob = new Blob(chunks, { type: mime });
+          const text = await transcribeRecordedAudio(blob, langToUse, mime);
           if (text) {
             setEntryVoiceTranscript(text);
             launchCustomerVoiceMenu(text);
@@ -1812,48 +1832,36 @@ export default function App() {
               }),
             );
           }
-        } catch {
+        } catch (err: unknown) {
+          const detail = err instanceof Error ? err.message : String(err || 'Unknown audio error');
           setEntryVoiceStatus('idle');
-          setEntryVoiceError(
-            tText({
-              am: 'ድምፅን መተርጎም አልተቻለም። ከታች ባለው ሳጥን ይጻፉ ወይም "ሜኑ ክፈት" ይጫኑ።',
-              or: 'Sagalee hiikuun hin danda’amne. Gadiitti barreessi ykn "Meenuu Bani" tuqi.',
-              ti: 'ድምጺ ምትርጓም ኣይተኻእለን። ኣብ ታሕቲ ጽሓፉ ወይ "ሜኑ ክፈት" ጠውቑ።',
-              sid: 'Huurro tirtira di-dandiinoonni. Woroonni borreessi.',
-              en: 'Could not transcribe audio. Type your request or press Open Menu.',
-              fr: 'Transcription impossible. Tapez votre demande ou ouvrez le menu.',
-              de: 'Transkription fehlgeschlagen. Eingeben oder Menü öffnen.',
-              it: 'Trascrizione non riuscita. Scrivi o apri il menu.',
-              zh: '语音识别失败，请输入或点击打开菜单。',
-              ar: 'تعذر تحويل الصوت إلى نص. اكتب طلبك أو افتح القائمة.',
-            }),
-          );
+          const prefix = tText({
+            am: 'ድምፅን መተርጎም አልተቻለም። ከታች ባለው ሳጥን ይጻፉ ወይም "ሜኑ ክፈት" ይጫኑ።',
+            or: 'Sagalee hiikuun hin danda’amne. Gadiitti barreessi ykn "Meenuu Bani" tuqi.',
+            ti: 'ድምጺ ምትርጓም ኣይተኻእለን። ኣብ ታሕቲ ጽሓፉ ወይ "ሜኑ ክፈት" ጠውቑ።',
+            sid: 'Huurro tirtira di-dandiinoonni. Woroonni borreessi.',
+            en: 'Could not transcribe audio. Type your request or press Open Menu.',
+            fr: 'Transcription impossible. Tapez votre demande ou ouvrez le menu.',
+            de: 'Transkription fehlgeschlagen. Eingeben oder Menü öffnen.',
+            it: 'Trascrizione non riuscita. Scrivi o apri il menu.',
+            zh: '语音识别失败，请输入或点击打开菜单。',
+            ar: 'تعذر تحويل الصوت إلى نص. اكتب طلبك أو افتح القائمة.',
+          });
+          setEntryVoiceError(`${prefix} (${detail})`);
         }
       };
 
       setEntryVoiceStatus('listening');
-      recorder.start();
-    } catch {
+      recorder.start(250);
+    } catch (err: unknown) {
       cleanupEntryMicCapture();
       setEntryVoiceStatus('idle');
-      setEntryVoiceError(
-        tText({
-          am: 'ማይክሮፎን አልተፈቀደም። ከታች ባለው "ሜኑ በድምፅ ክፈት" ቁልፍ ቀጥታ መግባት ይችላሉ።',
-          or: 'Eeyyamni maayikiroofoonii hin jiru. Qabduu "Meenuu Sagaleedhaan Bani" jedhuun kallattiin seeni.',
-          ti: 'ማይክሮፎን ኣይተፈቐደን። ብ"ሜኑ ብድምጺ ክፈት" ቀጥታ ክትኣትዉ ትኽእሉ ኢኹም።',
-          sid: 'Mayikiroofonera hayyo dino. "Meenuu Huurranni Fani" ganni.',
-          en: 'Microphone permission was blocked. Tap Open Menu in Voice Mode to enter right away.',
-          fr: 'Microphone bloqué. Appuyez sur Ouvrir le Menu Vocal pour continuer.',
-          de: 'Mikrofon blockiert. Tippen Sie auf Sprachmenü öffnen.',
-          it: 'Microfono bloccato. Tocca Apri Menu Vocale per continuare.',
-          zh: '麦克风权限受限，可直接点击“打开语音菜单”进入点餐。',
-          ar: 'تم منع الميكروفون. اضغط على فتح القائمة الصوتية للمتابعة فوراً.',
-        }),
-      );
+      setEntryVoiceError(describeMicrophoneError(err, langToUse).message);
     }
   };
 
   const startEntryVoiceCapture = () => {
+    const capturedLang = appLang || 'en';
     setEntryVoiceOpen(true);
     setEntryVoiceError('');
     setEntryVoiceTranscript('');
@@ -1873,21 +1881,22 @@ export default function App() {
       zh: '正在聆听。请说“打开菜单点餐”或直接说出您想点的菜品。',
       ar: 'أنا أستمع. قل "افتح القائمة لطلب الطعام" أو اسم الطبق الذي تريده.',
     });
-    speakAccessibleText(promptNative, appLang, {
+    speakAccessibleText(promptNative, capturedLang, {
       rate: voiceSpeed,
       fallbackEnText: 'Listening. Say open menu to order food, or tell me what dish you want.',
     });
 
+    // For Ethiopian Native Languages (አማርኛ, Oromoo, ትግርኛ, Sidaamu Afoo), ALWAYS use MediaRecorder + Multimodal Gemini directly.
     const RecognitionCtor = getSpeechRecognitionCtor();
-    if (!RecognitionCtor) {
-      void startEntryMediaRecorderCapture();
+    if (isNativeEthiopianLang(capturedLang) || !RecognitionCtor) {
+      void startEntryMediaRecorderCapture(capturedLang);
       return;
     }
 
     try {
       const recognition = new RecognitionCtor();
       entryRecognitionRef.current = recognition;
-      recognition.lang = getRecognitionLocale(appLang);
+      recognition.lang = getRecognitionLocale(capturedLang);
       recognition.continuous = false;
       recognition.interimResults = true;
       recognition.maxAlternatives = 1;
@@ -1916,8 +1925,15 @@ export default function App() {
 
       recognition.onerror = (event) => {
         entryRecognitionRef.current = null;
-        if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
-          void startEntryMediaRecorderCapture();
+        if (
+          event.error === 'language-not-supported' ||
+          event.error === 'not-allowed' ||
+          event.error === 'service-not-allowed' ||
+          event.error === 'audio-capture' ||
+          event.error === 'network' ||
+          event.error === 'aborted'
+        ) {
+          void startEntryMediaRecorderCapture(capturedLang);
           return;
         }
         if (latestText && !handled) {
@@ -1926,9 +1942,10 @@ export default function App() {
           return;
         }
         if (supportsMediaRecording()) {
-          void startEntryMediaRecorderCapture();
+          void startEntryMediaRecorderCapture(capturedLang);
         } else {
           setEntryVoiceStatus('idle');
+          setEntryVoiceError(`SpeechRecognition error: ${event.error}`);
         }
       };
 
@@ -1945,7 +1962,7 @@ export default function App() {
       setEntryVoiceStatus('listening');
       recognition.start();
     } catch {
-      void startEntryMediaRecorderCapture();
+      void startEntryMediaRecorderCapture(capturedLang);
     }
   };
 
@@ -5303,7 +5320,15 @@ export default function App() {
   };
 
   const handleVoiceExecuteResult = (result: VoiceOrderResponse) => {
-    if (result.focusCategoryId) {
+    if (result.searchQuery && result.searchQuery.trim()) {
+      setMenuSearchQuery(result.searchQuery.trim());
+      if (result.focusCategoryId) {
+        setSelectedCategory(result.focusCategoryId);
+      }
+      if (result.recommendedItemIds && result.recommendedItemIds.length > 0) {
+        setSelectedMenuCardId(result.recommendedItemIds[0]);
+      }
+    } else if (result.focusCategoryId) {
       setMenuSearchQuery('');
       setSelectedCategory(result.focusCategoryId);
     }
